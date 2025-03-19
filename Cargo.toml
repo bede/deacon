@@ -11,6 +11,16 @@ categories = ["science", "command-line-utilities"]
 license-file = "LICENSE"
 exclude = ["bench/*", "data/*"]
 
+# Define the library target
+[lib]
+name = "deacon"
+path = "src/lib.rs"
+
+# Define the binary target
+[[bin]]
+name = "deacon"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 flate2 = "1.1"
@@ -34,8 +44,6 @@ predicates = "3.0"
 tempfile = "3.8"
 rstest = "0.25"
 
-# No special target.cfg needed, dev-dependencies are available to unit tests
-
 # Define test files for organization
 [[test]]
 name = "cli_tests"
@@ -54,3 +62,4 @@ opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
+strip = true

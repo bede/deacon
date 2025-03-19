@@ -6,19 +6,15 @@ A fast minimizer-based filter for nucleotide sequences in FASTA or FASTQ format,
 
 The sensitivity/specificity/memory tradeoff can be tuned using *k*-mer length (`-k`), minimizer window length (`-w`), and match threshold (`-m`). With long reads, speeds of hundreds of megabases per second are possible by considering only the first `-n` bases of each query sequence. Uses [simd-minimizers](https://github.com/rust-seq/simd-minimizers) for fast vectorised minimizer calculation. This project is currently **unstable** and under active development.
 
-
-
 ## Install
 
 ### Cargo
+
 [![Crates.io](https://img.shields.io/crates/v/deacon.svg)](https://crates.io/crates/deacon)
 
-
-```
+```bash
 cargo install deacon
 ```
-
-
 
 ## Usage
 
@@ -31,13 +27,11 @@ deacon index build chm13v2.fa > human.k31w21.idx
 deacon index build -k 41 -m 27 chm13v2.fa > human.k41w27.idx  # Custom minimizer k and w
 ```
 
-
-
 ### Filtering
 
 Supports FASTA or FASTQ input from stdin or file and outputs to stdout or file. Paired sequences are supported as either separate files or interleaved stdin, and are  written in interleaved format to either stdout or file. Gzip (.gz) and Zstandard (.zst) compression formats are detected automatically. Piping uncompressed FASTA/Q to pigz is advisable in order to avoid compression bottlenecks when writing gzip output directly.
 
-``` bash
+```bash
 deacon filter human.idx reads.fq.gz -o filt.fastq  # File input & output
 zcat reads.fq.gz | deacon filter human.idx | pigz > filt.fq.gz  # Fast gzip
 zcat reads.fq.gz | deacon -n 1000 filter human.idx | pigz > filt.fq.gz  # Faster
@@ -47,8 +41,6 @@ deacon filter human.idx r1.fq.gz r2.fq.gz > filt12.fastq  # Paired file input
 zcat r12.fq.gz | deacon filter human.idx - - > filt12.fastq  # Interleaved stdin
 deacon filter human.idx reads.fq.gz --log log.json > filt.fq  # Log results JSON
 ```
-
-
 
 ## Reports
 
@@ -79,8 +71,6 @@ Use `--log results.json` to save filtering results to a JSON file:
   "bp_per_second": 43553881
 }
 ```
-
-
 
 ### Set operations on indexes
 

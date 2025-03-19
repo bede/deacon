@@ -1,14 +1,9 @@
-mod filter;
-mod index;
-mod index_build;
-mod index_diff;
-mod index_format;
-mod index_info;
-mod index_union;
-mod minimizers;
-
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use deacon::{
+    DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, build_index, diff_index, index_info, run_filter,
+    union_index,
+};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -71,11 +66,11 @@ enum IndexCommands {
         input: PathBuf,
 
         /// K-mer length used for indexing
-        #[arg(short = 'k', default_value_t = minimizers::DEFAULT_KMER_LENGTH)]
+        #[arg(short = 'k', default_value_t = DEFAULT_KMER_LENGTH)]
         kmer_length: usize,
 
         /// Minimizer window length used for indexing
-        #[arg(short = 'w', default_value_t = minimizers::DEFAULT_WINDOW_SIZE)]
+        #[arg(short = 'w', default_value_t = DEFAULT_WINDOW_SIZE)]
         window_length: usize,
 
         /// Path to output file (- for stdout)
@@ -139,22 +134,22 @@ fn main() -> Result<()> {
                     Some(PathBuf::from(output))
                 };
 
-                index::build(input, *kmer_length, *window_length, output_path)
+                build_index(input, *kmer_length, *window_length, output_path)
                     .context("Failed to run index build command")?;
             }
             IndexCommands::Info { index } => {
-                index::info(index).context("Failed to run index info command")?;
+                index_info(index).context("Failed to run index info command")?;
             }
             IndexCommands::Union { inputs, output } => {
-                index::union(inputs, output.as_ref())
+                union_index(inputs, output.as_ref())
                     .context("Failed to run index union command")?;
             }
             IndexCommands::Diff {
                 first,
-                second: subtract,
+                second,
                 output,
             } => {
-                index::diff(first, subtract, output.as_ref())
+                diff_index(first, second, output.as_ref())
                     .context("Failed to run index diff command")?;
             }
         },
@@ -169,7 +164,7 @@ fn main() -> Result<()> {
             invert,
             rename,
         } => {
-            filter::run(
+            run_filter(
                 minimizers,
                 input1,
                 input2.as_deref(),
