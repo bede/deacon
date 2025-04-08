@@ -378,8 +378,8 @@ pub fn run<P: AsRef<Path>>(
         };
 
         // Write log file
-        let file = File::create(log_file)
-            .context(format!("Failed to create log file: {:?}", log_file))?;
+        let file =
+            File::create(log_file).context(format!("Failed to create log file: {:?}", log_file))?;
         let writer = BufWriter::new(file);
 
         // Serialize and write the log as JSON
