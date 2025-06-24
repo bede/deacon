@@ -1,8 +1,10 @@
 use packed_seq::AsciiSeq;
+use simd_minimizers::scalar::canonical_minimizer_positions_scalar;
 use xxhash_rust::xxh3;
 
 pub const DEFAULT_KMER_LENGTH: usize = 31;
 pub const DEFAULT_WINDOW_SIZE: usize = 15;
+pub const SIMD_LEN_THRESHOLD: usize = 1000;
 
 /// Canonicalize IUPAC ambiguous nucleotides to ACGT based on position, avoiding compositional bias?
 #[inline]
@@ -99,14 +101,23 @@ pub fn compute_minimizer_hashes(seq: &[u8], kmer_length: usize, window_size: usi
         return Vec::new();
     }
     let canonical_seq = canonicalize_sequence(seq);
-    // Get minimizer positions using simd-minimizers
+    // Get minimizer positions using simd-minimizers or scalar fallback
     let mut positions = Vec::with_capacity(seq.len() / window_size + 1);
-    simd_minimizers::canonical_minimizer_positions(
-        AsciiSeq(&canonical_seq),
-        kmer_length,
-        window_size,
-        &mut positions,
-    );
+    if canonical_seq.len() >= kmer_length + SIMD_LEN_THRESHOLD {
+        simd_minimizers::canonical_minimizer_positions(
+            AsciiSeq(&canonical_seq),
+            kmer_length,
+            window_size,
+            &mut positions,
+        );
+    } else {
+        canonical_minimizer_positions_scalar(
+            AsciiSeq(&canonical_seq),
+            kmer_length,
+            window_size,
+            &mut positions,
+        );
+    }
     // Convert positions to hash values with xxh3_64
     positions
         .iter()
@@ -137,14 +148,23 @@ pub fn fill_minimizer_hashes(
 
     let canonical_seq = canonicalize_sequence(seq);
 
-    // Get minimizer positions using simd-minimizers
+    // Get minimizer positions using simd-minimizers or scalar fallback
     let mut positions = Vec::new();
-    simd_minimizers::canonical_minimizer_positions(
-        AsciiSeq(&canonical_seq),
-        kmer_length,
-        window_size,
-        &mut positions,
-    );
+    if canonical_seq.len() >= kmer_length + SIMD_LEN_THRESHOLD {
+        simd_minimizers::canonical_minimizer_positions(
+            AsciiSeq(&canonical_seq),
+            kmer_length,
+            window_size,
+            &mut positions,
+        );
+    } else {
+        canonical_minimizer_positions_scalar(
+            AsciiSeq(&canonical_seq),
+            kmer_length,
+            window_size,
+            &mut positions,
+        );
+    }
 
     // Convert positions to hash values using xxh3_64
     for &pos in &positions {
