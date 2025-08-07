@@ -205,6 +205,101 @@ Use `-s summary.json` to save detailed filtering statistics:
 }
 ```
 
+## Features
+There is an optional feature which can be enabled when building with `cargo build --features server`.
+
+This enables the running of a server which pre-loads the index, allowing filtering to be remote rather than local. In most local use cases, this will inevitably be slower than local `filter`, but for cases where lots of small inputs would otherwise load the index for each input, this is expected to be faster.
+
+### Server
+Start up a server with a specific index loaded. Note that this by default runs in the foreground, so it may appear as if nothing is happening after a message about loading your index. To display incomming connection logs, set `RUST_LOG=trace` in your environment variables. 
+
+
+#### Run on default port
+Starts up the server on port `8888`
+```bash
+deacon server index.idx
+```
+#### Run on custom port
+Starts up the server on port `12345`
+```bash
+deacon server index.idx -p 12345
+```
+
+### Client
+Almost exactly identical to the `deacon filter` reference, but swapping index path for server address. 
+
+
+#### Usage
+```bash
+Usage: deacon client [OPTIONS] <SERVER_ADDRESS> [INPUT] [INPUT2]
+
+Arguments:
+  <SERVER_ADDRESS>  Server address to connect to (including port)
+  [INPUT]           Optional path to fastx file (or - for stdin) [default: -]
+  [INPUT2]          Optional path to second paired fastx file (or - for interleaved stdin)
+
+Options:
+  -o, --output <OUTPUT>
+          Path to output fastx file (or - for stdout; detects .gz and .zst) [default: -]
+  -O, --output2 <OUTPUT2>
+          Optional path to second paired output fastx file (detects .gz and .zst)
+  -m, --matches <MATCH_THRESHOLD>
+          Mininum number (integer) or proportion (float) of minimizer hits for a match [default: 2]
+  -p, --prefix-length <PREFIX_LENGTH>
+          Search only the first N nucleotides per sequence (0 = entire sequence) [default: 0]
+  -d, --deplete
+          Discard matching sequences (invert filtering behaviour)
+  -r, --rename
+          Replace sequence headers with incrementing numbers
+  -s, --summary <SUMMARY>
+          Path to JSON summary output file
+  -t, --threads <THREADS>
+          Number of execution threads (0 = auto) [default: 8]
+      --compression-level <COMPRESSION_LEVEL>
+          Output compression level (1-9 for gz & xz; 1-22 for zstd) [default: 2]
+  -h, --help
+          Print help
+```
+
+**Examples**
+
+```bash
+# Keep only sequences matching the index loaded in the server
+deacon client http://0.0.0.0:8888 reads.fq.gz -o filt.fq.gz
+
+# Host depletion using the server index
+deacon client -d http://0.0.0.0:8888 reads.fq.gz -o filt.fq.gz
+
+# More sensitive match threshold of at least 1 minimizer hit
+deacon client -d -m 1 http://0.0.0.0:8888 reads.fq.gz > filt.fq.gz
+
+# More specific match threshold of 25% minimizer hits (minimum 1)
+deacon client -d -m 0.25 http://0.0.0.0:8888 reads.fq.gz > filt.fq.gz
+
+# Stdin and stdout
+zcat reads.fq.gz | deacon client -d http://0.0.0.0:8888 > filt.fq
+
+# Faster Zstandard compression
+deacon client -d http://0.0.0.0:8888 reads.fq.zst -o filt.fq.zst
+
+# Fast gzip with pigz
+deacon client -d http://0.0.0.0:8888 reads.fq.gz | pigz > filt.fq.gz
+
+# Paired reads
+deacon client -d http://0.0.0.0:8888 r1.fq.gz r2.fq.gz > filt12.fq
+deacon client -d http://0.0.0.0:8888 r1.fq.gz r2.fq.gz -o filt.r1.fq.gz -O filt.r2.fq.gz
+zcat r12.fq.gz | deacon client -d http://0.0.0.0:8888 - - > filt12.fq
+
+# Save summary JSON
+deacon client -d http://0.0.0.0:8888 reads.fq.gz -o filt.fq.gz -s summary.json
+
+# Replace read headers with incrementing integers
+deacon client -d -r http://0.0.0.0:8888 reads.fq.gz > filt.fq
+
+# Only look for minimizer hits inside the first 1000bp per record
+deacon client -d -p 1000 http://0.0.0.0:8888 reads.fq.gz > filt.fq
+```
+
 ## Citation
 
  [![biorXiv preprint](https://img.shields.io/badge/biorXiv-10.1101/2025.06.09.658732-red)](https://doi.org/10.1101/2025.06.09.658732)

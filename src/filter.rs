@@ -1,25 +1,31 @@
 use crate::MatchThreshold;
 use crate::index::load_minimizer_hashes;
 use crate::minimizers::fill_minimizer_hashes;
+#[cfg(feature = "server")]
+use crate::server_common::{FilterRequest, FilterResponse};
 use anyhow::{Context, Result};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use itertools::Itertools;
 use liblzma::write::XzEncoder;
 use needletail::parse_fastx_file;
 use needletail::parse_fastx_stdin;
 use needletail::parser::Format;
 use rayon::prelude::*;
+#[cfg(feature = "server")]
+use reqwest::blocking::Client;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
 use zstd::stream::write::Encoder as ZstdEncoder;
 
 const OUTPUT_BUFFER_SIZE: usize = 8 * 1024 * 1024; // Opt: 8MB output buffer
 
+/// Data structure to hold a fastq record
 struct RecordData {
     id: Vec<u8>,
     seq: Vec<u8>,
@@ -59,7 +65,7 @@ impl CompressionFormat {
         match self {
             Self::None => Ok(()),
             Self::Gzip => {
-                if level < 1 || level > 9 {
+                if !(1..=9).contains(&level) {
                     Err(anyhow::anyhow!(
                         "Invalid gzip compression level {}. Must be between 1 and 9.",
                         level
@@ -69,7 +75,7 @@ impl CompressionFormat {
                 }
             }
             Self::Zstd => {
-                if level < 1 || level > 22 {
+                if !(1..=22).contains(&level) {
                     Err(anyhow::anyhow!(
                         "Invalid zstd compression level {}. Must be between 1 and 22.",
                         level
@@ -191,7 +197,7 @@ fn get_writer(output_path: &str, compression_level: u8) -> Result<Box<dyn FastxW
             .create(true)
             .truncate(true)
             .open(output_path)
-            .context(format!("Failed to create output file: {}", output_path))?;
+            .context(format!("Failed to create output file: {output_path}"))?;
 
         let buffered_file = BufWriter::with_capacity(OUTPUT_BUFFER_SIZE, file);
         let format = CompressionFormat::from_extension(output_path);
@@ -249,8 +255,182 @@ pub struct FilterSummary {
     bp_per_second: u64,
 }
 
-pub fn run<P: AsRef<Path>>(
-    minimizers_path: P,
+/// Determine if a given set of minimizers should be output
+pub fn input_should_be_output(
+    index_minimizers: &FxHashSet<u64>,
+    input_minimizers: &Vec<u64>,
+    match_threshold: &MatchThreshold,
+    deplete: bool,
+) -> bool {
+    // Count distinct minimizer hits
+    let mut seen_hits = FxHashSet::default();
+    let mut hit_count = 0;
+    for &hash in input_minimizers {
+        if index_minimizers.contains(&hash) && seen_hits.insert(hash) {
+            hit_count += 1;
+        }
+    }
+
+    // Convert threshold to absolute count
+    let required_hits = match match_threshold {
+        MatchThreshold::Absolute(n) => *n,
+        MatchThreshold::Relative(f) => {
+            if input_minimizers.is_empty() {
+                0
+            } else {
+                ((*f * input_minimizers.len() as f64).ceil() as usize).max(1)
+            }
+        }
+    };
+
+    if deplete {
+        // Deplete mode: remove pairs that meet the threshold
+        hit_count < required_hits
+    } else {
+        // Default mode: keep pairs that meet the threshold
+        hit_count >= required_hits
+    }
+}
+
+/// Given a set of index minimizers and a vector of input minimizers,
+/// return a vector of booleans indicating whether each input should be output
+pub fn inputs_should_be_output(
+    index_minimizers: &FxHashSet<u64>,
+    input_minimizers: &Vec<Vec<u64>>,
+    match_threshold: &MatchThreshold,
+    deplete: bool,
+) -> Vec<bool> {
+    input_minimizers
+        .par_iter()
+        .map(|minimizers| {
+            input_should_be_output(index_minimizers, minimizers, match_threshold, deplete)
+        })
+        .collect()
+}
+
+/// Send minimizers to server for checking against index.
+/// Equivalent functionality to `inputs_should_be_output`, but remote
+#[cfg(feature = "server")]
+fn send_all_minimizers_to_server(
+    input_minimizers: Vec<Vec<u64>>,
+    server_address: &str,
+    matches_threshold: &MatchThreshold,
+    deplete: bool,
+) -> Result<Vec<bool>> {
+    // Create a client to send the minimizers to the server
+    let client = Client::new();
+
+    // Send the minimizers as a POST request
+    let response = client
+        .post(server_address.to_owned() + "/should_output")
+        .json(&FilterRequest {
+            input: input_minimizers,
+            match_threshold: *matches_threshold,
+            deplete,
+        })
+        .send()?;
+
+    // Check if the response indicates a match
+    if response.status().is_success() {
+        Ok(response.json::<FilterResponse>()?.should_output)
+    } else {
+        Err(anyhow::anyhow!(
+            "Server returned an error: {}",
+            response.status()
+        ))
+    }
+}
+
+/// Given a set of input minimizers, check if they should be output
+/// If index minimizers are provided, check locally.
+/// If not, send to server for checking. Requires the `server` feature to be enabled.
+pub fn check_inputs_should_be_output(
+    index_minimizers: &Option<FxHashSet<u64>>,
+    input_minimizers: &Vec<Vec<u64>>,
+    match_threshold: &MatchThreshold,
+    _server_address: &Option<String>,
+    deplete: bool,
+) -> Vec<bool> {
+    // If index minimizers are provided, check if input matches locally
+    if let Some(index_minimizers) = index_minimizers {
+        inputs_should_be_output(index_minimizers, input_minimizers, match_threshold, deplete)
+    } else {
+        // Else, send the input minimizers to the server for checking
+        #[cfg(feature = "server")]
+        {
+            if _server_address.is_none() {
+                panic!("Server address is required when using the server feature.");
+            }
+            let server_address = _server_address.as_ref().map(String::as_str).unwrap();
+            send_all_minimizers_to_server(
+                input_minimizers.to_vec(),
+                server_address,
+                match_threshold,
+                deplete,
+            )
+            .unwrap_or_else(|e| {
+                panic!("Error checking input against index: {e}");
+            })
+        }
+        #[cfg(not(feature = "server"))]
+        {
+            panic!("Server feature is not enabled. Cannot check input against index.");
+        }
+    }
+}
+
+/// Get minimizer hashes from a single record.
+fn get_hashes_from_record(
+    record_data: &RecordData,
+    kmer_length: usize,
+    prefix_length: usize,
+    window_size: usize,
+) -> (Vec<u64>, usize) {
+    let seq_len = record_data.seq.len();
+    let mut minimizer_buffer = Vec::with_capacity(64);
+
+    if seq_len >= kmer_length {
+        // Apply prefix length limit if specified
+        let effective_seq = if prefix_length > 0 && seq_len > prefix_length {
+            &record_data.seq[..prefix_length]
+        } else {
+            &record_data.seq
+        };
+
+        // Get minimizer hash values using parameters from header
+        fill_minimizer_hashes(
+            effective_seq,
+            kmer_length,
+            window_size,
+            &mut minimizer_buffer,
+        );
+    }
+
+    (minimizer_buffer, seq_len)
+}
+
+/// Get minimizer hashes from a pair of records.
+fn get_hashes_from_record_pair(
+    record_data1: &RecordData,
+    record_data2: &RecordData,
+    kmer_length: usize,
+    prefix_length: usize,
+    window_size: usize,
+) -> (Vec<u64>, usize, usize) {
+    let (mut minimizer_buffer1, seq1_len) =
+        get_hashes_from_record(record_data1, kmer_length, prefix_length, window_size);
+    let (mut minimizer_buffer2, seq2_len) =
+        get_hashes_from_record(record_data2, kmer_length, prefix_length, window_size);
+    // Combine the two minimizer buffers
+    minimizer_buffer1.append(&mut minimizer_buffer2);
+
+    (minimizer_buffer1, seq1_len, seq2_len)
+}
+
+/// Run deacon filter with the provided parameters.
+#[allow(clippy::too_many_arguments)]
+pub fn run(
+    minimizers_path: Option<&PathBuf>,
     input_path: &str,
     input2_path: Option<&str>,
     output_path: &str,
@@ -262,10 +442,11 @@ pub fn run<P: AsRef<Path>>(
     rename: bool,
     threads: usize,
     compression_level: u8,
+    server_address: Option<String>,
 ) -> Result<()> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
-    let tool_version = format!("deacon {}", version);
+    let tool_version = format!("deacon {version}");
 
     // Configure thread pool if nonzero
     if threads > 0 {
@@ -282,20 +463,20 @@ pub fn run<P: AsRef<Path>>(
     let paired_stdin = input_path == "-" && input2_path.is_some() && input2_path.unwrap() == "-";
     if paired_stdin {
         input_type.push_str("interleaved");
-    } else if let Some(_) = input2_path {
+    } else if input2_path.is_some() {
         input_type.push_str("paired");
     } else {
         input_type.push_str("single");
     }
-    options.push(format!("match_threshold={}", match_threshold));
+    options.push(format!("match_threshold={match_threshold}"));
     if prefix_length > 0 {
-        options.push(format!("prefix_length={}", prefix_length));
+        options.push(format!("prefix_length={prefix_length}"));
     }
     if rename {
         options.push("rename".to_string());
     }
     if threads > 0 {
-        options.push(format!("threads={}", threads));
+        options.push(format!("threads={threads}"));
     }
 
     eprintln!(
@@ -307,16 +488,13 @@ pub fn run<P: AsRef<Path>>(
     );
 
     // Load minimizers hashes and parse header
-    let (minimizer_hashes, header) = load_minimizer_hashes(&minimizers_path)?;
+    let (minimizer_hashes, header) = load_minimizer_hashes(&minimizers_path, &server_address)?;
 
     let kmer_length = header.kmer_length();
     let window_size = header.window_size();
 
     let load_time = start_time.elapsed();
-    eprintln!(
-        "Loaded index (k={}, w={}) in {:.2?}",
-        kmer_length, window_size, load_time
-    );
+    eprintln!("Loaded index (k={kmer_length}, w={window_size}) in {load_time:.2?}");
 
     // Create the appropriate writer(s) based on the output path(s)
     let mut writer = get_writer(output_path, compression_level)?;
@@ -366,6 +544,7 @@ pub fn run<P: AsRef<Path>>(
             &mut output_seq_counter,
             &spinner,
             filtering_start_time,
+            &server_address,
         )?;
     } else if let Some(input2_path) = input2_path {
         process_paired_seqs(
@@ -388,6 +567,7 @@ pub fn run<P: AsRef<Path>>(
             &mut output_seq_counter,
             &spinner,
             filtering_start_time,
+            &server_address,
         )?;
     } else {
         process_single_seqs(
@@ -408,6 +588,7 @@ pub fn run<P: AsRef<Path>>(
             &mut output_seq_counter,
             &spinner,
             filtering_start_time,
+            &server_address,
         )?;
     }
 
@@ -463,8 +644,7 @@ pub fn run<P: AsRef<Path>>(
 
     // Print completion message with speed
     eprintln!(
-        "Completed in {:.2?}. Speed: {:.0} seqs/s ({:.1} Mbp/s)",
-        total_time, seqs_per_sec, mbp_per_sec
+        "Completed in {total_time:.2?}. Speed: {seqs_per_sec:.0} seqs/s ({mbp_per_sec:.1} Mbp/s)"
     );
 
     // Build and write a JSON summary if path provided
@@ -472,9 +652,14 @@ pub fn run<P: AsRef<Path>>(
         // Get number of sequences passing filter
         let seqs_out = total_seqs - filtered_seqs;
 
+        let index = match minimizers_path {
+            Some(path) => path.to_string_lossy().to_string(),
+            None => server_address.unwrap(),
+        };
+
         let summary = FilterSummary {
             version: tool_version,
-            index: minimizers_path.as_ref().to_string_lossy().to_string(),
+            index,
             input: input_path.to_string(),
             input2: input2_path.map(|s| s.to_string()),
             output: output_path.to_string(),
@@ -485,15 +670,15 @@ pub fn run<P: AsRef<Path>>(
             prefix_length,
             deplete,
             rename,
-            seqs_in: total_seqs as u64,
-            seqs_out: seqs_out as u64,
+            seqs_in: total_seqs,
+            seqs_out,
             seqs_out_proportion: output_seq_proportion,
-            seqs_removed: filtered_seqs as u64,
+            seqs_removed: filtered_seqs,
             seqs_removed_proportion: filtered_proportion,
-            bp_in: total_bp as u64,
-            bp_out: output_bp as u64,
+            bp_in: total_bp,
+            bp_out: output_bp,
             bp_out_proportion: output_bp_proportion,
-            bp_removed: filtered_bp as u64,
+            bp_removed: filtered_bp,
             bp_removed_proportion: filtered_bp_proportion,
             time: total_time.as_secs_f64(),
             seqs_per_second: seqs_per_sec as u64,
@@ -502,20 +687,22 @@ pub fn run<P: AsRef<Path>>(
 
         // Write summary file
         let file = File::create(summary_file)
-            .context(format!("Failed to create summary: {:?}", summary_file))?;
+            .context(format!("Failed to create summary: {summary_file:?}"))?;
         let writer = BufWriter::new(file);
 
         // Serialise and write the summary JSON
         serde_json::to_writer_pretty(writer, &summary).context("Failed to write summary")?;
 
-        eprintln!("Summary saved to {:?}", summary_file);
+        eprintln!("Summary saved to {summary_file:?}");
     }
 
     Ok(())
 }
 
+/// Filter a single (unpaired) sequence.
+#[allow(clippy::too_many_arguments)]
 fn process_single_seqs(
-    minimizer_hashes: &FxHashSet<u64>,
+    minimizer_hashes: &Option<FxHashSet<u64>>,
     input_path: &str,
     writer: &mut Box<dyn FastxWriter>,
     match_threshold: &MatchThreshold,
@@ -532,6 +719,7 @@ fn process_single_seqs(
     output_seq_counter: &mut u64,
     spinner: &ProgressBar,
     filtering_start_time: Instant,
+    server_address: &Option<String>,
 ) -> Result<()> {
     // Create a reader based on the input source
     let mut reader = if input_path == "-" {
@@ -575,75 +763,31 @@ fn process_single_seqs(
             break;
         }
 
-        // Process batch in parallel
-        let batch_results: Vec<_> = batch
+        // Get batch minimizers in parallel
+        let (batch_minimizers, seq_lens): (Vec<Vec<u64>>, Vec<usize>) = batch
             .par_iter()
             .map(|record_data| {
-                let seq_len = record_data.seq.len();
-
-                // Pre-allocate buffers for reuse
-                let mut minimizer_buffer = Vec::with_capacity(64);
-                let mut seen_hits = FxHashSet::default();
-
-                // Check for minimizer hits
-                let mut hit_count = 0;
-
-                if seq_len >= kmer_length {
-                    // Apply prefix length limit if specified
-                    let effective_seq = if prefix_length > 0 && seq_len > prefix_length {
-                        &record_data.seq[..prefix_length]
-                    } else {
-                        &record_data.seq
-                    };
-
-                    // Get minimizer hash values using parameters from header
-                    fill_minimizer_hashes(
-                        effective_seq,
-                        kmer_length,
-                        window_size,
-                        &mut minimizer_buffer,
-                    );
-
-                    // Count distinct minimizer hits
-                    for &hash in &minimizer_buffer {
-                        if minimizer_hashes.contains(&hash) && seen_hits.insert(hash) {
-                            hit_count += 1;
-                        }
-                    }
-                }
-
-                // Convert threshold to absolute count
-                let required_hits = match match_threshold {
-                    MatchThreshold::Absolute(n) => *n,
-                    MatchThreshold::Relative(f) => {
-                        if minimizer_buffer.is_empty() {
-                            0
-                        } else {
-                            ((*f * minimizer_buffer.len() as f64).ceil() as usize).max(1)
-                        }
-                    }
-                };
-
-                let should_output = if deplete {
-                    // Deplete mode: remove sequences that meet the threshold
-                    hit_count < required_hits
-                } else {
-                    // Default mode: keep sequences that meet the threshold
-                    hit_count >= required_hits
-                };
-
-                (should_output, seq_len)
+                get_hashes_from_record(record_data, kmer_length, prefix_length, window_size)
             })
-            .collect();
+            .unzip();
+
+        // Check if minimizers match the index
+        // Separated from initial par_iter to allow flexibility with local/server processing
+        let batch_should_outputs = check_inputs_should_be_output(
+            minimizer_hashes,
+            &batch_minimizers,
+            match_threshold,
+            server_address,
+            deplete,
+        );
 
         // Process results sequentially to maintain order
-        for (i, (should_output, seq_len)) in batch_results.iter().enumerate() {
+        for (i, (seq_len, should_output)) in seq_lens.iter().zip(batch_should_outputs).enumerate() {
             let record_data = &batch[i];
-
             *total_seqs += 1;
             *total_bp += *seq_len as u64;
 
-            if *should_output {
+            if should_output {
                 // Track output base pairs
                 *output_bp += *seq_len as u64;
 
@@ -714,8 +858,10 @@ fn process_single_seqs(
     Ok(())
 }
 
+/// Filter a pair of sequences
+#[allow(clippy::too_many_arguments)]
 fn process_paired_seqs(
-    minimizer_hashes: &FxHashSet<u64>,
+    minimizer_hashes: &Option<FxHashSet<u64>>,
     input1_path: &str,
     input2_path: &str,
     writer: &mut Box<dyn FastxWriter>,
@@ -734,6 +880,7 @@ fn process_paired_seqs(
     output_seq_counter: &mut u64,
     spinner: &ProgressBar,
     filtering_start_time: Instant,
+    server_address: &Option<String>,
 ) -> Result<()> {
     // Open both input files
     let mut reader1 = if input1_path == "-" {
@@ -788,110 +935,50 @@ fn process_paired_seqs(
             break;
         }
 
-        // Process batch in parallel
-        let batch_results: Vec<_> = batch1
+        // Get batch minimizers in parallel
+        let batch_result: Vec<(Vec<u64>, usize, usize)> = batch1
             .par_iter()
             .zip(batch2.par_iter())
             .map(|(record_data1, record_data2)| {
-                let seq1_len = record_data1.seq.len();
-                let seq2_len = record_data2.seq.len();
-
-                // Pre-allocate buffers for reuse
-                let mut minimizer_buffer1 = Vec::with_capacity(64);
-                let mut minimizer_buffer2 = Vec::with_capacity(64);
-                let mut seen_hits_pair = FxHashSet::default();
-                let mut pair_hit_count = 0;
-
-                // Check for minimizer hits in read 1
-                if seq1_len >= kmer_length {
-                    minimizer_buffer1.clear();
-
-                    // Apply prefix length limit if specified
-                    let effective_seq = if prefix_length > 0 && seq1_len > prefix_length {
-                        &record_data1.seq[..prefix_length]
-                    } else {
-                        &record_data1.seq
-                    };
-
-                    // Get minimizer hash values
-                    fill_minimizer_hashes(
-                        effective_seq,
-                        kmer_length,
-                        window_size,
-                        &mut minimizer_buffer1,
-                    );
-
-                    // Count distinct minimizer hits for the pair
-                    for &hash in &minimizer_buffer1 {
-                        if minimizer_hashes.contains(&hash) && seen_hits_pair.insert(hash) {
-                            pair_hit_count += 1;
-                        }
-                    }
-                }
-
-                // Check for minimizer hits in read 2
-                if seq2_len >= kmer_length {
-                    minimizer_buffer2.clear();
-
-                    // Apply prefix length limit if specified
-                    let effective_seq = if prefix_length > 0 && seq2_len > prefix_length {
-                        &record_data2.seq[..prefix_length]
-                    } else {
-                        &record_data2.seq
-                    };
-
-                    // Get minimizer hash values
-                    fill_minimizer_hashes(
-                        effective_seq,
-                        kmer_length,
-                        window_size,
-                        &mut minimizer_buffer2,
-                    );
-
-                    // Count distinct minimizer hits for the pair (continuing from read 1)
-                    for &hash in &minimizer_buffer2 {
-                        if minimizer_hashes.contains(&hash) && seen_hits_pair.insert(hash) {
-                            pair_hit_count += 1;
-                        }
-                    }
-                }
-
-                // Convert threshold to absolute count based on total minimizers in both reads
-                let total_minimizers = minimizer_buffer1.len() + minimizer_buffer2.len();
-                let required_hits = match match_threshold {
-                    MatchThreshold::Absolute(n) => *n,
-                    MatchThreshold::Relative(f) => {
-                        if total_minimizers == 0 {
-                            0
-                        } else {
-                            ((*f * total_minimizers as f64).ceil() as usize).max(1)
-                        }
-                    }
-                };
-
-                let should_output = if deplete {
-                    // Deplete mode: remove pairs that meet the threshold
-                    pair_hit_count < required_hits
-                } else {
-                    // Default mode: keep pairs that meet the threshold
-                    pair_hit_count >= required_hits
-                };
-
-                (should_output, seq1_len, seq2_len)
+                get_hashes_from_record_pair(
+                    record_data1,
+                    record_data2,
+                    kmer_length,
+                    prefix_length,
+                    window_size,
+                )
             })
             .collect();
 
+        let (batch_minimizers, seq_lens1, seq_lens2): (Vec<Vec<u64>>, Vec<usize>, Vec<usize>) =
+            batch_result.into_iter().multiunzip();
+
+        // Check if minimizers match the index
+        // Separated from initial par_iter to allow flexibility with local/server processing
+        let batch_should_outputs = check_inputs_should_be_output(
+            minimizer_hashes,
+            &batch_minimizers,
+            match_threshold,
+            server_address,
+            deplete,
+        );
+
         // Process results sequentially to maintain order
-        for (i, (should_output, seq1_len, seq2_len)) in batch_results.iter().enumerate() {
+        for (i, ((should_output, seq1_len), seq2_len)) in batch_should_outputs
+            .iter()
+            .zip(seq_lens1)
+            .zip(seq_lens2)
+            .enumerate()
+        {
             let record_data1 = &batch1[i];
             let record_data2 = &batch2[i];
 
             *total_seqs += 2;
-            *total_bp += (*seq1_len + *seq2_len) as u64;
+            *total_bp += (seq1_len + seq2_len) as u64;
 
             if *should_output {
                 // Track output base pairs
-                *output_bp += (*seq1_len + *seq2_len) as u64;
+                *output_bp += (seq1_len + seq2_len) as u64;
 
                 // Increment output sequence counter (twice, once for each read)
                 *output_seq_counter += 2;
@@ -943,7 +1030,7 @@ fn process_paired_seqs(
                 }
             } else {
                 *filtered_seqs += 2; // Both seqs filtered out
-                *filtered_bp += (*seq1_len + *seq2_len) as u64; // Track filtered base pairs
+                *filtered_bp += (seq1_len + seq2_len) as u64; // Track filtered base pairs
             }
         }
 
@@ -996,8 +1083,11 @@ fn process_paired_seqs(
     Ok(())
 }
 
+/// Filter a pair of interleaved sequences
+/// Functionally very similar to `process_paired_seqs`, but handles interleaved input
+#[allow(clippy::too_many_arguments)]
 fn process_interleaved_paired_seqs(
-    minimizer_hashes: &FxHashSet<u64>,
+    minimizer_hashes: &Option<FxHashSet<u64>>,
     writer: &mut Box<dyn FastxWriter>,
     mut writer2: Option<&mut Box<dyn FastxWriter>>,
     match_threshold: &MatchThreshold,
@@ -1014,6 +1104,7 @@ fn process_interleaved_paired_seqs(
     output_seq_counter: &mut u64,
     spinner: &ProgressBar,
     filtering_start_time: Instant,
+    server_address: &Option<String>,
 ) -> Result<()> {
     // Parse FASTX from stdin
     let mut reader = parse_fastx_stdin()?;
@@ -1070,8 +1161,18 @@ fn process_interleaved_paired_seqs(
 
             // Store the pair in the batch
             batch_pairs.push((
-                (record1_id, record1_seq, record1_qual, record1_format),
-                (record2_id, record2_seq, record2_qual, record2_format),
+                RecordData {
+                    id: record1_id,
+                    seq: record1_seq,
+                    qual: record1_qual,
+                    format: record1_format,
+                },
+                RecordData {
+                    id: record2_id,
+                    seq: record2_seq,
+                    qual: record2_qual,
+                    format: record2_format,
+                },
             ));
         }
 
@@ -1079,111 +1180,49 @@ fn process_interleaved_paired_seqs(
             break;
         }
 
-        // Process batch in parallel
-        let batch_results: Vec<_> = batch_pairs
+        // Get batch minimizers in parallel
+        let batch_result: Vec<(Vec<u64>, usize, usize)> = batch_pairs
             .par_iter()
-            .map(
-                |(
-                    (_record1_id, record1_seq, _record1_qual, _record1_format),
-                    (_record2_id, record2_seq, _record2_qual, _record2_format),
-                )| {
-                    // Pre-allocate buffers for reuse
-                    let mut minimizer_buffer1 = Vec::with_capacity(64);
-                    let mut minimizer_buffer2 = Vec::with_capacity(64);
-                    let mut seen_hits_pair = FxHashSet::default();
-                    let mut pair_hit_count = 0;
-
-                    // Check for minimizer hits in read 1
-                    if record1_seq.len() >= kmer_length {
-                        // Apply prefix length limit if specified
-                        let effective_seq =
-                            if prefix_length > 0 && record1_seq.len() > prefix_length {
-                                &record1_seq[..prefix_length]
-                            } else {
-                                &record1_seq
-                            };
-
-                        // Get minimizer hash values
-                        fill_minimizer_hashes(
-                            effective_seq,
-                            kmer_length,
-                            window_size,
-                            &mut minimizer_buffer1,
-                        );
-
-                        // Count distinct minimizer hits for the pair
-                        for &hash in &minimizer_buffer1 {
-                            if minimizer_hashes.contains(&hash) && seen_hits_pair.insert(hash) {
-                                pair_hit_count += 1;
-                            }
-                        }
-                    }
-
-                    // Check for minimizer hits in read 2
-                    if record2_seq.len() >= kmer_length {
-                        // Apply prefix length limit if specified
-                        let effective_seq =
-                            if prefix_length > 0 && record2_seq.len() > prefix_length {
-                                &record2_seq[..prefix_length]
-                            } else {
-                                &record2_seq
-                            };
-
-                        // Get minimizer hash values
-                        fill_minimizer_hashes(
-                            effective_seq,
-                            kmer_length,
-                            window_size,
-                            &mut minimizer_buffer2,
-                        );
-
-                        // Count distinct minimizer hits for the pair (continuing from read 1)
-                        for &hash in &minimizer_buffer2 {
-                            if minimizer_hashes.contains(&hash) && seen_hits_pair.insert(hash) {
-                                pair_hit_count += 1;
-                            }
-                        }
-                    }
-
-                    // Convert threshold to absolute count based on total minimizers in both reads
-                    let total_minimizers = minimizer_buffer1.len() + minimizer_buffer2.len();
-                    let required_hits = match match_threshold {
-                        MatchThreshold::Absolute(n) => *n,
-                        MatchThreshold::Relative(f) => {
-                            if total_minimizers == 0 {
-                                0
-                            } else {
-                                ((*f * total_minimizers as f64).ceil() as usize).max(1)
-                            }
-                        }
-                    };
-
-                    let should_output = if deplete {
-                        // Deplete mode: remove pairs that meet the threshold
-                        pair_hit_count < required_hits
-                    } else {
-                        // Default mode: keep pairs that meet the threshold
-                        pair_hit_count >= required_hits
-                    };
-
-                    (should_output, record1_seq.len(), record2_seq.len())
-                },
-            )
+            .map(|(record_data1, record_data2)| {
+                get_hashes_from_record_pair(
+                    record_data1,
+                    record_data2,
+                    kmer_length,
+                    prefix_length,
+                    window_size,
+                )
+            })
             .collect();
 
+        let (batch_minimizers, seq_lens1, seq_lens2): (Vec<Vec<u64>>, Vec<usize>, Vec<usize>) =
+            batch_result.into_iter().multiunzip();
+
+        // Check if minimizers match the index
+        // Separated from initial par_iter to allow flexibility with local/server processing
+        let batch_should_outputs = check_inputs_should_be_output(
+            minimizer_hashes,
+            &batch_minimizers,
+            match_threshold,
+            server_address,
+            deplete,
+        );
+
         // Process results sequentially to maintain order
-        for (i, (should_output, seq1_len, seq2_len)) in batch_results.iter().enumerate() {
-            let (
-                (record1_id, record1_seq, record1_qual, record1_format),
-                (record2_id, record2_seq, record2_qual, record2_format),
-            ) = &batch_pairs[i];
+        for (i, ((should_output, seq1_len), seq2_len)) in batch_should_outputs
+            .iter()
+            .zip(seq_lens1)
+            .zip(seq_lens2)
+            .enumerate()
+        {
+            // for (i, result) in batch_results.into_iter().enumerate() {
+            let (record1, record2) = &batch_pairs[i];
 
             *total_seqs += 2;
-            *total_bp += (*seq1_len + *seq2_len) as u64;
+            *total_bp += (seq1_len + seq2_len) as u64;
 
             if *should_output {
                 // Track output base pairs
-                *output_bp += (*seq1_len + *seq2_len) as u64;
+                *output_bp += (seq1_len + seq2_len) as u64;
 
                 // Increment output sequence counter (twice, once for each seq)
                 *output_seq_counter += 2;
@@ -1191,10 +1230,10 @@ fn process_interleaved_paired_seqs(
                 // Format and write record 1
                 output_record_buffer.clear();
                 output_fastx_record_from_parts(
-                    record1_id,
-                    record1_seq,
-                    record1_qual.as_deref(),
-                    *record1_format,
+                    &record1.id,
+                    &record1.seq,
+                    record1.qual.as_deref(),
+                    record1.format,
                     &mut output_record_buffer,
                     rename,
                     *output_seq_counter - 1,
@@ -1207,10 +1246,10 @@ fn process_interleaved_paired_seqs(
                     // Format and write record 2 to second writer
                     output_record_buffer.clear();
                     output_fastx_record_from_parts(
-                        record2_id,
-                        record2_seq,
-                        record2_qual.as_deref(),
-                        *record2_format,
+                        &record2.id,
+                        &record2.seq,
+                        record2.qual.as_deref(),
+                        record2.format,
                         &mut output_record_buffer,
                         rename,
                         *output_seq_counter,
@@ -1223,10 +1262,10 @@ fn process_interleaved_paired_seqs(
                     // Format and write record 2
                     output_record_buffer.clear();
                     output_fastx_record_from_parts(
-                        record2_id,
-                        record2_seq,
-                        record2_qual.as_deref(),
-                        *record2_format,
+                        &record2.id,
+                        &record2.seq,
+                        record2.qual.as_deref(),
+                        record2.format,
                         &mut output_record_buffer,
                         rename,
                         *output_seq_counter,
@@ -1235,7 +1274,7 @@ fn process_interleaved_paired_seqs(
                 }
             } else {
                 *filtered_seqs += 2; // Both seqs filtered out
-                *filtered_bp += (*seq1_len + *seq2_len) as u64; // Track filtered base pairs
+                *filtered_bp += (seq1_len + seq2_len) as u64; // Track filtered base pairs
             }
         }
 

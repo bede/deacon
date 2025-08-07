@@ -15,3 +15,10 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+      - id: cargo-test-server
+        name: cargo test (server)
+        description: Run Rust tests (including server functionality)
+        entry: cargo test --features server -- --test-threads 1
+        language: system
+        types: [rust]
+        pass_filenames: false

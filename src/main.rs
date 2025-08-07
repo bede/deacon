@@ -68,6 +68,66 @@ enum Commands {
         #[arg(long = "compression-level", default_value_t = 2)]
         compression_level: u8,
     },
+
+    Server {
+        /// Path to minimizer index file
+        index: PathBuf,
+
+        /// Port to run the server on
+        #[arg(short = 'p', long = "port", default_value_t = 8888)]
+        port: u16,
+    },
+
+    /// Alternate version of Filter, swapping local compute for passing to a server
+    /// which has the index pre-loaded. Will inevitably be slower than local filtering,
+    /// but saves on index loading. Better used for cases of small input + large index
+    Client {
+        /// Server address to connect to (including port)
+        server_address: String,
+
+        /// Optional path to fastx file (or - for stdin)
+        #[arg(default_value = "-")]
+        input: String,
+
+        /// Optional path to second paired fastx file (or - for interleaved stdin)
+        input2: Option<String>,
+
+        /// Path to output fastx file (or - for stdout; detects .gz and .zst)
+        #[arg(short = 'o', long = "output", default_value = "-")]
+        output: String,
+
+        /// Optional path to second paired output fastx file (detects .gz and .zst)
+        #[arg(short = 'O', long = "output2")]
+        output2: Option<String>,
+
+        /// Mininum number (integer) or proportion (float) of minimizer hits for a match
+        #[arg(short = 'm', long = "matches", default_value_t = MatchThreshold::Absolute(2))]
+        match_threshold: MatchThreshold,
+
+        /// Search only the first N nucleotides per sequence (0 = entire sequence)
+        #[arg(short = 'p', long = "prefix-length", default_value_t = 0)]
+        prefix_length: usize,
+
+        /// Discard matching sequences (invert filtering behaviour)
+        #[arg(short = 'd', long = "deplete", default_value_t = false)]
+        deplete: bool,
+
+        /// Replace sequence headers with incrementing numbers
+        #[arg(short = 'r', long = "rename", default_value_t = false)]
+        rename: bool,
+
+        /// Path to JSON summary output file
+        #[arg(short = 's', long = "summary")]
+        summary: Option<PathBuf>,
+
+        /// Number of execution threads (0 = auto)
+        #[arg(short = 't', long = "threads", default_value_t = 8)]
+        threads: usize,
+
+        /// Output compression level (1-9 for gz & xz; 1-22 for zstd)
+        #[arg(long = "compression-level", default_value_t = 2)]
+        compression_level: u8,
+    },
 }
 
 #[derive(Subcommand)]
@@ -135,7 +195,6 @@ enum IndexCommands {
         output: Option<PathBuf>,
     },
 }
-
 fn main() -> Result<()> {
     // Check we have either AVX2 or NEON
     #[cfg(not(any(target_feature = "avx2", target_feature = "neon")))]
@@ -214,8 +273,8 @@ fn main() -> Result<()> {
             }
 
             run_filter(
-                minimizers,
-                &input,
+                Some(minimizers),
+                input,
                 input2.as_deref(),
                 output,
                 output2.as_deref(),
@@ -226,8 +285,92 @@ fn main() -> Result<()> {
                 *rename,
                 *threads,
                 *compression_level,
+                None,
             )
             .context("Failed to run filter command")?;
+        }
+        Commands::Server { index, port } => {
+            #[cfg(feature = "server")]
+            {
+                // Server needs to run async, so spawn an async runtime to run it
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    eprintln!("Loading server!");
+                    deacon::server::run_server(index.clone(), *port).await;
+                });
+            }
+            #[cfg(not(feature = "server"))]
+            {
+                eprintln!(
+                    "Server functionality is not enabled in this build. Please compile with the 'server' feature: `cargo build --features server`"
+                );
+                // Suppress dead code warning so this compiles without issue when server is not enabled
+                let _ = (index, port);
+                std::process::exit(1);
+            }
+        }
+        Commands::Client {
+            server_address,
+            input,
+            input2,
+            output,
+            output2,
+            match_threshold,
+            prefix_length,
+            summary,
+            deplete,
+            rename,
+            threads,
+            compression_level,
+        } => {
+            #[cfg(feature = "server")]
+            {
+                // Validate output2 usage
+                if output2.is_some() && input2.is_none() {
+                    eprintln!(
+                        "Warning: --output2 specified but no second input file provided. --output2 will be ignored."
+                    );
+                }
+                let dummy_index: Option<&PathBuf> = None;
+                run_filter(
+                    dummy_index,
+                    input,
+                    input2.as_deref(),
+                    output,
+                    output2.as_deref(),
+                    match_threshold,
+                    *prefix_length,
+                    summary.as_ref(),
+                    *deplete,
+                    *rename,
+                    *threads,
+                    *compression_level,
+                    Some(server_address.to_string()),
+                )
+                .context("Failed to run filter with client functionality")?;
+            }
+            #[cfg(not(feature = "server"))]
+            {
+                eprintln!(
+                    "Client functionality is not enabled in this build. Please compile with the 'server' feature: `cargo build --features server`"
+                );
+                // Suppress dead code warning so this compiles without issue when server is not enabled
+                let _ = (
+                    server_address,
+                    input,
+                    input2,
+                    output,
+                    output2,
+                    match_threshold,
+                    prefix_length,
+                    summary,
+                    deplete,
+                    rename,
+                    threads,
+                    compression_level,
+                );
+                std::process::exit(1);
+            }
         }
     }
 
