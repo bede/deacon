@@ -538,7 +538,11 @@ pub fn info<P: AsRef<Path>>(index_path: P) -> Result<()> {
 }
 
 /// Combine minimizer indexes (set union)
-pub fn union<P: AsRef<Path>>(inputs: &[P], output: Option<&PathBuf>) -> Result<()> {
+pub fn union<P: AsRef<Path>>(
+    inputs: &[P],
+    output: Option<&PathBuf>,
+    capacity_millions: Option<usize>,
+) -> Result<()> {
     let start_time = Instant::now();
     // Check input files
     if inputs.is_empty() {
@@ -549,13 +553,20 @@ pub fn union<P: AsRef<Path>>(inputs: &[P], output: Option<&PathBuf>) -> Result<(
 
     // Read all headers first to determine total capacity needed
     let mut headers_and_counts = Vec::new();
-    let mut total_capacity = 0;
+    let mut sum_capacity = 0;
 
     for path in inputs {
         let (header, count) = load_header_and_count(path)?;
-        total_capacity += count;
+        sum_capacity += count;
         headers_and_counts.push((header, count));
     }
+
+    // Use provided capacity or fall back to sum of all index counts
+    let total_capacity = if let Some(capacity_millions) = capacity_millions {
+        capacity_millions * 1_000_000
+    } else {
+        sum_capacity
+    };
 
     // Get header from first file for output
     let header = &headers_and_counts[0].0;
@@ -565,11 +576,19 @@ pub fn union<P: AsRef<Path>>(inputs: &[P], output: Option<&PathBuf>) -> Result<(
         header.kmer_length(),
         header.window_size()
     );
-    eprintln!(
-        "Pre-allocating capacity for {} minimizers across {} indexes",
-        total_capacity,
-        inputs.len()
-    );
+    if capacity_millions.is_some() {
+        eprintln!(
+            "Pre-allocating user-specified capacity for {} minimizers from {} indexes",
+            total_capacity,
+            inputs.len()
+        );
+    } else {
+        eprintln!(
+            "No capacity specified, pre-allocating worst-case capacity for {} minimizers from {} indexes",
+            total_capacity,
+            inputs.len()
+        );
+    }
 
     // Verify all headers are compatible
     for (i, (file_header, _)) in headers_and_counts.iter().enumerate() {

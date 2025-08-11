@@ -131,6 +131,10 @@ enum IndexCommands {
         /// Path to output file (- for stdout)
         #[arg(short = 'o', long = "output", default_value = "-")]
         output: Option<PathBuf>,
+
+        /// Preallocated index capacity in millions of minimizers (overrides sum-based allocation)
+        #[arg(short = 'c', long = "capacity")]
+        capacity_millions: Option<usize>,
     },
     /// Subtract minimizers in one index from another (A - B)
     Diff {
@@ -201,8 +205,12 @@ fn main() -> Result<()> {
             IndexCommands::Info { index } => {
                 index_info(index).context("Failed to run index info command")?;
             }
-            IndexCommands::Union { inputs, output } => {
-                union_index(inputs, output.as_ref())
+            IndexCommands::Union {
+                inputs,
+                output,
+                capacity_millions,
+            } => {
+                union_index(inputs, output.as_ref(), *capacity_millions)
                     .context("Failed to run index union command")?;
             }
             IndexCommands::Diff {
