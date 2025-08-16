@@ -268,20 +268,31 @@ struct FilterBuffers {
 
 impl FilterProcessor {
     /// Calculate required hits based on absolute and relative thresholds
-    fn calculate_required_hits(&self, total_minimizers: usize) -> usize {
-        let abs_required = self.abs_threshold;
+    fn calculate_required_hits(
+        total_minimizers: usize,
+        abs_threshold: usize,
+        rel_threshold: f64,
+    ) -> usize {
+        let abs_required = abs_threshold;
         let rel_required = if total_minimizers == 0 {
             0
         } else {
-            ((self.rel_threshold * total_minimizers as f64).round() as usize).max(1)
+            ((rel_threshold * total_minimizers as f64).round() as usize).max(1)
         };
         abs_required.max(rel_required)
     }
 
     /// Check if sequence meets filtering criteria
-    fn meets_filtering_criteria(&self, hit_count: usize, total_minimizers: usize) -> bool {
-        let required = self.calculate_required_hits(total_minimizers);
-        if self.deplete {
+    fn meets_filtering_criteria(
+        hit_count: usize,
+        total_minimizers: usize,
+        deplete: bool,
+        abs_threshold: usize,
+        rel_threshold: f64,
+    ) -> bool {
+        let required =
+            Self::calculate_required_hits(total_minimizers, abs_threshold, rel_threshold);
+        if deplete {
             hit_count < required
         } else {
             hit_count >= required
@@ -321,14 +332,25 @@ impl FilterProcessor {
         }
     }
 
-    fn should_keep_sequence(&mut self, seq: &[u8]) -> (bool, usize, usize, Vec<String>) {
-        if seq.len() < self.kmer_length as usize {
-            return (self.deplete, 0, 0, Vec::new()); // If too short, keep if in deplete mode
+    fn should_keep_sequence(
+        seq: &[u8],
+        filter_buffers: &mut FilterBuffers,
+        kmer_length: u8,
+        window_size: u8,
+        deplete: bool,
+        prefix_length: usize,
+        minimizer_hashes: Arc<FxHashSet<u64>>,
+        debug: bool,
+        abs_threshold: usize,
+        rel_threshold: f64,
+    ) -> (bool, usize, usize, Vec<String>) {
+        if seq.len() < kmer_length as usize {
+            return (deplete, 0, 0, Vec::new()); // If too short, keep if in deplete mode
         }
 
         // Apply prefix length limit if specified
-        let effective_seq = if self.prefix_length > 0 && seq.len() > self.prefix_length {
-            &seq[..self.prefix_length]
+        let effective_seq = if prefix_length > 0 && seq.len() > prefix_length {
+            &seq[..prefix_length]
         } else {
             seq
         };
@@ -341,7 +363,7 @@ impl FilterProcessor {
             invalid_mask,
             positions,
             minimizer_values,
-        } = &mut self.filter_buffers;
+        } = filter_buffers;
 
         packed_seq.clear();
         minimizer_values.clear();
@@ -376,15 +398,15 @@ impl FilterProcessor {
         // let mut positions = Vec::new();
         simd_minimizers::canonical_minimizer_positions(
             packed_seq.as_slice(),
-            self.kmer_length as usize,
-            self.window_size as usize,
+            kmer_length as usize,
+            window_size as usize,
             positions,
         );
 
         assert!(
-            self.kmer_length <= 56,
+            kmer_length <= 56,
             "Indexing the bitmask of invalid characters requires k<=56, but it is {}",
-            self.kmer_length
+            kmer_length
         );
 
         // Filter positions to only include k-mers with ACGT bases
@@ -392,7 +414,7 @@ impl FilterProcessor {
             // Extract bits pos .. pos+k from the bitmask.
 
             // mask of k ones in low positions.
-            let mask = u64::MAX >> (64 - self.kmer_length);
+            let mask = u64::MAX >> (64 - kmer_length);
             let byte = pos as usize / 8;
             let offset = pos as usize % 8;
             // The unaligned u64 read is OK, because we ensure that the underlying `Vec` always
@@ -406,7 +428,7 @@ impl FilterProcessor {
         minimizer_values.extend(
             simd_minimizers::iter_canonical_minimizer_values(
                 packed_seq.as_slice(),
-                self.kmer_length as usize,
+                kmer_length as usize,
                 positions,
             )
             .map(|kmer| xxhash_rust::xxh3::xxh3_64(&kmer.to_le_bytes())),
@@ -420,19 +442,25 @@ impl FilterProcessor {
         let mut hit_kmers = Vec::new();
 
         for (i, &hash) in minimizer_values.iter().enumerate() {
-            if self.minimizer_hashes.contains(&hash) && seen_hits.insert(hash) {
+            if minimizer_hashes.contains(&hash) && seen_hits.insert(hash) {
                 hit_count += 1;
                 // Extract the k-mer sequence at this position
-                if self.debug && i < positions.len() {
+                if debug && i < positions.len() {
                     let pos = positions[i] as usize;
-                    let kmer = &effective_seq[pos..pos + self.kmer_length as usize];
+                    let kmer = &effective_seq[pos..pos + kmer_length as usize];
                     hit_kmers.push(String::from_utf8_lossy(kmer).to_string());
                 }
             }
         }
 
         (
-            self.meets_filtering_criteria(hit_count, num_minimizers),
+            Self::meets_filtering_criteria(
+                hit_count,
+                num_minimizers,
+                deplete,
+                abs_threshold,
+                rel_threshold,
+            ),
             hit_count,
             num_minimizers,
             hit_kmers,
@@ -542,7 +570,13 @@ impl FilterProcessor {
 
         let total_minimizers = all_hashes.len();
         (
-            self.meets_filtering_criteria(pair_hit_count, total_minimizers),
+            Self::meets_filtering_criteria(
+                pair_hit_count,
+                total_minimizers,
+                self.deplete,
+                self.abs_threshold,
+                self.rel_threshold,
+            ),
             pair_hit_count,
             total_minimizers,
             hit_kmers,
@@ -613,7 +647,19 @@ impl ParallelProcessor for FilterProcessor {
         self.local_stats.total_seqs += 1;
         self.local_stats.total_bp += seq.len() as u64;
 
-        let (should_keep, hit_count, total_minimizers, hit_kmers) = self.should_keep_sequence(&seq);
+        let filter_buffers = &mut self.filter_buffers;
+        let (should_keep, hit_count, total_minimizers, hit_kmers) = Self::should_keep_sequence(
+            &seq,
+            filter_buffers,
+            self.kmer_length,
+            self.window_size,
+            self.deplete,
+            self.prefix_length,
+            self.minimizer_hashes.clone(),
+            self.debug,
+            self.abs_threshold,
+            self.rel_threshold,
+        );
 
         // Show debug info for sequences with hits
         if self.debug {
