@@ -1,5 +1,6 @@
 use crate::{FilterConfig, index::load_minimizer_hashes};
 use anyhow::{Context, Result};
+use binseq::ParallelReader as BinseqParallelReader;
 use flate2::write::GzEncoder;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use liblzma::write::XzEncoder;
@@ -85,6 +86,44 @@ fn format_record_to_buffer<R: Record>(
         if let Some(qual) = record.qual() {
             buffer.extend_from_slice(qual);
         }
+        buffer.write_all(b"\n")?;
+    }
+    Ok(())
+}
+
+fn format_binseq_record_to_buffer<Rf: binseq::BinseqRecord>(
+    record: &Rf,
+    decoded_seq: &[u8],
+    extended: bool,
+    buffer: &mut Vec<u8>,
+) -> Result<()> {
+    let is_fasta = record.has_quality();
+
+    // write marker
+    if is_fasta {
+        buffer.write_all(b">")?;
+    } else {
+        buffer.write_all(b"@")?;
+    }
+
+    // write header
+    buffer.extend_from_slice(record.index().to_string().as_bytes());
+    buffer.write_all(b"\n")?;
+
+    // Sequence line
+    buffer.extend_from_slice(decoded_seq);
+
+    if is_fasta {
+        buffer.write_all(b"\n")?;
+    } else {
+        // FASTQ: plus line and quality
+        buffer.write_all(b"\n+\n")?;
+        let qual = if extended {
+            record.xqual()
+        } else {
+            record.squal()
+        };
+        buffer.extend_from_slice(qual);
         buffer.write_all(b"\n")?;
     }
     Ok(())
@@ -198,6 +237,8 @@ struct FilterProcessor {
     local_buffer2: Vec<u8>, // Second buffer for paired output
     local_stats: ProcessingStats,
     filter_buffers: FilterBuffers,
+    sbuf: Vec<u8>, // decoding buffer for primary sequence
+    xbuf: Vec<u8>, // decoding buffer for extended sequence
 
     // Global state
     global_writer: Arc<Mutex<BoxedWriter>>,
@@ -268,6 +309,8 @@ impl FilterProcessor {
             debug: config.debug,
             local_buffer: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
             local_buffer2: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
+            sbuf: Vec::default(),
+            xbuf: Vec::default(),
             local_stats: ProcessingStats::default(),
             filter_buffers: FilterBuffers::default(),
             global_writer: Arc::new(Mutex::new(writer)),
@@ -794,6 +837,93 @@ impl PairedParallelProcessor for FilterProcessor {
     }
 }
 
+impl binseq::ParallelProcessor for FilterProcessor {
+    fn process_record<Rf: binseq::BinseqRecord>(&mut self, record: Rf) -> binseq::Result<()> {
+        // clear decoding buffers
+        self.sbuf.clear();
+        self.xbuf.clear();
+
+        let (should_keep, hit_count, total_minimizers, hit_kmers) = if record.is_paired() {
+            self.local_stats.total_seqs += 1;
+            self.local_stats.total_bp += record.slen() + record.xlen();
+            record.decode_s(&mut self.sbuf)?;
+            record.decode_x(&mut self.xbuf)?;
+            self.should_keep_pair(self.sbuf.as_ref(), self.xbuf.as_ref())
+        } else {
+            self.local_stats.total_seqs += 1;
+            self.local_stats.total_bp += record.slen();
+            record.decode_s(&mut self.sbuf)?;
+            Self::should_keep_sequence(
+                self.sbuf.as_ref(),
+                &mut self.filter_buffers,
+                self.kmer_length,
+                self.window_size,
+                self.deplete,
+                self.prefix_length,
+                self.minimizer_hashes.clone(),
+                self.debug,
+                self.abs_threshold,
+                self.rel_threshold,
+            )
+        };
+
+        // Show debug info for sequences with hits
+        if self.debug {
+            eprintln!(
+                "DEBUG: record {} hits={}/{} keep={} kmers=[{}]",
+                record.index(),
+                hit_count,
+                total_minimizers,
+                should_keep,
+                hit_kmers.join(",")
+            );
+        }
+
+        let seq = &self.sbuf;
+        if should_keep {
+            self.local_stats.output_bp += seq.len() as u64;
+            self.local_stats.output_seq_counter += 1;
+            format_binseq_record_to_buffer(&record, &seq, false, &mut self.local_buffer)?;
+        } else {
+            self.local_stats.filtered_seqs += 1;
+            self.local_stats.filtered_bp += seq.len() as u64;
+        }
+
+        Ok(())
+    }
+
+    fn on_batch_complete(&mut self) -> binseq::Result<()> {
+        // Write buffer to output
+        if !self.local_buffer.is_empty() {
+            let mut global_writer = self.global_writer.lock();
+            global_writer.write_all(&self.local_buffer)?;
+            global_writer.flush()?;
+        }
+
+        // Clear buffer after releasing the lock for better performance
+        self.local_buffer.clear();
+
+        // Update global stats
+        {
+            let mut stats = self.global_stats.lock();
+            stats.total_seqs += self.local_stats.total_seqs;
+            stats.filtered_seqs += self.local_stats.filtered_seqs;
+            stats.total_bp += self.local_stats.total_bp;
+            stats.output_bp += self.local_stats.output_bp;
+            stats.filtered_bp += self.local_stats.filtered_bp;
+            stats.output_seq_counter += self.local_stats.output_seq_counter;
+        }
+
+        // Update spinner
+        self.update_spinner();
+
+        // Reset local stats
+        self.local_stats = ProcessingStats::default();
+
+        Ok(())
+    }
+}
+
 pub fn run(config: &FilterConfig) -> Result<()> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
@@ -822,7 +952,16 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     } else if config.input2_path.is_some() {
         input_type.push_str("paired");
     } else {
-        input_type.push_str("single");
+        if config.input_path.ends_with("bq") | config.input_path.ends_with(".vbq") {
+            let reader = binseq::BinseqReader::new(&config.input_path)?;
+            if reader.is_paired() {
+                input_type.push_str("paired");
+            } else {
+                input_type.push_str("single");
+            }
+        } else {
+            input_type.push_str("single");
+        }
     }
     options.push(format!(
         "abs_threshold={}, rel_threshold={}",
@@ -926,8 +1065,13 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         r1_reader.process_parallel_paired(r2_reader, processor.clone(), num_threads)?;
     } else {
         // Single file or stdin
-        let reader = create_paraseq_reader(Some(config.input_path))?;
-        reader.process_parallel(processor.clone(), num_threads)?;
+        if config.input_path.ends_with(".bq") | config.input_path.ends_with(".vbq") {
+            let reader = binseq::BinseqReader::new(&config.input_path)?;
+            reader.process_parallel(processor.clone(), num_threads)?;
+        } else {
+            let reader = create_paraseq_reader(Some(config.input_path))?;
+            reader.process_parallel(processor.clone(), num_threads)?;
+        }
     }
 
     // Get final stats
