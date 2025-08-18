@@ -294,7 +294,7 @@ impl RecordBuffer {
 
         self.id_seq_ends.iter().map(move |&(id_end, seq_end)| {
             let rec = MinimalRecord {
-                id: &self.id_buffer[id_start..id_start],
+                id: &self.id_buffer[id_start..id_end],
                 seq: &self.seq_buffer[seq_start..seq_end],
                 qual: self
                     .qual_buffer
