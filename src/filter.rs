@@ -7,8 +7,7 @@ use packed_seq::SeqVec;
 use paraseq::Record;
 use paraseq::fastx::Reader;
 use paraseq::parallel::{
-    InterleavedParallelProcessor, InterleavedParallelReader, PairedParallelProcessor,
-    PairedParallelReader, ParallelProcessor, ParallelReader,
+    PairedParallelProcessor, ParallelProcessor, ParallelReader,
 };
 use parking_lot::Mutex;
 use rustc_hash::FxHashSet;
@@ -407,64 +406,14 @@ impl FilterProcessor {
         )
     }
 
-    fn get_minimizer_hashes_and_positions(&self, seq: &[u8]) -> (Vec<u64>, Vec<u32>) {
-        // Canonicalise sequence
-        let canonical_seq = seq
-            .iter()
-            .map(|&b| match b {
-                b'A' | b'a' => b'A',
-                b'C' | b'c' => b'C',
-                b'G' | b'g' => b'G',
-                b'T' | b't' => b'T',
-                _ => b'C',
-            })
-            .collect::<Vec<u8>>();
 
-        let mut positions = Vec::new();
-        simd_minimizers::canonical_minimizer_positions(
-            packed_seq::AsciiSeq(&canonical_seq),
-            self.kmer_length as usize,
-            self.window_size as usize,
-            &mut positions,
-        );
-
-        // Filter to valid positions
-        let valid_positions: Vec<u32> = positions
-            .into_iter()
-            .filter(|&pos| {
-                let pos_usize = pos as usize;
-                if pos_usize + self.kmer_length as usize <= seq.len() {
-                    let kmer = &seq[pos_usize..pos_usize + self.kmer_length as usize];
-                    kmer.iter().all(|&b| {
-                        matches!(b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't')
-                    })
-                } else {
-                    false
-                }
-            })
-            .collect();
-
-        // Get hashes
-        let hashes: Vec<u64> = simd_minimizers::iter_canonical_minimizer_values(
-            packed_seq::AsciiSeq(&canonical_seq),
-            self.kmer_length as usize,
-            &valid_positions,
-        )
-        .map(|kmer| xxhash_rust::xxh3::xxh3_64(&kmer.to_le_bytes()))
-        .collect();
-
-        (hashes, valid_positions)
-    }
-
-    fn should_keep_pair(&self, seq1: &[u8], seq2: &[u8]) -> (bool, usize, usize, Vec<String>) {
-        let mut all_hashes = Vec::new();
-        let mut all_positions = Vec::new();
-        let mut all_sequences = Vec::new();
+    fn should_keep_pair(&mut self, seq1: &[u8], seq2: &[u8]) -> (bool, usize, usize, Vec<String>) {
         let mut seen_hits_pair = FxHashSet::default();
         let mut pair_hit_count = 0;
         let mut hit_kmers = Vec::new();
+        let mut total_minimizers = 0;
 
-        // Process read 1
+        // Process read 1 using optimized path
         if seq1.len() >= self.kmer_length as usize {
             let effective_seq = if self.prefix_length > 0 && seq1.len() > self.prefix_length {
                 &seq1[..self.prefix_length]
@@ -472,13 +421,25 @@ impl FilterProcessor {
                 seq1
             };
 
-            let (hashes, positions) = self.get_minimizer_hashes_and_positions(effective_seq);
-            all_hashes.extend(hashes);
-            all_positions.extend(positions);
-            all_sequences.extend(vec![effective_seq; all_hashes.len()]);
+            let (_keep, _hits, minimizers, _kmers) = self.should_keep_sequence(effective_seq);
+            total_minimizers += minimizers;
+
+            // Extract minimizer hashes from the buffer after processing
+            for (i, &hash) in self.filter_buffers.minimizer_values.iter().enumerate() {
+                if self.minimizer_hashes.contains(&hash) && seen_hits_pair.insert(hash) {
+                    pair_hit_count += 1;
+                    if self.debug && i < self.filter_buffers.positions.len() {
+                        let pos = self.filter_buffers.positions[i] as usize;
+                        if pos + self.kmer_length as usize <= effective_seq.len() {
+                            let kmer = &effective_seq[pos..pos + self.kmer_length as usize];
+                            hit_kmers.push(String::from_utf8_lossy(kmer).to_string());
+                        }
+                    }
+                }
+            }
         }
 
-        // Process read 2
+        // Process read 2 using optimized path
         if seq2.len() >= self.kmer_length as usize {
             let effective_seq = if self.prefix_length > 0 && seq2.len() > self.prefix_length {
                 &seq2[..self.prefix_length]
@@ -486,29 +447,24 @@ impl FilterProcessor {
                 seq2
             };
 
-            let (hashes, positions) = self.get_minimizer_hashes_and_positions(effective_seq);
-            let start_idx = all_hashes.len();
-            all_hashes.extend(hashes);
-            all_positions.extend(positions);
-            all_sequences.extend(vec![effective_seq; all_hashes.len() - start_idx]);
-        }
+            let (_keep, _hits, minimizers, _kmers) = self.should_keep_sequence(effective_seq);
+            total_minimizers += minimizers;
 
-        // Count hits and collect k-mers
-        for (i, &hash) in all_hashes.iter().enumerate() {
-            if self.minimizer_hashes.contains(&hash) && seen_hits_pair.insert(hash) {
-                pair_hit_count += 1;
-                if self.debug && i < all_positions.len() && i < all_sequences.len() {
-                    let pos = all_positions[i] as usize;
-                    let seq = all_sequences[i];
-                    if pos + self.kmer_length as usize <= seq.len() {
-                        let kmer = &seq[pos..pos + self.kmer_length as usize];
-                        hit_kmers.push(String::from_utf8_lossy(kmer).to_string());
+            // Extract minimizer hashes from the buffer after processing
+            for (i, &hash) in self.filter_buffers.minimizer_values.iter().enumerate() {
+                if self.minimizer_hashes.contains(&hash) && seen_hits_pair.insert(hash) {
+                    pair_hit_count += 1;
+                    if self.debug && i < self.filter_buffers.positions.len() {
+                        let pos = self.filter_buffers.positions[i] as usize;
+                        if pos + self.kmer_length as usize <= effective_seq.len() {
+                            let kmer = &effective_seq[pos..pos + self.kmer_length as usize];
+                            hit_kmers.push(String::from_utf8_lossy(kmer).to_string());
+                        }
                     }
                 }
             }
         }
 
-        let total_minimizers = all_hashes.len();
         (
             self.meets_filtering_criteria(pair_hit_count, total_minimizers),
             pair_hit_count,
@@ -575,8 +531,8 @@ impl FilterProcessor {
     }
 }
 
-impl ParallelProcessor for FilterProcessor {
-    fn process_record<Rf: Record>(&mut self, record: Rf) -> paraseq::parallel::Result<()> {
+impl<Rf: Record> ParallelProcessor<Rf> for FilterProcessor {
+    fn process_record(&mut self, record: Rf) -> paraseq::parallel::Result<()> {
         let seq = record.seq();
         self.local_stats.total_seqs += 1;
         self.local_stats.total_bp += seq.len() as u64;
@@ -638,82 +594,9 @@ impl ParallelProcessor for FilterProcessor {
     }
 }
 
-impl InterleavedParallelProcessor for FilterProcessor {
-    fn process_interleaved_pair<Rf: Record>(
-        &mut self,
-        record1: Rf,
-        record2: Rf,
-    ) -> paraseq::parallel::Result<()> {
-        let seq1 = record1.seq();
-        let seq2 = record2.seq();
 
-        self.local_stats.total_seqs += 2;
-        self.local_stats.total_bp += (seq1.len() + seq2.len()) as u64;
-
-        let (should_keep, hit_count, total_minimizers, hit_kmers) =
-            self.should_keep_pair(&seq1, &seq2);
-
-        // Debug info for interleaved pairs
-        if self.debug && hit_count > 0 {
-            eprintln!(
-                "DEBUG: {}/{} hits={}/{} keep={} kmers=[{}]",
-                String::from_utf8_lossy(record1.id()),
-                String::from_utf8_lossy(record2.id()),
-                hit_count,
-                total_minimizers,
-                should_keep,
-                hit_kmers.join(",")
-            );
-        }
-
-        if should_keep {
-            self.local_stats.output_bp += (seq1.len() + seq2.len()) as u64;
-
-            // Write both records to output
-            self.write_record(&record1, &seq1)?;
-            self.write_record(&record2, &seq2)?;
-        } else {
-            self.local_stats.filtered_seqs += 2;
-            self.local_stats.filtered_bp += (seq1.len() + seq2.len()) as u64;
-        }
-
-        Ok(())
-    }
-
-    fn on_batch_complete(&mut self) -> paraseq::parallel::Result<()> {
-        // Write buffer to output
-        if !self.local_buffer.is_empty() {
-            let mut global_writer = self.global_writer.lock();
-            global_writer.write_all(&self.local_buffer)?;
-            global_writer.flush()?;
-        }
-
-        // Clear buffer after releasing the lock for better performance
-        self.local_buffer.clear();
-
-        // Update global stats
-        {
-            let mut stats = self.global_stats.lock();
-            stats.total_seqs += self.local_stats.total_seqs;
-            stats.filtered_seqs += self.local_stats.filtered_seqs;
-            stats.total_bp += self.local_stats.total_bp;
-            stats.output_bp += self.local_stats.output_bp;
-            stats.filtered_bp += self.local_stats.filtered_bp;
-            stats.output_seq_counter += self.local_stats.output_seq_counter;
-        }
-
-        // Update spinner
-        self.update_spinner();
-
-        // Reset local stats
-        self.local_stats = ProcessingStats::default();
-
-        Ok(())
-    }
-}
-
-impl PairedParallelProcessor for FilterProcessor {
-    fn process_record_pair<Rf: Record>(
+impl<Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor {
+    fn process_record_pair(
         &mut self,
         record1: Rf,
         record2: Rf,
@@ -929,16 +812,19 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     if paired_stdin {
         // Interleaved paired from stdin - use native interleaved processor
         let reader = create_paraseq_reader(Some("-"))?;
-        reader.process_parallel_interleaved(processor.clone(), num_threads)?;
+        let mut processor_instance = processor.clone();
+        reader.process_parallel_interleaved(&mut processor_instance, num_threads)?;
     } else if let Some(input2_path) = config.input2_path {
         // Paired files
         let r1_reader = create_paraseq_reader(Some(config.input_path))?;
         let r2_reader = create_paraseq_reader(Some(input2_path))?;
-        r1_reader.process_parallel_paired(r2_reader, processor.clone(), num_threads)?;
+        let mut processor_instance = processor.clone();
+        r1_reader.process_parallel_paired(r2_reader, &mut processor_instance, num_threads)?;
     } else {
         // Single file or stdin
         let reader = create_paraseq_reader(Some(config.input_path))?;
-        reader.process_parallel(processor.clone(), num_threads)?;
+        let mut processor_instance = processor.clone();
+        reader.process_parallel(&mut processor_instance, num_threads)?;
     }
 
     let final_stats = processor.global_stats.lock();
