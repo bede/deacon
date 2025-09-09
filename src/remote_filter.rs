@@ -6,7 +6,6 @@ use crate::filter_common::pair_matches;
 use crate::filter_common::sequence_matches;
 use crate::filter_common::{get_summary_index, meets_filtering_criteria};
 use crate::index::load_minimizer_hashes;
-use crate::minimizers::fill_minimizer_hashes;
 #[cfg(feature = "server")]
 use crate::server_common::{FilterResponse, PairedFilterRequest, UnpairedFilterRequest};
 use anyhow::{Context, Result};

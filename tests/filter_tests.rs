@@ -1010,8 +1010,7 @@ fn test_shared_minimizer_counted_once() {
     assert_eq!(
         seqs_out, 2,
         "Expected 2 sequences in output (both reads of the pair should be kept) \
-         but got {}. This indicates shared minimizers were double-counted.",
-        seqs_out
+         but got {seqs_out}. This indicates shared minimizers were double-counted."
     );
 }
 
@@ -1244,8 +1243,7 @@ fn test_newline_mapping_bug() {
     // With the bug, we'd expect a match. Without the bug, no match.
     if output_str.contains(">query") {
         panic!(
-            "BUG DETECTED: Query matched due to newlines being mapped to 'C'. Output: {}",
-            output_str
+            "BUG DETECTED: Query matched due to newlines being mapped to 'C'. Output: {output_str}"
         );
     }
 

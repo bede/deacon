@@ -214,7 +214,7 @@ impl IndexConfig {
     /// Create a new index configuration with the specified input path
     pub fn new(input_path: PathBuf) -> Self {
         Self {
-            input_path: input_path,
+            input_path,
             kmer_length: DEFAULT_KMER_LENGTH,
             window_size: DEFAULT_WINDOW_SIZE,
             output_path: None,

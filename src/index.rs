@@ -152,12 +152,12 @@ pub fn write_minimizers(
 
     // Serialise the count of minimizers first
     let count = minimizers.len();
-    encode_into_std_write(&count, &mut writer, bincode::config::standard())
+    encode_into_std_write(count, &mut writer, bincode::config::standard())
         .context("Failed to serialise minimizer count")?;
 
     // Serialise each minimizer directly
     for &hash in minimizers {
-        encode_into_std_write(&hash, &mut writer, bincode::config::standard())
+        encode_into_std_write(hash, &mut writer, bincode::config::standard())
             .context("Failed to serialise minimizer hash")?;
     }
     Ok(())
@@ -302,7 +302,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     write_minimizers(&all_minimizers, &header, config.output_path.as_ref())?;
 
     let total_time = start_time.elapsed();
-    eprintln!("Completed in {:.2?}", total_time);
+    eprintln!("Completed in {total_time:.2?}");
 
     Ok(())
 }
@@ -329,15 +329,9 @@ fn stream_diff_fastx<P: AsRef<Path>>(
     }
 
     if path.to_string_lossy() == "-" {
-        eprintln!(
-            "Second index: processing FASTX from stdin (k={}, w={})…",
-            kmer_length, window_size
-        );
+        eprintln!("Second index: processing FASTX from stdin (k={kmer_length}, w={window_size})…");
     } else {
-        eprintln!(
-            "Second index: processing FASTX from file (k={}, w={})…",
-            kmer_length, window_size
-        );
+        eprintln!("Second index: processing FASTX from file (k={kmer_length}, w={window_size})…",);
     }
 
     // Use needletail for parsing
@@ -406,8 +400,7 @@ fn stream_diff_fastx<P: AsRef<Path>>(
             let current_gb = total_bp / 1_000_000_000;
             if current_gb > last_reported_gb {
                 eprintln!(
-                    "  Processed {} sequences ({}bp), removed {} minimizers",
-                    seq_count, total_bp, removed_count
+                    "  Processed {seq_count} sequences ({total_bp}bp), removed {removed_count} minimizers"
                 );
                 last_reported_gb = current_gb;
             }
@@ -419,12 +412,9 @@ fn stream_diff_fastx<P: AsRef<Path>>(
         }
     }
 
-    eprintln!(
-        "Processed {} sequences ({}bp) from FASTX file",
-        seq_count, total_bp
-    );
+    eprintln!("Processed {seq_count} sequences ({total_bp}bp) from FASTX file");
 
-    Ok((seq_count as usize, total_bp as usize))
+    Ok((seq_count as usize, total_bp))
 }
 
 /// Compute the set difference between two minimizer indexes (A - B)
@@ -450,7 +440,7 @@ pub fn diff(
         // Second file is a FASTX file - stream diff with provided k, w
         let before_count = first_minimizers.len();
         let (_seq_count, _total_bp) =
-            stream_diff_fastx(&second, k, w, &header, &mut first_minimizers)?;
+            stream_diff_fastx(second, k, w, &header, &mut first_minimizers)?;
 
         // Report results
         eprintln!(
@@ -462,7 +452,7 @@ pub fn diff(
         write_minimizers(&first_minimizers, &header, output)?;
 
         let total_time = start_time.elapsed();
-        eprintln!("Completed difference operation in {:.2?}", total_time);
+        eprintln!("Completed difference operation in {total_time:.2?}");
 
         return Ok(());
     } else {
@@ -503,7 +493,7 @@ pub fn diff(
             let before_count = first_minimizers.len();
 
             let (_seq_count, _total_bp) =
-                stream_diff_fastx(&second, k, w, &header, &mut first_minimizers)?;
+                stream_diff_fastx(second, k, w, &header, &mut first_minimizers)?;
 
             // Report results
             eprintln!(
@@ -515,7 +505,7 @@ pub fn diff(
             write_minimizers(&first_minimizers, &header, output)?;
 
             let total_time = start_time.elapsed();
-            eprintln!("Completed difference operation in {:.2?}", total_time);
+            eprintln!("Completed difference operation in {total_time:.2?}");
 
             return Ok(());
         }
@@ -540,7 +530,7 @@ pub fn diff(
     write_minimizers(&first_minimizers, &header, output)?;
 
     let total_time = start_time.elapsed();
-    eprintln!("Completed diff operation in {:.2?}", total_time);
+    eprintln!("Completed diff operation in {total_time:.2?}");
 
     Ok(())
 }
@@ -564,7 +554,7 @@ pub fn info(index_path: &PathBuf) -> Result<()> {
     eprintln!("  Distinct minimizer count: {}", minimizers.len());
 
     let total_time = start_time.elapsed();
-    eprintln!("Retrieved index info in {:.2?}", total_time);
+    eprintln!("Retrieved index info in {total_time:.2?}");
 
     Ok(())
 }
@@ -609,10 +599,7 @@ pub fn union(
         header.window_size()
     );
     if capacity_millions.is_some() {
-        eprintln!(
-            "Pre-allocating user-specified capacity for {} minimizers",
-            total_capacity
-        );
+        eprintln!("Pre-allocating user-specified capacity for {total_capacity} minimizers");
     } else {
         eprintln!(
             "No capacity specified, pre-allocating worst-case capacity for {} minimizers from {} indexes",
@@ -663,7 +650,7 @@ pub fn union(
         );
     }
 
-    write_minimizers(&all_minimizers, &header, output)?;
+    write_minimizers(&all_minimizers, header, output)?;
 
     let total_time = start_time.elapsed();
     eprintln!(

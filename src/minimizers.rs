@@ -258,15 +258,14 @@ mod tests {
         // Test minimum entropy (homopolymer, 10bp)
         let min_entropy_kmer = b"AAAAAAAAAA";
         let entropy = calculate_scaled_entropy(min_entropy_kmer, 10);
-        assert!(entropy < 0.1, "Expected very low entropy, got {}", entropy);
+        assert!(entropy < 0.1, "Expected very low entropy, got {entropy}");
 
         // Test moderate entropy (alternating pattern, 10bp)
         let alt_entropy_kmer = b"ATATATATAT";
         let entropy = calculate_scaled_entropy(alt_entropy_kmer, 10);
         assert!(
             (0.5..1.0).contains(&entropy),
-            "Expected moderate entropy, got {}",
-            entropy
+            "Expected moderate entropy, got {entropy}"
         );
 
         // Test maximum entropy (diverse 10bp)
@@ -274,8 +273,7 @@ mod tests {
         let entropy = calculate_scaled_entropy(max_entropy_kmer, 10);
         assert!(
             entropy > 0.9,
-            "Expected high entropy for diverse 10-mer, got {}",
-            entropy
+            "Expected high entropy for diverse 10-mer, got {entropy}"
         );
 
         // Test realistic k-mer (31bp, default k)
@@ -283,8 +281,7 @@ mod tests {
         let entropy = calculate_scaled_entropy(realistic_kmer, 31);
         assert!(
             entropy > 0.9,
-            "Expected high entropy for diverse 31-mer, got {}",
-            entropy
+            "Expected high entropy for diverse 31-mer, got {entropy}"
         );
     }
 
@@ -295,15 +292,14 @@ mod tests {
         // Homopolymer - lowest entropy (31 A's)
         let homopolymer = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         let entropy = calculate_scaled_entropy(homopolymer, 31);
-        assert!(entropy < 0.01, "Homopolymer entropy = {}", entropy);
+        assert!(entropy < 0.01, "Homopolymer entropy = {entropy}");
 
         // Mostly one base with minimal variation - low entropy
         let mostly_a = b"AAAAAAAAAAACAAAAAGAAAAATAAAAAAA";
         let entropy = calculate_scaled_entropy(mostly_a, 31);
         assert!(
             (0.25..=0.35).contains(&entropy),
-            "Mostly A entropy = {}",
-            entropy
+            "Mostly A entropy = {entropy}"
         );
 
         // GC alternating - moderate entropy (2 bases, equal distribution)
@@ -311,8 +307,7 @@ mod tests {
         let entropy = calculate_scaled_entropy(gc_alternating, 31);
         assert!(
             (0.45..=0.55).contains(&entropy),
-            "GC alternating entropy = {}",
-            entropy
+            "GC alternating entropy = {entropy}"
         );
 
         // AT with G ending - moderate entropy (mostly 2 bases)
@@ -320,8 +315,7 @@ mod tests {
         let entropy = calculate_scaled_entropy(dinuc_repeat, 31);
         assert!(
             (0.55..=0.65).contains(&entropy),
-            "AT+G repeat entropy = {}",
-            entropy
+            "AT+G repeat entropy = {entropy}"
         );
 
         // Trinucleotide repeat - high entropy (ACG repeated)
@@ -329,8 +323,7 @@ mod tests {
         let entropy = calculate_scaled_entropy(trinuc_repeat, 31);
         assert!(
             (0.75..=0.85).contains(&entropy),
-            "ACG repeat entropy = {}",
-            entropy
+            "ACG repeat entropy = {entropy}"
         );
 
         // Four bases uneven distribution - high entropy
@@ -338,19 +331,18 @@ mod tests {
         let entropy = calculate_scaled_entropy(four_uneven, 31);
         assert!(
             (0.8..=1.0).contains(&entropy),
-            "Four bases uneven entropy = {}",
-            entropy
+            "Four bases uneven entropy = {entropy}"
         );
 
         // Complex pattern with all 4 bases - very high entropy
         let complex_repeat = b"AACCGGTTAACCGGTTAACCGGTTAACCGGT";
         let entropy = calculate_scaled_entropy(complex_repeat, 31);
-        assert!(entropy >= 0.95, "Complex pattern entropy = {}", entropy);
+        assert!(entropy >= 0.95, "Complex pattern entropy = {entropy}");
 
         // Four bases perfectly balanced - maximum entropy
         let four_balanced = b"ACGTACGTACGTACGTACGTACGTACGTACG";
         let entropy = calculate_scaled_entropy(four_balanced, 31);
-        assert!(entropy >= 0.95, "Four bases balanced entropy = {}", entropy);
+        assert!(entropy >= 0.95, "Four bases balanced entropy = {entropy}");
 
         // Verify entropy ordering makes sense
         let one_base = calculate_scaled_entropy(b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 31);
@@ -361,21 +353,15 @@ mod tests {
         // Entropy should increase with base diversity
         assert!(
             one_base < two_bases_even,
-            "1 base ({}) < 2 bases even ({})",
-            one_base,
-            two_bases_even
+            "1 base ({one_base}) < 2 bases even ({two_bases_even})"
         );
         assert!(
             two_bases_even < three_bases,
-            "2 bases even ({}) < 3 bases ({})",
-            two_bases_even,
-            three_bases
+            "2 bases even ({two_bases_even}) < 3 bases ({three_bases})"
         );
         assert!(
             three_bases < four_bases,
-            "3 bases ({}) < 4 bases ({})",
-            three_bases,
-            four_bases
+            "3 bases ({three_bases}) < 4 bases ({four_bases})"
         );
 
         // Verify threshold behavior: common thresholds like 0.01 should filter appropriately
@@ -395,7 +381,7 @@ mod tests {
         // 30 A's + 1 T, entropy ~0.1028
         let near_homopolymer = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAT";
         let entropy = calculate_scaled_entropy(near_homopolymer, 31);
-        assert!(entropy < 0.5, "Entropy {:.4} should be < 0.5", entropy);
-        assert!(entropy < 0.15, "Entropy {:.4} should be < 0.15", entropy);
+        assert!(entropy < 0.5, "Entropy {entropy:.4} should be < 0.5");
+        assert!(entropy < 0.15, "Entropy {entropy:.4} should be < 0.15");
     }
 }

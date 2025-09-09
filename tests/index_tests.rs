@@ -33,8 +33,7 @@ fn build_index(fasta_path: &Path, bin_path: &Path) {
     // Check file exists and isn't empty
     assert!(
         bin_path.exists(),
-        "Index file wasn't created at {:?}",
-        bin_path
+        "Index file wasn't created at {bin_path:?}"
     );
     assert!(
         fs::metadata(bin_path).unwrap().len() > 0,
@@ -120,9 +119,7 @@ fn test_index_union() {
     let max_individual_size = std::cmp::max(bin1_size, bin2_size);
     assert!(
         combined_size >= max_individual_size,
-        "Combined index size {} should be at least as large as the largest individual index size {}",
-        combined_size,
-        max_individual_size
+        "Combined index size {combined_size} should be at least as large as the largest individual index size {max_individual_size}"
     );
 }
 
@@ -163,9 +160,7 @@ fn test_index_diff() {
 
     assert!(
         result_size <= bin1_size,
-        "Result index size {} should be less than or equal to the first index size {}",
-        result_size,
-        bin1_size
+        "Result index size {result_size} should be less than or equal to the first index size {bin1_size}"
     );
 }
 
@@ -257,10 +252,7 @@ fn test_index_diff_three_methods() {
                 }
             }
         }
-        panic!(
-            "Could not extract remaining minimizer count from stderr: {}",
-            stderr_str
-        );
+        panic!("Could not extract remaining minimizer count from stderr: {stderr_str}");
     }
 
     let remaining1 = extract_remaining_count(&output1.stderr);
@@ -270,13 +262,11 @@ fn test_index_diff_three_methods() {
     // All three methods should produce the same number of remaining minimizers
     assert_eq!(
         remaining1, remaining2,
-        "Index+Index ({}) and Index+FASTX ({}) should have same remaining count",
-        remaining1, remaining2
+        "Index+Index ({remaining1}) and Index+FASTX ({remaining2}) should have same remaining count"
     );
     assert_eq!(
         remaining1, remaining3,
-        "Index+Index ({}) and Index+FASTX stdin ({}) should have same remaining count",
-        remaining1, remaining3
+        "Index+Index ({remaining1}) and Index+FASTX stdin ({remaining3}) should have same remaining count"
     );
 
     // Verify all result files have the same size (they should be identical)

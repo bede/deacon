@@ -1,10 +1,10 @@
 //! Functionality to create a server endpoint which can be used to filter based on a pre-loaded index
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 use crate::index::{IndexHeader, load_minimizer_hashes};
 use crate::remote_filter::{paired_should_keep, unpaired_should_keep};
-use crate::server_common::{UnpairedFilterRequest, PairedFilterRequest, FilterResponse};
+use crate::server_common::{FilterResponse, PairedFilterRequest, UnpairedFilterRequest};
 use axum::{
     Json, Router,
     extract::DefaultBodyLimit,
@@ -69,7 +69,8 @@ fn load_index(index_path: PathBuf) {
     // Load the hash as well as the file contents for returning as an ugly (but reliable) version
     let bytes = std::fs::read(index_path.clone()).unwrap();
     let hash = sha256::digest(&bytes);
-    *INDEX_HASH.lock().unwrap() = Some(index_path.clone().into_os_string().into_string().unwrap() + "@" + &hash);
+    *INDEX_HASH.lock().unwrap() =
+        Some(index_path.clone().into_os_string().into_string().unwrap() + "@" + &hash);
 
     let result = load_minimizer_hashes(&Some(&index_path), &None);
     match result {
@@ -118,17 +119,17 @@ pub async fn index_version() -> String {
 
 async fn should_output_paired(Json(request): Json<PairedFilterRequest>) -> Json<FilterResponse> {
     // Quickly wrangle the seqs into slices from vecs as serde can't do it directly
-    let input_minimizers_and_positions: Vec<(Vec<u64>, Vec<u32>, Vec<&[u8]>)> =
-        request.input
-            .iter()
-            .map(|(minimizers, positions, seqs)| {
-                (
-                    minimizers.to_vec(),
-                    positions.to_vec(),
-                    seqs.iter().map(|s| s.as_slice()).collect(),
-                )
-            })
-            .collect();
+    let input_minimizers_and_positions: Vec<(Vec<u64>, Vec<u32>, Vec<&[u8]>)> = request
+        .input
+        .iter()
+        .map(|(minimizers, positions, seqs)| {
+            (
+                minimizers.to_vec(),
+                positions.to_vec(),
+                seqs.iter().map(|s| s.as_slice()).collect(),
+            )
+        })
+        .collect();
     let index = INDEX.lock();
     match index {
         Ok(index) => {
@@ -136,19 +137,23 @@ async fn should_output_paired(Json(request): Json<PairedFilterRequest>) -> Json<
             let result = paired_should_keep(
                 &input_minimizers_and_positions,
                 request.kmer_length,
-                &index,
+                index,
                 request.abs_threshold,
                 request.rel_threshold,
                 request.deplete,
                 request.debug,
             );
-            Json(FilterResponse { should_output: result})
-        },
+            Json(FilterResponse {
+                should_output: result,
+            })
+        }
         Err(e) => panic!("Error accessing index: {e}"),
     }
 }
 
-async fn should_output_unpaired(Json(request): Json<UnpairedFilterRequest>) -> Json<FilterResponse> {
+async fn should_output_unpaired(
+    Json(request): Json<UnpairedFilterRequest>,
+) -> Json<FilterResponse> {
     let index = INDEX.lock();
     match index {
         Ok(index) => {
@@ -156,13 +161,15 @@ async fn should_output_unpaired(Json(request): Json<UnpairedFilterRequest>) -> J
             let result = unpaired_should_keep(
                 &request.input,
                 request.kmer_length,
-                &index,
+                index,
                 request.abs_threshold,
                 request.rel_threshold,
                 request.deplete,
                 request.debug,
             );
-            Json(FilterResponse { should_output: result})
+            Json(FilterResponse {
+                should_output: result,
+            })
         }
         Err(e) => panic!("Error accessing index: {e}"),
     }

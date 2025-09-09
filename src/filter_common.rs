@@ -47,7 +47,7 @@ pub fn get_summary_index(
     minimizers_path: &Option<&PathBuf>,
     server_address: &Option<String>,
 ) -> String {
-    let index = match minimizers_path {
+    match minimizers_path {
         Some(path) => path.to_string_lossy().to_string(),
         None => match &server_address {
             None => "No index or server specified".to_string(),
@@ -59,7 +59,7 @@ pub fn get_summary_index(
                         .get(_addr.to_owned() + "/index_version")
                         .send()
                         .unwrap_or_else(|e| {
-                            panic!("Failed to contact server at {}: {e}", _addr);
+                            panic!("Failed to contact server at {_addr}: {e}");
                         });
                     if response.status().is_success() {
                         _addr.to_owned()
@@ -77,8 +77,7 @@ pub fn get_summary_index(
                 }
             }
         },
-    };
-    index
+    }
 }
 
 /// Calculate required hits based on absolute and relative thresholds
@@ -269,8 +268,7 @@ pub fn get_minimizer_hashes_and_positions(
 
     assert!(
         kmer_length <= 56,
-        "Indexing the bitmask of invalid characters requires k<=56, but it is {}",
-        kmer_length
+        "Indexing the bitmask of invalid characters requires k<=56, but it is {kmer_length}"
     );
 
     // Filter positions to only include k-mers with ACGT bases
