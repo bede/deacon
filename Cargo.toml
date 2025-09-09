@@ -35,6 +35,14 @@ parking_lot = "0.12"
 zstd = "0.13"
 indicatif = "0.17"
 liblzma = "0.3.1"
+tokio = { version = "1.47.0", features = ["full"], optional = true }
+axum = { version = "0.8.4", optional = true }
+tracing-subscriber = { version = "0.3.19", features = ["fmt", "registry", "json"], optional = true }
+reqwest = { version = "0.12.22", features = ["blocking", "json"], optional = true }
+
+[features]
+# default = ["server"]
+server = ["dep:tokio", "dep:axum", "dep:tracing-subscriber", "dep:reqwest"]
 
 [lints.clippy]
 too_many_arguments = "allow"

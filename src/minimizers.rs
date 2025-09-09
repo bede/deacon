@@ -189,7 +189,6 @@ pub fn fill_minimizer_hashes(
         );
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

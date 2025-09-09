@@ -251,7 +251,8 @@ fn main() -> Result<()> {
             }
 
             let config = FilterConfig {
-                minimizers_path: minimizers,
+                minimizers_path: Some(minimizers),
+                server_address: None,
                 input_path: input,
                 input2_path: input2.as_deref(),
                 output_path: output,

@@ -1,4 +1,6 @@
 use crate::IndexConfig;
+#[cfg(feature = "server")]
+use crate::server_common::get_server_index_header;
 use anyhow::{Context, Result};
 use bincode::serde::{decode_from_std_read, encode_into_std_write};
 use rayon::prelude::*;
@@ -12,7 +14,7 @@ use std::time::Instant;
 use needletail::{parse_fastx_file, parse_fastx_stdin};
 
 /// Serialisable header for the index file
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IndexHeader {
     pub format_version: u8,
     pub kmer_length: u8,
@@ -69,32 +71,59 @@ pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, u
     Ok((header, count))
 }
 
-/// Load the hashes without spiking memory usage with an extra vec
-pub fn load_minimizer_hashes<P: AsRef<Path>>(path: &P) -> Result<(FxHashSet<u64>, IndexHeader)> {
-    let file =
-        File::open(path).context(format!("Failed to open index file {:?}", path.as_ref()))?;
-    let mut reader = BufReader::new(file);
+/// Load the hashes without spiking memory usage with an extra vec.
+/// If a path is provided, it will read the minimizers from the file and return them in a FxHashSet
+///
+/// If no path is provided, it will try to load the header from a server, returning the minimizers as None
+/// This is used for server mode, where the header is important, but local minimizers are not needed.
+/// If the server feature is not enabled, it will return an error.
+pub fn load_minimizer_hashes(
+    path_option: &Option<&PathBuf>,
+    _server_address_option: &Option<String>,
+) -> Result<(Option<FxHashSet<u64>>, IndexHeader)> {
+    if let Some(path) = path_option {
+        let file = File::open(path).context(format!("Failed to open index file {path:?}"))?;
+        let mut reader = BufReader::new(file);
 
-    // Deserialise header
-    let header: IndexHeader = decode_from_std_read(&mut reader, bincode::config::standard())
-        .context("Failed to deserialise index header")?;
-    header.validate()?;
+        // Deserialise header
+        let header: IndexHeader = decode_from_std_read(&mut reader, bincode::config::standard())
+            .context("Failed to deserialise index header")?;
+        header.validate()?;
 
-    // Deserialise the count of minimizers so we can init a FxHashSet with the right capacity
-    let count: usize = decode_from_std_read(&mut reader, bincode::config::standard())
-        .context("Failed to deserialise minimizer count")?;
+        // Deserialise the count of minimizers so we can init a FxHashSet with the right capacity
+        let count: usize = decode_from_std_read(&mut reader, bincode::config::standard())
+            .context("Failed to deserialise minimizer count")?;
 
-    // Pre-allocate FxHashSet with correct capacity
-    let mut minimizers = FxHashSet::with_capacity_and_hasher(count, Default::default());
+        // Pre-allocate FxHashSet with correct capacity
+        let mut minimizers = FxHashSet::with_capacity_and_hasher(count, Default::default());
 
-    // Populate FxHashSet
-    for _ in 0..count {
-        let hash: u64 = decode_from_std_read(&mut reader, bincode::config::standard())
-            .context("Failed to deserialise minimizer hash")?;
-        minimizers.insert(hash);
+        // Populate FxHashSet
+        for _ in 0..count {
+            let hash: u64 = decode_from_std_read(&mut reader, bincode::config::standard())
+                .context("Failed to deserialise minimizer hash")?;
+            minimizers.insert(hash);
+        }
+
+        Ok((Some(minimizers), header))
+    } else {
+        // If no path is provided, check if a server adress was given to populate the header
+        #[cfg(feature = "server")]
+        {
+            if let Some(server) = _server_address_option {
+                Ok((None, get_server_index_header(&server.to_string())?))
+            } else {
+                Err(anyhow::anyhow!(
+                    "No server address provided for running in server mode"
+                ))
+            }
+        }
+        #[cfg(not(feature = "server"))]
+        {
+            return Err(anyhow::anyhow!(
+                "Server feature is not enabled. Cannot run without an index."
+            ));
+        }
     }
-
-    Ok((minimizers, header))
 }
 
 /// Helper function to write minimizers to output file or stdout
@@ -123,12 +152,12 @@ pub fn write_minimizers(
 
     // Serialise the count of minimizers first
     let count = minimizers.len();
-    encode_into_std_write(count, &mut writer, bincode::config::standard())
+    encode_into_std_write(&count, &mut writer, bincode::config::standard())
         .context("Failed to serialise minimizer count")?;
 
     // Serialise each minimizer directly
     for &hash in minimizers {
-        encode_into_std_write(hash, &mut writer, bincode::config::standard())
+        encode_into_std_write(&hash, &mut writer, bincode::config::standard())
             .context("Failed to serialise minimizer hash")?;
     }
     Ok(())
@@ -395,13 +424,13 @@ fn stream_diff_fastx<P: AsRef<Path>>(
         seq_count, total_bp
     );
 
-    Ok((seq_count as usize, total_bp))
+    Ok((seq_count as usize, total_bp as usize))
 }
 
 /// Compute the set difference between two minimizer indexes (A - B)
-pub fn diff<P: AsRef<Path>>(
-    first: P,
-    second: P,
+pub fn diff(
+    first: &PathBuf,
+    second: &PathBuf,
     kmer_length: Option<u8>,
     window_size: Option<u8>,
     output: Option<&PathBuf>,
@@ -409,7 +438,11 @@ pub fn diff<P: AsRef<Path>>(
     let start_time = Instant::now();
 
     // Load first file (always an index)
-    let (mut first_minimizers, header) = load_minimizer_hashes(&first)?;
+    let (first_minimizers, header) = load_minimizer_hashes(&Some(first), &None)?;
+    if first_minimizers.is_none() {
+        return Err(anyhow::anyhow!("Failed to load first index file"));
+    }
+    let mut first_minimizers = first_minimizers.unwrap();
     eprintln!("First index: loaded {} minimizers", first_minimizers.len());
 
     // Guess if second file is an index or FASTX file
@@ -434,7 +467,12 @@ pub fn diff<P: AsRef<Path>>(
         return Ok(());
     } else {
         // Try to load as index file first
-        if let Ok((second_minimizers, second_header)) = load_minimizer_hashes(&second) {
+        if let Ok((second_minimizers, second_header)) = load_minimizer_hashes(&Some(second), &None)
+        {
+            if second_minimizers.is_none() {
+                return Err(anyhow::anyhow!("Failed to load second index file"));
+            }
+            let second_minimizers = second_minimizers.unwrap();
             // Second file is an index file
             eprintln!(
                 "Second index: loaded {} minimizers",
@@ -508,11 +546,15 @@ pub fn diff<P: AsRef<Path>>(
 }
 
 /// Show info about an index
-pub fn info<P: AsRef<Path>>(index_path: P) -> Result<()> {
+pub fn info(index_path: &PathBuf) -> Result<()> {
     let start_time = Instant::now();
 
     // Load index file
-    let (minimizers, header) = load_minimizer_hashes(&index_path)?;
+    let (minimizers, header) = load_minimizer_hashes(&Some(index_path), &None)?;
+    if minimizers.is_none() {
+        return Err(anyhow::anyhow!("Failed to load index file"));
+    }
+    let minimizers = minimizers.unwrap();
 
     // Show index info
     eprintln!("Index information:");
@@ -528,8 +570,8 @@ pub fn info<P: AsRef<Path>>(index_path: P) -> Result<()> {
 }
 
 /// Combine minimizer indexes (set union)
-pub fn union<P: AsRef<Path>>(
-    inputs: &[P],
+pub fn union(
+    inputs: &[PathBuf],
     output: Option<&PathBuf>,
     capacity_millions: Option<usize>,
 ) -> Result<()> {
@@ -601,7 +643,11 @@ pub fn union<P: AsRef<Path>>(
 
     // Now load and merge all indexes
     for (i, path) in inputs.iter().enumerate() {
-        let (minimizers, _) = load_minimizer_hashes(path)?;
+        let (minimizers, _) = load_minimizer_hashes(&Some(path), &None)?;
+        if minimizers.is_none() {
+            return Err(anyhow::anyhow!("Failed to load index file: {:?}", path));
+        }
+        let minimizers = minimizers.unwrap();
         let before_count = all_minimizers.len();
 
         // Merge minimizers (set union)
@@ -617,7 +663,7 @@ pub fn union<P: AsRef<Path>>(
         );
     }
 
-    write_minimizers(&all_minimizers, header, output)?;
+    write_minimizers(&all_minimizers, &header, output)?;
 
     let total_time = start_time.elapsed();
     eprintln!(
