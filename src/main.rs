@@ -355,12 +355,11 @@ fn main() -> Result<()> {
             }
             #[cfg(not(feature = "server"))]
             {
-                eprintln!(
-                    "Server functionality is not enabled in this build. Please compile with the 'server' feature: `cargo build --features server`"
-                );
                 // Suppress dead code warning so this compiles without issue when server is not enabled
                 let _ = (index, port);
-                std::process::exit(1);
+                panic!(
+                    "Server functionality is not enabled in this build. Please compile with the 'server' feature: `cargo build --features server`"
+                );
             }
         }
         Commands::Client {
@@ -410,9 +409,6 @@ fn main() -> Result<()> {
             }
             #[cfg(not(feature = "server"))]
             {
-                eprintln!(
-                    "Client functionality is not enabled in this build. Please compile with the 'server' feature: `cargo build --features server`"
-                );
                 // Suppress dead code warning so this compiles without issue when server is not enabled
                 let _ = (
                     server_address,
@@ -420,15 +416,20 @@ fn main() -> Result<()> {
                     input2,
                     output,
                     output2,
-                    match_threshold,
+                    abs_threshold,
+                    rel_threshold,
                     prefix_length,
                     summary,
                     deplete,
                     rename,
                     threads,
                     compression_level,
+                    debug,
+                    quiet,
                 );
-                std::process::exit(1);
+                panic!(
+                    "Client functionality is not enabled in this build. Please compile with the 'server' feature: `cargo build --features server`"
+                );
             }
         }
     }

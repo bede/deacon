@@ -172,7 +172,7 @@ pub fn sequence_matches(
 pub fn pair_matches(
     all_hashes: &Vec<u64>,
     all_positions: &Vec<u32>,
-    all_sequences: &Vec<&[u8]>,
+    all_sequences: &Vec<Vec<u8>>,
     minimizer_hashes: &FxHashSet<u64>,
     kmer_length: u8,
     debug: bool,
@@ -186,7 +186,7 @@ pub fn pair_matches(
             pair_hit_count += 1;
             if debug && i < all_positions.len() && i < all_sequences.len() {
                 let pos = all_positions[i] as usize;
-                let seq = all_sequences[i];
+                let seq = &all_sequences[i];
                 if pos + kmer_length as usize <= seq.len() {
                     let kmer = &seq[pos..pos + kmer_length as usize];
                     hit_kmers.push(String::from_utf8_lossy(kmer).to_string());
@@ -315,7 +315,7 @@ pub fn get_paired_minimizer_hashes_and_positions<'a>(
     prefix_length: usize,
     kmer_length: u8,
     window_size: u8,
-) -> (Vec<u64>, Vec<u32>, Vec<&'a [u8]>) {
+) -> (Vec<u64>, Vec<u32>, Vec<Vec<u8>>) {
     let mut all_hashes = Vec::new();
     let mut all_positions = Vec::new();
     let mut all_sequences = Vec::new();
@@ -326,7 +326,7 @@ pub fn get_paired_minimizer_hashes_and_positions<'a>(
             get_minimizer_hashes_and_positions(seq1, prefix_length, kmer_length, window_size);
         all_hashes.extend(hashes);
         all_positions.extend(positions);
-        all_sequences.extend(vec![effective_seq1; all_hashes.len() - all_positions.len()]);
+        all_sequences.extend(vec![effective_seq1.to_vec(); all_hashes.len() - all_positions.len()]);
     }
 
     // Process read 2
@@ -335,7 +335,7 @@ pub fn get_paired_minimizer_hashes_and_positions<'a>(
             get_minimizer_hashes_and_positions(seq2, prefix_length, kmer_length, window_size);
         all_hashes.extend(hashes);
         all_positions.extend(positions);
-        all_sequences.extend(vec![effective_seq2; all_hashes.len() - all_positions.len()]);
+        all_sequences.extend(vec![effective_seq2.to_vec(); all_hashes.len() - all_positions.len()]);
     }
 
     (all_hashes, all_positions, all_sequences)

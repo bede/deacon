@@ -118,24 +118,12 @@ pub async fn index_version() -> String {
 }
 
 async fn should_output_paired(Json(request): Json<PairedFilterRequest>) -> Json<FilterResponse> {
-    // Quickly wrangle the seqs into slices from vecs as serde can't do it directly
-    let input_minimizers_and_positions: Vec<(Vec<u64>, Vec<u32>, Vec<&[u8]>)> = request
-        .input
-        .iter()
-        .map(|(minimizers, positions, seqs)| {
-            (
-                minimizers.to_vec(),
-                positions.to_vec(),
-                seqs.iter().map(|s| s.as_slice()).collect(),
-            )
-        })
-        .collect();
     let index = INDEX.lock();
     match index {
         Ok(index) => {
             let index = index.as_ref().expect("Index not loaded");
             let result = paired_should_keep(
-                &input_minimizers_and_positions,
+                &request.input,
                 request.kmer_length,
                 index,
                 request.abs_threshold,

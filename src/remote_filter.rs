@@ -264,7 +264,7 @@ pub fn unpaired_should_keep(
 }
 
 pub fn paired_should_keep(
-    input_minimizers_and_positions: &Vec<(Vec<u64>, Vec<u32>, Vec<&[u8]>)>,
+    input_minimizers_and_positions: &Vec<(Vec<u64>, Vec<u32>, Vec<Vec<u8>>)>,
     kmer_length: u8,
     index_minimizers: &FxHashSet<u64>,
     abs_threshold: usize,
@@ -368,7 +368,7 @@ pub fn check_single_inputs_should_be_output(
 /// If not, send to server for checking. Requires the `server` feature to be enabled.
 pub fn check_paired_inputs_should_be_output(
     index_minimizers: &Option<FxHashSet<u64>>,
-    input_minimizers_and_positions: &Vec<(Vec<u64>, Vec<u32>, Vec<&[u8]>)>,
+    input_minimizers_and_positions: &Vec<(Vec<u64>, Vec<u32>, Vec<Vec<u8>>)>,
     _server_address: &Option<String>,
     deplete: bool,
     kmer_length: u8,
@@ -395,20 +395,6 @@ pub fn check_paired_inputs_should_be_output(
                 panic!("Server address is required when using the server feature.");
             }
             let server_address = _server_address.as_ref().map(String::as_str).unwrap();
-
-            // Quickly wrangle the seqs into vecs instead of slices so serde can cope
-            // Not perfect, but if it has to happen anywhere, here is the best
-            let input_minimizers_and_positions: Vec<(Vec<u64>, Vec<u32>, Vec<Vec<u8>>)> =
-                input_minimizers_and_positions
-                    .iter()
-                    .map(|(minimizers, positions, seqs)| {
-                        (
-                            minimizers.to_vec(),
-                            positions.to_vec(),
-                            seqs.iter().map(|s| s.to_vec()).collect(),
-                        )
-                    })
-                    .collect();
 
             // Create a client to send the minimizers to the server
             let client = Client::new();
@@ -974,7 +960,7 @@ fn process_paired_seqs(
         }
 
         // Get batch minimizers in parallel
-        let batch_result: Vec<(Vec<u64>, Vec<u32>, Vec<&[u8]>)> = batch1
+        let batch_result: Vec<(Vec<u64>, Vec<u32>, Vec<Vec<u8>>)> = batch1
             .par_iter()
             .zip(batch2.par_iter())
             .map(|(record_data1, record_data2)| {
@@ -987,34 +973,6 @@ fn process_paired_seqs(
                 )
             })
             .collect();
-
-        // let batch_result: Vec<(Vec<u64>, u8, u8)> = batch1
-        //     .par_iter()
-        //     .zip(batch2.par_iter())
-        //     .map(|(record_data1, record_data2)| {
-        //         get_hashes_from_record_pair(
-        //             record_data1,
-        //             record_data2,
-        //             kmer_length,
-        //             prefix_length,
-        //             window_size,
-        //         )
-        //     })
-        //     .collect();
-
-        // let (batch_minimizers, seq_lens1, seq_lens2): (Vec<Vec<u64>>, Vec<u8>, Vec<u8>) =
-        //     batch_result.into_iter().multiunzip();
-
-        // Check if minimizers match the index
-        // Separated from initial par_iter to allow flexibility with local/server processing
-        // let batch_should_outputs = check_inputs_should_be_output(
-        //     minimizer_hashes,
-        //     &batch_minimizers,
-        //     abs_threshold,
-        //     rel_threshold,
-        //     server_address,
-        //     deplete,
-        // );
 
         let batch_should_outputs = check_paired_inputs_should_be_output(
             minimizer_hashes,
@@ -1258,7 +1216,7 @@ fn process_interleaved_paired_seqs(
         }
 
         // Get batch minimizers in parallel
-        let batch_result: Vec<(Vec<u64>, Vec<u32>, Vec<&[u8]>)> = batch_pairs
+        let batch_result: Vec<(Vec<u64>, Vec<u32>, Vec<Vec<u8>>)> = batch_pairs
             .par_iter()
             .map(|(record_data1, record_data2)| {
                 get_paired_minimizer_hashes_and_positions(
