@@ -1,10 +1,10 @@
 //! Functionality to create a server endpoint which can be used to filter based on a pre-loaded index
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::filter::inputs_should_be_output;
 use crate::index::{IndexHeader, load_minimizer_hashes};
-use crate::server_common::{FilterRequest, FilterResponse};
+use crate::remote_filter::{paired_should_keep, unpaired_should_keep};
+use crate::server_common::{UnpairedFilterRequest, PairedFilterRequest, FilterResponse};
 use axum::{
     Json, Router,
     extract::DefaultBodyLimit,
@@ -42,6 +42,7 @@ pub async fn run_server(index_path: PathBuf, port: u16) {
     eprintln!("Loading index from: {}", index_path.display());
     // Load the index before starting the server to ensure it's available for requests
     load_index(index_path);
+    eprintln!("Loaded index!");
 
     // build our application with a route
     let app = Router::new()
@@ -51,8 +52,8 @@ pub async fn run_server(index_path: PathBuf, port: u16) {
         .route("/index_header", get(index_header))
         // `GET /index_version` returns the index version (hash)
         .route("/index_version", get(index_version))
-        // `POST /filter` goes to `filter`
-        .route("/should_output", post(should_output))
+        .route("/should_output_paired", post(should_output_paired))
+        .route("/should_output_unpaired", post(should_output_unpaired))
         // Increase the body limit to 2GB to ensure we don't error on large payloads
         .layer(DefaultBodyLimit::max(2147483648));
 
@@ -115,21 +116,53 @@ pub async fn index_version() -> String {
     hash.clone().unwrap()
 }
 
-/// Endpoint which takes a set of hashes, returning whether they match the index
-/// Endpoint is `/should_output`
-pub async fn should_output(Json(request): Json<FilterRequest>) -> Json<FilterResponse> {
+async fn should_output_paired(Json(request): Json<PairedFilterRequest>) -> Json<FilterResponse> {
+    // Quickly wrangle the seqs into slices from vecs as serde can't do it directly
+    let input_minimizers_and_positions: Vec<(Vec<u64>, Vec<u32>, Vec<&[u8]>)> =
+        request.input
+            .iter()
+            .map(|(minimizers, positions, seqs)| {
+                (
+                    minimizers.to_vec(),
+                    positions.to_vec(),
+                    seqs.iter().map(|s| s.as_slice()).collect(),
+                )
+            })
+            .collect();
     let index = INDEX.lock();
     match index {
         Ok(index) => {
             let index = index.as_ref().expect("Index not loaded");
-            Json(FilterResponse {
-                should_output: inputs_should_be_output(
-                    index,
-                    &request.input,
-                    &request.match_threshold,
-                    request.deplete,
-                ),
-            })
+            let result = paired_should_keep(
+                &input_minimizers_and_positions,
+                request.kmer_length,
+                &index,
+                request.abs_threshold,
+                request.rel_threshold,
+                request.deplete,
+                request.debug,
+            );
+            Json(FilterResponse { should_output: result})
+        },
+        Err(e) => panic!("Error accessing index: {e}"),
+    }
+}
+
+async fn should_output_unpaired(Json(request): Json<UnpairedFilterRequest>) -> Json<FilterResponse> {
+    let index = INDEX.lock();
+    match index {
+        Ok(index) => {
+            let index = index.as_ref().expect("Index not loaded");
+            let result = unpaired_should_keep(
+                &request.input,
+                request.kmer_length,
+                &index,
+                request.abs_threshold,
+                request.rel_threshold,
+                request.deplete,
+                request.debug,
+            );
+            Json(FilterResponse { should_output: result})
         }
         Err(e) => panic!("Error accessing index: {e}"),
     }

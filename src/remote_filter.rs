@@ -228,7 +228,7 @@ fn get_writer(output_path: &str, compression_level: u8) -> Result<Box<dyn FastxW
     }
 }
 
-fn unpaired_should_keep(
+pub fn unpaired_should_keep(
     input_minimizers_and_positions: &Vec<(Vec<u64>, Vec<u32>, Vec<u8>)>,
     kmer_length: u8,
     index_minimizers: &FxHashSet<u64>,
@@ -264,7 +264,7 @@ fn unpaired_should_keep(
         .collect()
 }
 
-fn paired_should_keep(
+pub fn paired_should_keep(
     input_minimizers_and_positions: &Vec<(Vec<u64>, Vec<u32>, Vec<&[u8]>)>,
     kmer_length: u8,
     index_minimizers: &FxHashSet<u64>,
@@ -392,8 +392,6 @@ pub fn check_paired_inputs_should_be_output(
         // Else, send the input minimizers to the server for checking
         #[cfg(feature = "server")]
         {
-            use simd_minimizers::private::minimizers;
-
             if _server_address.is_none() {
                 panic!("Server address is required when using the server feature.");
             }
@@ -418,7 +416,7 @@ pub fn check_paired_inputs_should_be_output(
 
             // Send the minimizers as a POST request
             let response = client
-                .post(server_address.to_owned() + "/should_output_unpaired")
+                .post(server_address.to_owned() + "/should_output_paired")
                 .json(&PairedFilterRequest {
                     input: input_minimizers_and_positions.to_vec(),
                     abs_threshold,

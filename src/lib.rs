@@ -19,6 +19,8 @@ mod filter_common;
 mod local_filter;
 #[cfg(feature = "server")]
 mod remote_filter;
+#[cfg(feature = "server")]
+pub mod server;
 
 // Re-export the important structures and functions for library users
 pub use filter::run as run_filter;
