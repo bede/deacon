@@ -326,7 +326,10 @@ pub fn get_paired_minimizer_hashes_and_positions<'a>(
             get_minimizer_hashes_and_positions(seq1, prefix_length, kmer_length, window_size);
         all_hashes.extend(hashes);
         all_positions.extend(positions);
-        all_sequences.extend(vec![effective_seq1.to_vec(); all_hashes.len() - all_positions.len()]);
+        all_sequences.extend(vec![
+            effective_seq1.to_vec();
+            all_hashes.len() - all_positions.len()
+        ]);
     }
 
     // Process read 2
@@ -335,7 +338,10 @@ pub fn get_paired_minimizer_hashes_and_positions<'a>(
             get_minimizer_hashes_and_positions(seq2, prefix_length, kmer_length, window_size);
         all_hashes.extend(hashes);
         all_positions.extend(positions);
-        all_sequences.extend(vec![effective_seq2.to_vec(); all_hashes.len() - all_positions.len()]);
+        all_sequences.extend(vec![
+            effective_seq2.to_vec();
+            all_hashes.len() - all_positions.len()
+        ]);
     }
 
     (all_hashes, all_positions, all_sequences)

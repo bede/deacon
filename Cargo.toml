@@ -53,6 +53,7 @@ assert_cmd = "2.0"
 predicates = "3.0"
 tempfile = "3.20"
 rstest = "0.25"
+rand = "0.9.2"
 
 [[test]]
 name = "cli_tests"
@@ -65,6 +66,10 @@ path = "tests/index_tests.rs"
 [[test]]
 name = "filter_tests"
 path = "tests/filter_tests.rs"
+
+[[test]]
+name = "server_tests"
+path = "tests/server_tests.rs"
 
 [profile.release]
 opt-level = 3

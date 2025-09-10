@@ -488,6 +488,7 @@ dependencies = [
  "paraseq",
  "parking_lot",
  "predicates",
+ "rand",
  "rayon",
  "reqwest",
  "rstest",
