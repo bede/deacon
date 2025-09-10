@@ -117,6 +117,10 @@ pub async fn index_version() -> String {
     hash.clone().unwrap()
 }
 
+/// Endpoint to determine whether to output paired reads based on their minimizers
+/// Endpoint is `/should_output_paired`
+///
+/// Simply forwards to `paired_should_keep` in the `remote_filter` module
 async fn should_output_paired(Json(request): Json<PairedFilterRequest>) -> Json<FilterResponse> {
     let index = INDEX.lock();
     match index {
@@ -139,6 +143,10 @@ async fn should_output_paired(Json(request): Json<PairedFilterRequest>) -> Json<
     }
 }
 
+/// Endpoint to determine whether to output unpaired reads based on their minimizers
+/// Endpoint is `/should_output_unpaired`
+///
+/// Simply forwards to `unpaired_should_keep` in the `remote_filter` module
 async fn should_output_unpaired(
     Json(request): Json<UnpairedFilterRequest>,
 ) -> Json<FilterResponse> {

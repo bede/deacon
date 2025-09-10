@@ -1,3 +1,8 @@
+//! Common functions for filtering sequences based on minimizer indices.
+//! Used by both local and remote filtering implementations.
+//!
+//! Includes functions for calculating minimizers, checking filtering criteria,
+//! and generating summaries of filtering operations.
 use packed_seq::SeqVec;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
@@ -6,7 +11,7 @@ use std::path::PathBuf;
 #[cfg(feature = "server")]
 use reqwest::blocking::Client;
 
-// JSON summary structure
+/// JSON filter summary structure
 #[derive(Serialize, Deserialize)]
 pub struct FilterSummary {
     pub version: String,
@@ -309,9 +314,23 @@ pub fn get_minimizer_hashes_and_positions(
     (minimizer_values, positions, effective_seq)
 }
 
-pub fn get_paired_minimizer_hashes_and_positions<'a>(
-    seq1: &'a [u8],
-    seq2: &'a [u8],
+/// Given two sequences (e.g., paired reads), compute the combined minimizer hashes and positions
+/// from both sequences.
+///
+/// # Args:
+/// * `seq1`: The first input sequence as a byte slice.
+/// * `seq2`: The second input sequence as a byte slice.
+/// * `prefix_length`: If >0, only consider the first `prefix_length` bases of each sequence.
+/// * `kmer_length`: The length of k-mers to consider for minimizers.
+/// * `window_size`: The size of the sliding window to find minimizers.
+/// # Returns:
+/// * A tuple containing:
+/// - A vector of combined minimizer hash values (u64) from both sequences.
+/// - A vector of combined positions (u32) where each minimizer occurs in the sequences.
+/// - A vector of effective sequences (Vec<u8>) used for minimizer calculation from both sequences.
+pub fn get_paired_minimizer_hashes_and_positions(
+    seq1: &[u8],
+    seq2: &[u8],
     prefix_length: usize,
     kmer_length: u8,
     window_size: u8,

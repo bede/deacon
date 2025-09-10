@@ -80,9 +80,11 @@ enum Commands {
         #[arg(short = 'q', long = "quiet", default_value_t = false)]
         quiet: bool,
     },
-    /// Requires feature `server`. Run a server to hold a pre-loaded minimizer index in memory for filtering
+    /// Run a server to hold a pre-loaded minimizer index in memory for filtering
     /// with the Client command. Saves time for filtering short sequences with large indexes
     /// but will inevitably be slower than local filtering.
+    ///
+    /// Requires "server" feature to be enabled at compile time.
     Server {
         /// Path to minimizer index file
         index: PathBuf,
@@ -91,9 +93,11 @@ enum Commands {
         #[arg(short = 'p', long = "port", default_value_t = 8888)]
         port: u16,
     },
-    /// Requires feature `server`. Alternate version of Filter, swapping local compute for passing to a server
+    /// Alternate version of Filter, swapping local compute for passing to a server
     /// which has the index pre-loaded. Will inevitably be slower than local filtering,
-    /// but saves on index loading. Better used for cases of small input + large index
+    /// but saves on index loading. Better used for cases of small input + large index.
+    ///
+    /// Requires "server" feature to be enabled at compile time.
     Client {
         /// Server address to connect to (including port)
         server_address: String,

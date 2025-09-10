@@ -1,3 +1,7 @@
+//! Deacon filtering functionality, including single and paired read support.
+//! Uses paraseq for parallel processing of FASTA/FASTQ files.
+//!
+//! Includes *only* local filtering implementation, for remote filtering see the `remote_filter` module.
 use crate::FilterSummary;
 use crate::filter_common::{
     get_minimizer_hashes_and_positions, get_paired_minimizer_hashes_and_positions,

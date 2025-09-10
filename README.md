@@ -247,6 +247,8 @@ Unit tests covering all filter functionality (but with the server/client) are en
 cargo test --features server -- --test-threads 1
 ```
 
+This also tests the remote filtering engine in local mode to ensure that results are identical between the two filtering implementations.
+
 ### Server
 Start up a server with a specific index loaded. Note that this by default runs in the foreground, so it may appear as if nothing is happening after a message about loading your index. To display incomming connection logs, set `RUST_LOG=trace` in your environment variables. 
 
@@ -267,8 +269,10 @@ Almost exactly identical to the `deacon filter` reference, but swapping index pa
 
 
 #### Usage
-```
-Requires feature `server`. Alternate version of Filter, swapping local compute for passing to a server which has the index pre-loaded. Will inevitably be slower than local filtering, but saves on index loading. Better used for cases of small input + large index
+```bash
+Alternate version of Filter, swapping local compute for passing to a server which has the index pre-loaded. Will inevitably be slower than local filtering, but saves on index loading. Better used for cases of small input + large index
+
+Requires "server" feature to be enabled at compile time.
 
 Usage: deacon client [OPTIONS] <SERVER_ADDRESS> [INPUT] [INPUT2]
 

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize)]
 pub struct UnpairedFilterRequest {
     /// Prehashed minimizers for input
+    /// Tuple of (minimizer hashes, positions, effective sequences)
     pub input: Vec<(Vec<u64>, Vec<u32>, Vec<u8>)>,
 
     /// Mininum number (integer) of minimizer hits for a match
@@ -30,6 +31,7 @@ pub struct UnpairedFilterRequest {
 #[derive(Serialize, Deserialize)]
 pub struct PairedFilterRequest {
     /// Prehashed minimizers for input
+    /// Tuple of (minimizer hashes, positions, effective sequences)
     pub input: Vec<(Vec<u64>, Vec<u32>, Vec<Vec<u8>>)>,
 
     /// Mininum number (integer) of minimizer hits for a match
