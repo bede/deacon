@@ -1,9 +1,65 @@
+#![cfg(feature = "server")]
+//! Tests for the Deacon server functionality
+//! Basically a duplicate of the contents of `filter_tests.rs`,
+//! but swapping to use the server filtering instead of local.
 use assert_cmd::Command;
 use std::fs;
 use std::fs::File;
 use std::path::Path;
 use std::process::Command as StdCommand;
 use tempfile::tempdir;
+
+/// Run a given command with a server running on a random port.
+/// The server will be started in a separate thread, and killed after the command completes.
+/// The server will be started with the provided index path and a random port.
+///
+/// # Arguments:
+/// * `$index_path` - The path to the index file to be used by the server.
+/// * `$cmd` - A closure that takes a string slice representing the port number.
+macro_rules! run_with_server {
+    ($index_path: expr, $cmd: expr) => {
+        let random_port = rand::random_range(3000..10000);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let server_thread = rt.spawn(async move {
+            deacon::server::run_server($index_path, random_port).await;
+        });
+        let random_port = random_port.to_string();
+        let mut retries = 0;
+        // Ensure the server is actually running
+        while retries < 10 {
+            let client = reqwest::blocking::Client::new();
+
+            let response = client
+                .get("http://0.0.0.0:".to_owned() + &random_port + "/")
+                .send();
+            match response {
+                Ok(response) => {
+                    // Check if the response indicates a match
+                    if response.status().is_success() {
+                        break;
+                    } else {
+                        // Request worked, but returned an error, so wait and retry
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                }
+                Err(_) => {
+                    // If the request fails, wait and retry
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+            retries += 1;
+        }
+        if retries == 10 {
+            panic!("Server did not start in time");
+        }
+        eprintln!("Started server on port {random_port}");
+        // Run the provided command after starting the server
+        $cmd(&random_port);
+
+        // Kill the server thread
+        server_thread.abort();
+    };
+}
 
 fn create_test_fasta(path: &Path) {
     let fasta_content = ">seq1\nACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA\n>seq2\nTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC\n";
@@ -104,16 +160,18 @@ fn test_filter_to_file() {
     assert!(bin_path.exists(), "Index file wasn't created");
 
     // Run filtering command
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path)
-        .arg("--summary")
-        .arg(&summary_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output_path)
+            .arg("--summary")
+            .arg(&summary_path)
+            .assert()
+            .success();
+    });
 
     // Check output and report creation
     assert!(output_path.exists(), "Output file wasn't created");
@@ -139,14 +197,16 @@ fn test_filter_to_file_gzip() {
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     // Check gzipped output file creation
     assert!(output_path.exists(), "Gzipped output file wasn't created");
@@ -168,14 +228,16 @@ fn test_filter_to_file_zstd() {
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     // Check that zstd output file was created
     assert!(output_path.exists(), "Zstd output file wasn't created");
@@ -197,14 +259,16 @@ fn test_filter_to_file_xz() {
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     // Check that xz output file was created
     assert!(output_path.exists(), "XZ output file wasn't created");
@@ -226,15 +290,17 @@ fn test_filter_deplete_flag() {
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--deplete")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--deplete")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     assert!(
         output_path.exists(),
@@ -253,20 +319,21 @@ fn test_filter_rename() {
     create_test_fasta(&fasta_path);
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
-
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--rename")
-        .arg("-a")
-        .arg("1")
-        .arg("-r")
-        .arg("0.0")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--rename")
+            .arg("-a")
+            .arg("1")
+            .arg("-r")
+            .arg("0.0")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     assert!(
         output_path.exists(),
@@ -291,19 +358,20 @@ fn test_filter_min_matches() {
     create_test_fasta(&fasta_path);
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
-
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--abs-threshold")
-        .arg("2")
-        .arg("--rel-threshold")
-        .arg("0.01")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--abs-threshold")
+            .arg("2")
+            .arg("--rel-threshold")
+            .arg("0.01")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     assert!(
         output_path.exists(),
@@ -322,17 +390,18 @@ fn test_filter_prefix_length() {
     create_test_fasta(&fasta_path);
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
-
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--prefix-length")
-        .arg("6")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--prefix-length")
+            .arg("6")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     assert!(
         output_path.exists(),
@@ -356,19 +425,21 @@ fn test_filter_paired() {
     assert!(bin_path.exists(), "Index file wasn't created");
 
     // Run filtering command with paired-end reads (using -a 1 so short sequences pass through)
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("-a")
-        .arg("1")
-        .arg("-r")
-        .arg("0.0")
-        .arg(&bin_path)
-        .arg(&fastq_path1)
-        .arg(&fastq_path2)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("-a")
+            .arg("1")
+            .arg("-r")
+            .arg("0.0")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path1)
+            .arg(&fastq_path2)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     // Check output creation
     assert!(output_path.exists(), "Output file wasn't created");
@@ -390,17 +461,18 @@ fn test_filter_paired_with_deplete() {
     create_test_fasta(&fasta_path);
     create_test_paired_fastq(&fastq_path1, &fastq_path2);
     build_index(&fasta_path, &bin_path);
-
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--deplete")
-        .arg(&bin_path)
-        .arg(&fastq_path1)
-        .arg(&fastq_path2)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--deplete")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path1)
+            .arg(&fastq_path2)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     assert!(
         output_path.exists(),
@@ -420,21 +492,22 @@ fn test_filter_paired_with_rename() {
     create_test_fasta(&fasta_path);
     create_test_paired_fastq(&fastq_path1, &fastq_path2);
     build_index(&fasta_path, &bin_path);
-
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--rename")
-        .arg("-a")
-        .arg("1")
-        .arg("-r")
-        .arg("0.0")
-        .arg(&bin_path)
-        .arg(&fastq_path1)
-        .arg(&fastq_path2)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--rename")
+            .arg("-a")
+            .arg("1")
+            .arg("-r")
+            .arg("0.0")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path1)
+            .arg(&fastq_path2)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     assert!(
         output_path.exists(),
@@ -460,20 +533,21 @@ fn test_filter_paired_with_min_matches() {
     create_test_fasta(&fasta_path);
     create_test_paired_fastq(&fastq_path1, &fastq_path2);
     build_index(&fasta_path, &bin_path);
-
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--abs-threshold")
-        .arg("2")
-        .arg("--rel-threshold")
-        .arg("0.01")
-        .arg(&bin_path)
-        .arg(&fastq_path1)
-        .arg(&fastq_path2)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--abs-threshold")
+            .arg("2")
+            .arg("--rel-threshold")
+            .arg("0.01")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path1)
+            .arg(&fastq_path2)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     assert!(
         output_path.exists(),
@@ -502,24 +576,26 @@ fn test_interleaved_paired_reads_stdin() {
     assert!(bin_path.exists(), "Index file wasn't created");
 
     // Test piping interleaved file to stdin for processing
-    let mut cmd = StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"));
-    let output = cmd
-        .arg("filter")
-        .arg("-a")
-        .arg("1")
-        .arg("-r")
-        .arg("0.0")
-        .arg(&bin_path)
-        .arg("-") // stdin for input
-        .arg("-") // stdin for input2 (signals interleaved mode)
-        .arg("--output")
-        .arg(&output_path)
-        .stdin(File::open(&interleaved_fastq_path).unwrap())
-        .output()
-        .expect("Failed to execute command");
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"));
+        let output = cmd
+            .arg("client")
+            .arg("-a")
+            .arg("1")
+            .arg("-r")
+            .arg("0.0")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg("-") // stdin for input
+            .arg("-") // stdin for input2 (signals interleaved mode)
+            .arg("--output")
+            .arg(&output_path)
+            .stdin(File::open(&interleaved_fastq_path).unwrap())
+            .output()
+            .expect("Failed to execute command");
 
-    assert!(output.status.success(), "Command failed");
-    assert!(output_path.exists(), "Output file wasn't created");
+        assert!(output.status.success(), "Command failed");
+        assert!(output_path.exists(), "Output file wasn't created");
+    });
 
     // Validate output content (should contain processed reads)
     let output_content = fs::read_to_string(&output_path).unwrap();
@@ -543,25 +619,27 @@ fn test_single_read_stdin() {
     assert!(bin_path.exists(), "Index file wasn't created");
 
     // Test single-end stdin
-    let mut cmd = StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"));
-    let output = cmd
-        .arg("filter")
-        .arg("-a")
-        .arg("1")
-        .arg("-r")
-        .arg("0.0")
-        .arg(&bin_path)
-        .arg("-") // stdin
-        .arg("--output")
-        .arg(&output_path)
-        .stdin(File::open(&fastq_path).unwrap())
-        .output()
-        .expect("Failed to execute command");
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"));
+        let output = cmd
+            .arg("client")
+            .arg("-a")
+            .arg("1")
+            .arg("-r")
+            .arg("0.0")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg("-") // stdin
+            .arg("--output")
+            .arg(&output_path)
+            .stdin(File::open(&fastq_path).unwrap())
+            .output()
+            .expect("Failed to execute command");
 
-    assert!(
-        output.status.success(),
-        "Command failed for single-read stdin"
-    );
+        assert!(
+            output.status.success(),
+            "Command failed for single-read stdin"
+        );
+    });
     assert!(
         output_path.exists(),
         "Output file wasn't created for single-read stdin"
@@ -597,22 +675,23 @@ fn test_filter_filtration_fwd() {
 
     build_index(&fasta_path, &bin_path);
     assert!(bin_path.exists(), "Index file wasn't created");
-
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--deplete")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path)
-        .arg("--summary")
-        .arg(&summary_path)
-        .arg("--abs-threshold")
-        .arg("1")
-        .arg("--rel-threshold")
-        .arg("0.01")
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--deplete")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output_path)
+            .arg("--summary")
+            .arg(&summary_path)
+            .arg("--abs-threshold")
+            .arg("1")
+            .arg("--rel-threshold")
+            .arg("0.01")
+            .assert()
+            .success();
+    });
 
     assert!(output_path.exists(), "Output file wasn't created");
     assert!(summary_path.exists(), "Summary file wasn't created");
@@ -636,18 +715,19 @@ fn test_filter_filtration_rev() {
 
     build_index(&fasta_path, &bin_path);
     assert!(bin_path.exists(), "Index file wasn't created");
-
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--deplete")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path)
-        .arg("--summary")
-        .arg(&summary_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--deplete")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output_path)
+            .arg("--summary")
+            .arg(&summary_path)
+            .assert()
+            .success();
+    });
 
     assert!(output_path.exists(), "Output file wasn't created");
     assert!(summary_path.exists(), "Summary file wasn't created");
@@ -671,17 +751,18 @@ fn test_filter_paired_filtration_fwd() {
 
     build_index(&fasta_path, &bin_path);
     assert!(bin_path.exists(), "Index file wasn't created");
-
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--deplete")
-        .arg(&bin_path)
-        .arg(&fastq_path1)
-        .arg(&fastq_path2)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--deplete")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path1)
+            .arg(&fastq_path2)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     assert!(output_path.exists(), "Output file wasn't created");
 
@@ -704,17 +785,18 @@ fn test_filter_paired_filtration_rev() {
 
     build_index(&fasta_path, &bin_path);
     assert!(bin_path.exists(), "Index file wasn't created");
-
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--deplete")
-        .arg(&bin_path)
-        .arg(&fastq_path1)
-        .arg(&fastq_path2)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--deplete")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path1)
+            .arg(&fastq_path2)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     assert!(output_path.exists(), "Output file wasn't created");
 
@@ -772,17 +854,19 @@ mod output2_tests {
         assert!(bin_path.exists(), "Index file wasn't created");
 
         // Run filtering command with separate output files
-        let mut cmd = Command::cargo_bin("deacon").unwrap();
-        cmd.arg("filter")
-            .arg(&bin_path)
-            .arg(&fastq_path1)
-            .arg(&fastq_path2)
-            .arg("--output")
-            .arg(&output_path1)
-            .arg("--output2")
-            .arg(&output_path2)
-            .assert()
-            .success();
+        run_with_server!(bin_path.clone(), |port: &str| {
+            let mut cmd = Command::cargo_bin("deacon").unwrap();
+            cmd.arg("client")
+                .arg("http://0.0.0.0:".to_owned() + port)
+                .arg(&fastq_path1)
+                .arg(&fastq_path2)
+                .arg("--output")
+                .arg(&output_path1)
+                .arg("--output2")
+                .arg(&output_path2)
+                .assert()
+                .success();
+        });
 
         // Check both output files were created
         assert!(output_path1.exists(), "First output file wasn't created");
@@ -841,18 +925,19 @@ mod output2_tests {
         create_test_fasta(&fasta_path);
         create_test_paired_fastq(&fastq_path1, &fastq_path2);
         build_index(&fasta_path, &bin_path);
-
-        let mut cmd = Command::cargo_bin("deacon").unwrap();
-        cmd.arg("filter")
-            .arg(&bin_path)
-            .arg(&fastq_path1)
-            .arg(&fastq_path2)
-            .arg("--output")
-            .arg(&output_path1)
-            .arg("--output2")
-            .arg(&output_path2)
-            .assert()
-            .success();
+        run_with_server!(bin_path.clone(), |port: &str| {
+            let mut cmd = Command::cargo_bin("deacon").unwrap();
+            cmd.arg("client")
+                .arg("http://0.0.0.0:".to_owned() + port)
+                .arg(&fastq_path1)
+                .arg(&fastq_path2)
+                .arg("--output")
+                .arg(&output_path1)
+                .arg("--output2")
+                .arg(&output_path2)
+                .assert()
+                .success();
+        });
 
         // Check both gzipped output files were created
         assert!(
@@ -918,17 +1003,19 @@ mod output2_tests {
         build_index(&fasta_path, &bin_path);
 
         // Run filtering command with output2 but no second input (should warn)
-        let mut cmd = Command::cargo_bin("deacon").unwrap();
-        cmd.arg("filter")
-            .arg(&bin_path)
-            .arg(&fastq_path)
-            .arg("--output")
-            .arg(&output_path)
-            .arg("-O")
-            .arg(&output_path2)
-            .assert()
-            .success()
-            .stderr(predicates::str::contains("Warning"));
+        run_with_server!(bin_path.clone(), |port: &str| {
+            let mut cmd = Command::cargo_bin("deacon").unwrap();
+            cmd.arg("client")
+                .arg("http://0.0.0.0:".to_owned() + port)
+                .arg(&fastq_path)
+                .arg("--output")
+                .arg(&output_path)
+                .arg("-O")
+                .arg(&output_path2)
+                .assert()
+                .success()
+                .stderr(predicates::str::contains("Warning"));
+        });
 
         // Check only the first output file was created
         assert!(output_path.exists(), "First output file wasn't created");
@@ -974,22 +1061,24 @@ fn test_shared_minimizer_counted_once() {
     // If shared minimizers are counted once (correct): total hits = 1, pair kept (1 < 2)
     // If shared minimizers are counted twice (bug): total hits = 2+, pair filtered (2+ >= 2)
     // Using --deplete to restore original behavior for this bug test
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--deplete")
-        .arg(&bin_path)
-        .arg(&fasta_path1)
-        .arg(&fasta_path2)
-        .arg("--output")
-        .arg(&output_path)
-        .arg("--summary")
-        .arg(&summary_path)
-        .arg("--abs-threshold")
-        .arg("2")
-        .arg("--rel-threshold")
-        .arg("0.01") // Critical parameter: any pair with 2+ hits gets filtered
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--deplete")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fasta_path1)
+            .arg(&fasta_path2)
+            .arg("--output")
+            .arg(&output_path)
+            .arg("--summary")
+            .arg(&summary_path)
+            .arg("--abs-threshold")
+            .arg("2")
+            .arg("--rel-threshold")
+            .arg("0.01") // Critical parameter: any pair with 2+ hits gets filtered
+            .assert()
+            .success();
+    });
 
     assert!(output_path.exists(), "Output file wasn't created");
     assert!(summary_path.exists(), "Summary file wasn't created");
@@ -1025,19 +1114,20 @@ fn test_filter_proportional_threshold() {
     create_test_fasta(&fasta_path);
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
-
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--abs-threshold")
-        .arg("1")
-        .arg("--rel-threshold")
-        .arg("0.5") // 50% proportional threshold
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--abs-threshold")
+            .arg("1")
+            .arg("--rel-threshold")
+            .arg("0.5") // 50% proportional threshold
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     assert!(
         output_path.exists(),
@@ -1057,20 +1147,21 @@ fn test_filter_proportional_paired() {
     create_test_fasta(&fasta_path);
     create_test_paired_fastq(&fastq_path1, &fastq_path2);
     build_index(&fasta_path, &bin_path);
-
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--abs-threshold")
-        .arg("1")
-        .arg("--rel-threshold")
-        .arg("0.3") // 30% proportional threshold
-        .arg(&bin_path)
-        .arg(&fastq_path1)
-        .arg(&fastq_path2)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--abs-threshold")
+            .arg("1")
+            .arg("--rel-threshold")
+            .arg("0.3") // 30% proportional threshold
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path1)
+            .arg(&fastq_path2)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     assert!(
         output_path.exists(),
@@ -1088,36 +1179,44 @@ fn test_filter_edge_case_proportional_values() {
 
     create_test_fasta(&fasta_path);
     create_test_fastq(&fastq_path);
-    build_index(&fasta_path, &bin_path);
+    build_index(&fasta_path, &bin_path.clone());
+
+    // Work around moving values into closures for server running
+    let bin_path1 = bin_path.clone();
+    let bin_path2 = bin_path.clone();
 
     // Test with 0.0 (should pass everything)
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--abs-threshold")
-        .arg("1")
-        .arg("--rel-threshold")
-        .arg("0.0")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
+    run_with_server!(bin_path1, |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--abs-threshold")
+            .arg("1")
+            .arg("--rel-threshold")
+            .arg("0.0")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     // Test with 1.0 (very strict)
     let output_path_strict = temp_dir.path().join("filtered_strict.fastq");
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("--abs-threshold")
-        .arg("1")
-        .arg("--rel-threshold")
-        .arg("1.0")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path_strict)
-        .assert()
-        .success();
+    run_with_server!(bin_path2, |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("--abs-threshold")
+            .arg("1")
+            .arg("--rel-threshold")
+            .arg("1.0")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output_path_strict)
+            .assert()
+            .success();
+    });
 
     assert!(
         output_path.exists(),
@@ -1158,17 +1257,19 @@ fn test_multiline_fasta_matching() {
     fs::write(&bin_path, output.stdout).expect("Failed to write index file");
     assert!(output.status.success(), "Index build command failed");
 
-    // Filter with -a 1
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("-a")
-        .arg("1")
-        .arg(&bin_path)
-        .arg(&query_path)
-        .arg("-o")
-        .arg(&output_path)
-        .assert()
-        .success();
+    // client with -a 1
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("-a")
+            .arg("1")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&query_path)
+            .arg("-o")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     // Verify that mid record newline doesn't break match
     let output_content = fs::read_to_string(&output_path).unwrap();
@@ -1218,19 +1319,21 @@ fn test_newline_mapping_bug() {
     fs::write(&bin_path, output.stdout).expect("Failed to write index file");
     assert!(output.status.success(), "Index build command failed");
 
-    // Filter query against index
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
-    cmd.arg("filter")
-        .arg("-a")
-        .arg("1")
-        .arg("-r")
-        .arg("0.0")
-        .arg(&bin_path)
-        .arg(&query_path)
-        .arg("-o")
-        .arg(&output_path)
-        .assert()
-        .success();
+    // client query against index
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        cmd.arg("client")
+            .arg("-a")
+            .arg("1")
+            .arg("-r")
+            .arg("0.0")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&query_path)
+            .arg("-o")
+            .arg(&output_path)
+            .assert()
+            .success();
+    });
 
     // Read filtered output
     let output_str = fs::read_to_string(&output_path).unwrap();
@@ -1275,22 +1378,24 @@ fn test_large_kmer_filter() {
         .success();
 
     // Test filtering with our k=41 index
-    let output = Command::cargo_bin("deacon")
-        .unwrap()
-        .arg("filter")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("-a")
-        .arg("1")
-        .arg("-r")
-        .arg("0.0")
-        .output()
-        .unwrap();
+    run_with_server!(bin_path.clone(), |port: &str| {
+        let output = Command::cargo_bin("deacon")
+            .unwrap()
+            .arg("client")
+            .arg("http://0.0.0.0:".to_owned() + port)
+            .arg(&fastq_path)
+            .arg("-a")
+            .arg("1")
+            .arg("-r")
+            .arg("0.0")
+            .output()
+            .unwrap();
 
-    assert!(output.status.success(), "Filter command failed");
+        assert!(output.status.success(), "client command failed");
 
-    // Should retain both seqs
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let num_sequences = stdout.lines().filter(|line| line.starts_with('@')).count();
-    assert_eq!(num_sequences, 2, "Should retain both sequences");
+        // Should retain both seqs
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let num_sequences = stdout.lines().filter(|line| line.starts_with('@')).count();
+        assert_eq!(num_sequences, 2, "Should retain both sequences");
+    });
 }

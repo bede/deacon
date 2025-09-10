@@ -11,9 +11,20 @@
 pub mod filter;
 pub mod index;
 pub mod minimizers;
+#[cfg(feature = "server")]
+pub mod server_common;
+
+mod filter_common;
+#[cfg(not(feature = "server"))]
+mod local_filter;
+#[cfg(feature = "server")]
+mod remote_filter;
+#[cfg(feature = "server")]
+pub mod server;
 
 // Re-export the important structures and functions for library users
-pub use filter::{FilterSummary, run as run_filter};
+pub use filter::run as run_filter;
+pub use filter_common::FilterSummary;
 pub use index::{
     IndexHeader, build as build_index, diff as diff_index, info as index_info, union as union_index,
 };
@@ -23,11 +34,14 @@ pub use minimizers::{
 
 use anyhow::Result;
 use rustc_hash::FxHashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub struct FilterConfig<'a> {
     /// Minimizer index file path
-    pub minimizers_path: &'a Path,
+    pub minimizers_path: Option<&'a PathBuf>,
+
+    /// Server address (if any)
+    pub server_address: Option<String>,
 
     /// Path to input fastx file (or - for stdin)
     pub input_path: &'a str,
@@ -73,9 +87,10 @@ pub struct FilterConfig<'a> {
 }
 
 impl<'a> FilterConfig<'a> {
-    pub fn new(minimizers_path: &'a Path) -> Self {
+    pub fn new(minimizers_path: Option<&'a PathBuf>, server_address: Option<String>) -> Self {
         Self {
             minimizers_path,
+            server_address,
             input_path: "-",
             input2_path: None,
             output_path: "-",
@@ -197,9 +212,9 @@ pub struct IndexConfig {
 
 impl IndexConfig {
     /// Create a new index configuration with the specified input path
-    pub fn new<P: AsRef<Path>>(input_path: P) -> Self {
+    pub fn new(input_path: PathBuf) -> Self {
         Self {
-            input_path: input_path.as_ref().to_path_buf(),
+            input_path,
             kmer_length: DEFAULT_KMER_LENGTH,
             window_size: DEFAULT_WINDOW_SIZE,
             output_path: None,
@@ -223,8 +238,8 @@ impl IndexConfig {
     }
 
     /// Set output path
-    pub fn with_output<P: AsRef<Path>>(mut self, output_path: P) -> Self {
-        self.output_path = Some(output_path.as_ref().to_path_buf());
+    pub fn with_output(mut self, output_path: PathBuf) -> Self {
+        self.output_path = Some(output_path);
         self
     }
 
@@ -258,8 +273,8 @@ impl IndexConfig {
     }
 }
 
-pub fn load_minimizers<P: AsRef<Path>>(path: P) -> Result<(FxHashSet<u64>, index::IndexHeader)> {
-    index::load_minimizer_hashes(&path)
+pub fn load_minimizers(path: &PathBuf) -> Result<(Option<FxHashSet<u64>>, index::IndexHeader)> {
+    index::load_minimizer_hashes(&Some(path), &None)
 }
 
 pub fn write_minimizers(
