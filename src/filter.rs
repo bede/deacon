@@ -1,3 +1,4 @@
+use crate::minimizers::KmerHasher;
 use crate::{index::load_minimizer_hashes, FilterConfig};
 use anyhow::{Context, Result};
 use flate2::write::GzEncoder;
@@ -10,7 +11,7 @@ use paraseq::Record;
 use parking_lot::Mutex;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
-use simd_minimizers;
+use simd_minimizers::seq_hash::NtHasher;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::sync::Arc;
@@ -190,6 +191,8 @@ struct FilterProcessor {
     rename: bool,
     debug: bool,
 
+    hasher: KmerHasher,
+
     // Local buffers
     local_buffer: Vec<u8>,
     local_buffer2: Vec<u8>, // Second buffer for paired output
@@ -263,6 +266,7 @@ impl FilterProcessor {
             deplete: config.deplete,
             rename: config.rename,
             debug: config.debug,
+            hasher: NtHasher::new(kmer_length as usize),
             local_buffer: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
             local_buffer2: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
             local_stats: ProcessingStats::default(),
@@ -328,9 +332,9 @@ impl FilterProcessor {
         }
 
         // let mut positions = Vec::new();
-        simd_minimizers::canonical_minimizer_positions(
+        simd_minimizers::canonical_minimizer_positions_with_hasher(
             packed_seq.as_slice(),
-            self.kmer_length as usize,
+            &self.hasher,
             self.window_size as usize,
             positions,
         );
@@ -418,9 +422,9 @@ impl FilterProcessor {
             .collect::<Vec<u8>>();
 
         let mut positions = Vec::new();
-        simd_minimizers::canonical_minimizer_positions(
+        simd_minimizers::canonical_minimizer_positions_with_hasher(
             packed_seq::AsciiSeq(&canonical_seq),
-            self.kmer_length as usize,
+            &self.hasher,
             self.window_size as usize,
             &mut positions,
         );
