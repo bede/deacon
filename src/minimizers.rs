@@ -3,6 +3,8 @@ use xxhash_rust::xxh3;
 
 pub const DEFAULT_KMER_LENGTH: u8 = 31;
 pub const DEFAULT_WINDOW_SIZE: u8 = 15;
+/// Canonical NtHash, with 1-bit rotations for backwards compatibility.
+pub type KmerHasher = seq_hash::NtHasher<true, 1>;
 
 /// Check if nucleotide is valid ACGT (case insensitive)
 #[inline]
@@ -52,6 +54,7 @@ fn canonicalise_sequence(seq: &[u8]) -> Vec<u8> {
 /// Returns vector of all minimizer hashes for a sequence
 pub fn compute_minimizer_hashes(
     seq: &[u8],
+    hasher: &KmerHasher,
     kmer_length: u8,
     window_size: u8,
     entropy_threshold: f32,
@@ -59,6 +62,7 @@ pub fn compute_minimizer_hashes(
     let mut hashes = Vec::new();
     fill_minimizer_hashes(
         seq,
+        hasher,
         kmer_length,
         window_size,
         &mut hashes,
@@ -124,6 +128,7 @@ fn calculate_scaled_entropy(kmer: &[u8], kmer_length: u8) -> f32 {
 /// and optionally filtering by scaled entropy
 pub fn fill_minimizer_hashes(
     seq: &[u8],
+    hasher: &KmerHasher,
     kmer_length: u8,
     window_size: u8,
     hashes: &mut Vec<u64>,
@@ -140,9 +145,9 @@ pub fn fill_minimizer_hashes(
 
     // Get minimizer positions using simd-minimizers
     let mut positions = Vec::new();
-    simd_minimizers::canonical_minimizer_positions(
+    simd_minimizers::canonical_minimizer_positions_with_hasher(
         AsciiSeq(&canonical_seq),
-        kmer_length as usize,
+        hasher,
         window_size as usize,
         &mut positions,
     );
@@ -237,15 +242,15 @@ mod tests {
         let seq = b"ACGTACGTACGT";
         let k = 5;
         let w = 3;
-
-        let hashes = compute_minimizer_hashes(seq, k, w, 0.0);
+        let hasher = KmerHasher::new(k as usize);
+        let hashes = compute_minimizer_hashes(seq, &hasher, k, w, 0.0);
 
         // We should have at least one minimizer hash
         assert!(!hashes.is_empty());
 
         // Test with a sequence shorter than k
         let short_seq = b"ACGT";
-        let short_hashes = compute_minimizer_hashes(short_seq, k, w, 0.0);
+        let short_hashes = compute_minimizer_hashes(short_seq, &hasher, k, w, 0.0);
         assert!(short_hashes.is_empty());
     }
 
