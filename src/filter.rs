@@ -325,61 +325,29 @@ impl FilterProcessor {
         // Trim the last newline character from `effective_seq` if it has one.
         let effective_seq = effective_seq.strip_suffix(b"\n").unwrap_or(effective_seq);
 
-        let FilterBuffers {
-            packed_seq,
-            ambiguous,
-            positions,
-            hashes: minimizer_values,
-        } = &mut self.filter_buffers;
+        let mut bufs = std::mem::take(&mut self.filter_buffers);
+        let (positions, hashes) = self.get_minimizer_positions_ans_hashes(effective_seq, &mut bufs);
 
-        packed_seq.clear();
-        minimizer_values.clear();
-        positions.clear();
-        ambiguous.clear();
 
-        // Pack the sequence into 2-bit representation.
-        packed_seq.push_ascii(effective_seq);
-        ambiguous.push_ascii(effective_seq);
-
-        // let mut positions = Vec::new();
-        let m = simd_minimizers::canonical_minimizers(
-            self.kmer_length as usize,
-            self.window_size as usize,
-        )
-        .hasher(&self.hasher)
-        .run_skip_ambi(packed_seq.as_slice(), ambiguous.as_slice(), positions);
-
-        // Hash valid positions
-        if self.kmer_length > 32 {
-            let it = m
-                .values_u64()
-                .map(|kmer| xxhash_rust::xxh3::xxh3_64(&kmer.1.to_le_bytes()));
-            minimizer_values.extend(it);
-        } else {
-            let it = m
-                .values_u128()
-                .map(|kmer| xxhash_rust::xxh3::xxh3_64(&kmer.1.to_le_bytes()));
-            minimizer_values.extend(it);
-        }
-
-        let num_minimizers = minimizer_values.len();
+        let num_minimizers = hashes.len();
 
         // Count distinct minimizer hits and collect matching k-mers
         let mut seen_hits = FxHashSet::default();
         let mut hit_count = 0;
         let mut hit_kmers = Vec::new();
 
-        for (i, &hash) in minimizer_values.iter().enumerate() {
+        // Count hits and collect k-mers
+        for (&pos, &hash) in std::iter::zip(positions, hashes) {
             if self.minimizer_hashes.contains(&hash) && seen_hits.insert(hash) {
                 hit_count += 1;
-                // Extract the k-mer sequence at this position
-                if self.debug && i < positions.len() {
-                    let pos = positions[i] as usize;
+                if self.debug {
+                    let pos = pos as usize;
                     let kmer = &effective_seq[pos..pos + self.kmer_length as usize];
                     hit_kmers.push(String::from_utf8_lossy(kmer).to_string());
                 }
             }
         }
+        self.filter_buffers = bufs;
 
         (
             self.meets_filtering_criteria(hit_count, num_minimizers),
@@ -458,10 +426,8 @@ impl FilterProcessor {
                     pair_hit_count += 1;
                     if self.debug {
                         let pos = pos as usize;
-                        if pos + self.kmer_length as usize <= seq.len() {
-                            let kmer = &effective_seq[pos..pos + self.kmer_length as usize];
-                            hit_kmers.push(String::from_utf8_lossy(kmer).to_string());
-                        }
+                        let kmer = &effective_seq[pos..pos + self.kmer_length as usize];
+                        hit_kmers.push(String::from_utf8_lossy(kmer).to_string());
                     }
                 }
             }
