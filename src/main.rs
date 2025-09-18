@@ -353,7 +353,7 @@ fn main() -> Result<()> {
                 // Server needs to run async, so spawn an async runtime to run it
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async {
-                    eprintln!("Loading server!");
+                    eprintln!("Starting server on port {}", port);
                     deacon::server::run_server(index.clone(), *port).await;
                 });
             }

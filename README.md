@@ -233,124 +233,51 @@ Use `-s summary.json` to save detailed filtering statistics:
 }
 ```
 
-## Features
-There is an optional feature which can be enabled when building with `cargo build --features server`.
-
-This enables the running of a server which pre-loads the index, allowing filtering to be remote rather than local. In most local use cases, this will inevitably be slower than local `filter`, but for cases where lots of small inputs would otherwise load the index for each input, this is expected to be faster.
+## Server mode
+For applications requiring low latency and/or remote sequence classification, Deacon can be compiled with client/server support which eliminates index loading overhead during filtering. This increases throughput in scenarios where index loading overhead would otherwise dominate, such as when filtering few or small DNA sequences using a large minimizer index. Once a `deacon server` process has started, subsequent filtering requests from `deacon client` processes are answered in milliseconds by the server process over HTTP.
 
 > [!NOTE]
-> Compiling with the server feature swaps the filtering engine for a slower one in order to enable faster client performance. For optimal local filtering, **do not** use this feature. Scientifically the results are identical between both modes.
+> Compiled with server mode, Deacon uses a different filtering engine optimised for client/server performance. While filtering results are identical, local filtering using `deacon filter` should be avoided when Deacon is compiled with server mode.
+
+### Install
+
+To compile Deacon with server mode enabled, run:
+
+```bash
+cargo build -r --features server
+```
+
+### Server usage
+
+```bash
+# Start a server process listening on port 8888 (default)
+deacon server panhuman-1.k31w15.idx
+
+# Start a server process listening on port 12345
+deacon server panhuman-1.k31w15.idx -p 12345
+```
+
+To display incomming connection requests, set the environment variable `RUST_LOG=trace`. 
+
+### Client usage
+
+Once a server is running, query it using `deacon client`. Its usage is almost identical to `deacon filter`, but instead of an index argument it accepts a server address, like so:
+
+
+```bash
+# Keep only sequences matching the index loaded by the server process
+deacon client http://localhost:8888 reads.fq.gz > filt.fq
+```
 
 ### Testing
-Unit tests covering all filter functionality (but with the server/client) are enabled when compiling with `--features server`. However, due to concurrency issues, the client tests can only be run single threaded, and will fail without this:
+
+Tests for client/server must be executed with a single thread. These tests include validating of filtering engine equivalence between standard and server modes.
+
 ```bash
 cargo test --features server -- --test-threads 1
 ```
 
-This also tests the remote filtering engine in local mode to ensure that results are identical between the two filtering implementations.
 
-### Server
-Start up a server with a specific index loaded. Note that this by default runs in the foreground, so it may appear as if nothing is happening after a message about loading your index. To display incomming connection logs, set `RUST_LOG=trace` in your environment variables. 
-
-
-#### Run on default port
-Starts up the server on port `8888`
-```bash
-deacon server index.idx
-```
-#### Run on custom port
-Starts up the server on port `12345`
-```bash
-deacon server index.idx -p 12345
-```
-
-### Client
-Almost exactly identical to the `deacon filter` reference, but swapping index path for server address. 
-
-
-#### Usage
-```bash
-Alternate version of Filter, swapping local compute for passing to a server which has the index pre-loaded. Will inevitably be slower than local filtering, but saves on index loading. Better used for cases of small input + large index
-
-Requires "server" feature to be enabled at compile time.
-
-Usage: deacon client [OPTIONS] <SERVER_ADDRESS> [INPUT] [INPUT2]
-
-Arguments:
-  <SERVER_ADDRESS>  Server address to connect to (including port)
-  [INPUT]           Optional path to fastx file (or - for stdin) [default: -]
-  [INPUT2]          Optional path to second paired fastx file (or - for interleaved stdin)
-
-Options:
-  -o, --output <OUTPUT>
-          Path to output fastx file (or - for stdout; detects .gz and .zst) [default: -]
-  -O, --output2 <OUTPUT2>
-          Optional path to second paired output fastx file (detects .gz and .zst)
-  -a, --abs-threshold <ABS_THRESHOLD>
-          Minimum absolute number of minimizer hits for a match [default: 2]
-  -r, --rel-threshold <REL_THRESHOLD>
-          Minimum relative proportion (0.0-1.0) of minimizer hits for a match [default: 0.01]
-  -p, --prefix-length <PREFIX_LENGTH>
-          Search only the first N nucleotides per sequence (0 = entire sequence) [default: 0]
-  -d, --deplete
-          Discard matching sequences (invert filtering behaviour)
-  -R, --rename
-          Replace sequence headers with incrementing numbers
-  -s, --summary <SUMMARY>
-          Path to JSON summary output file
-  -t, --threads <THREADS>
-          Number of execution threads (0 = auto) [default: 8]
-      --compression-level <COMPRESSION_LEVEL>
-          Output compression level (1-9 for gz & xz; 1-22 for zstd) [default: 2]
-      --debug
-          Output sequences with minimizer hits to stderr
-  -q, --quiet
-          Suppress progress reporting
-  -h, --help
-          Print help
-```
-
-**Examples**
-
-```bash
-# Keep only sequences matching the index loaded in the server
-deacon client http://0.0.0.0:8888 reads.fq.gz > filt.fq
-
-# Host depletion using the index loaded in the server and default thresholds
-deacon client -d http://0.0.0.0:8888 reads.fq.gz -o filt.fq.gz
-
-# Max sensitivity with absolute threshold of 1 and no relative threshold
-deacon client -d -a 1 -r 0 http://0.0.0.0:8888 reads.fq.gz -o filt.fq.gz
-
-# More specific 10% relative match threshold
-deacon client -d -r 0.1 http://0.0.0.0:8888 reads.fq.gz > filt.fq.gz
-
-# Stdin and stdout
-zcat reads.fq.gz | deacon client -d http://0.0.0.0:8888 > filt.fq
-
-# Faster Zstandard compression
-deacon client -d http://0.0.0.0:8888 reads.fq.zst -o filt.fq.zst
-
-# Fast gzip with pigz
-deacon client -d http://0.0.0.0:8888 reads.fq.gz | pigz > filt.fq.gz
-
-# Paired reads
-deacon client -d http://0.0.0.0:8888 r1.fq.gz r2.fq.gz > filt12.fq
-deacon client -d http://0.0.0.0:8888 r1.fq.gz r2.fq.gz -o filt.r1.fq.gz -O filt.r2.fq.gz
-zcat r12.fq.gz | deacon client -d http://0.0.0.0:8888 - - > filt12.fq
-
-# Save summary JSON
-deacon client -d http://0.0.0.0:8888 reads.fq.gz -o filt.fq.gz -s summary.json
-
-# Replace read headers with incrementing integers
-deacon client -d -R http://0.0.0.0:8888 reads.fq.gz > filt.fq
-
-# Only look for minimizer hits inside the first 1000bp per record
-deacon client -d -p 1000 http://0.0.0.0:8888 reads.fq.gz > filt.fq
-
-# Debug mode: see sequences with minimizer hits in stderr
-deacon client -d --debug http://0.0.0.0:8888 reads.fq.gz > filt.fq
-```
 
 ## Citation
 

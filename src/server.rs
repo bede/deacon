@@ -38,11 +38,7 @@ pub async fn run_server(index_path: PathBuf, port: u16) {
     TRACING.get_or_init(|| {
         tracing_subscriber::fmt::init();
     });
-
-    eprintln!("Loading index from: {}", index_path.display());
-    // Load the index before starting the server to ensure it's available for requests
     load_index(index_path);
-    eprintln!("Loaded index!");
 
     // build our application with a route
     let app = Router::new()
@@ -66,6 +62,8 @@ pub async fn run_server(index_path: PathBuf, port: u16) {
 
 /// Load the index from the specified path.
 fn load_index(index_path: PathBuf) {
+    let start_time = std::time::Instant::now();
+
     // Load the hash as well as the file contents for returning as an ugly (but reliable) version
     let bytes = std::fs::read(index_path.clone()).unwrap();
     let hash = sha256::digest(&bytes);
@@ -77,6 +75,10 @@ fn load_index(index_path: PathBuf) {
         Ok((minimizers, header)) => {
             *INDEX.lock().unwrap() = minimizers;
             *INDEX_HEADER.lock().unwrap() = header;
+
+            let load_time = start_time.elapsed();
+            eprintln!("Loaded index in {:.2?}", load_time);
+            eprintln!("Awaiting requests");
         }
         Err(e) => {
             eprintln!("Failed to load index: {e}");
