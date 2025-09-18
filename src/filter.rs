@@ -1,4 +1,4 @@
-use crate::{FilterConfig, index::load_minimizer_hashes};
+use crate::{FilterConfig, index::load_minimizer_hashes_cached};
 use anyhow::{Context, Result};
 use flate2::write::GzEncoder;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
@@ -180,7 +180,7 @@ pub struct FilterSummary {
 #[derive(Clone)]
 struct FilterProcessor {
     // Minimizer matching parameters
-    minimizer_hashes: Arc<FxHashSet<u64>>,
+    minimizer_hashes: &'static FxHashSet<u64>,
     kmer_length: u8,
     window_size: u8,
     abs_threshold: usize,
@@ -244,7 +244,7 @@ impl FilterProcessor {
         }
     }
     fn new(
-        minimizer_hashes: Arc<FxHashSet<u64>>,
+        minimizer_hashes: &'static FxHashSet<u64>,
         kmer_length: u8,
         window_size: u8,
         config: &FilterProcessorConfig,
@@ -736,10 +736,11 @@ pub fn run(config: &FilterConfig) -> Result<()> {
 
     // Configure thread pool if nonzero
     if config.threads > 0 {
-        rayon::ThreadPoolBuilder::new()
+        // error is OK here when we initialize a 2nd time in server mode.
+        let _ = rayon::ThreadPoolBuilder::new()
             .num_threads(config.threads)
             .build_global()
-            .context("Failed to initialize thread pool")?;
+            .context("Failed to initialize thread pool");
     }
 
     let mode = if config.deplete { "deplete" } else { "search" };
@@ -781,8 +782,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     }
 
     // Load minimizer hashes and parse header
-    let (minimizer_hashes, header) = load_minimizer_hashes(&config.minimizers_path)?;
-    let minimizer_hashes = Arc::new(minimizer_hashes);
+    let (minimizer_hashes, header) = load_minimizer_hashes_cached(&config.minimizers_path)?;
 
     let kmer_length = header.kmer_length();
     let window_size = header.window_size();

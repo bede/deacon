@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use needletail::{parse_fastx_file, parse_fastx_stdin};
@@ -67,6 +68,20 @@ pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, u
         .context("Failed to deserialise minimizer count")?;
 
     Ok((header, count))
+}
+
+static INDEX: OnceLock<(PathBuf, FxHashSet<u64>, IndexHeader)> = OnceLock::new();
+
+pub fn load_minimizer_hashes_cached<P: AsRef<Path>>(
+    path: &P,
+) -> Result<(&'static FxHashSet<u64>, &'static IndexHeader)> {
+    let (p, minimizers, header) = INDEX.get_or_init(|| {
+        let (m, h) = load_minimizer_hashes(path).unwrap();
+        (path.as_ref().to_owned(), m, h)
+    });
+    assert_eq!(p, path.as_ref(), "Currently, the server can only have one index loaded.");
+
+    Ok((minimizers, header))
 }
 
 /// Load the hashes without spiking memory usage with an extra vec
