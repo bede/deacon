@@ -6,21 +6,6 @@ pub const DEFAULT_WINDOW_SIZE: u8 = 15;
 /// Canonical NtHash, with 1-bit rotations for backwards compatibility.
 pub type KmerHasher = seq_hash::NtHasher<true, 1>;
 
-/// Check if nucleotide is valid ACGT (case insensitive)
-#[inline]
-fn is_valid_acgt(nucleotide: u8) -> bool {
-    matches!(
-        nucleotide,
-        b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't'
-    )
-}
-
-/// Check if k-mer contains only ACGT nucleotides
-#[inline]
-fn kmer_contains_only_acgt(kmer: &[u8]) -> bool {
-    kmer.iter().all(|&b| is_valid_acgt(b))
-}
-
 /// Canonicalise IUPAC ambiguous nucleotides to ACGT
 #[inline]
 fn canonicalise_nucleotide(nucleotide: u8) -> u8 {
