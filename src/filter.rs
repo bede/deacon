@@ -251,7 +251,7 @@ struct ProcessingStats {
 #[derive(Default, Clone)]
 struct FilterBuffers {
     packed_seq: packed_seq::PackedSeqVec,
-    invalid_mask: Vec<u64>,
+    invalid_mask: packed_seq::BitSeqVec,
     positions: Vec<u32>,
     minimizer_values: Vec<u64>,
 }
@@ -327,7 +327,7 @@ impl FilterProcessor {
 
         let FilterBuffers {
             packed_seq,
-            invalid_mask,
+            invalid_mask: ambiguous,
             positions,
             minimizer_values,
         } = &mut self.filter_buffers;
@@ -335,81 +335,31 @@ impl FilterProcessor {
         packed_seq.clear();
         minimizer_values.clear();
         positions.clear();
-        invalid_mask.clear();
+        ambiguous.clear();
 
         // Pack the sequence into 2-bit representation.
-        // Any non-ACGT characters are silently converted to 2-bit ACGT as well.
         packed_seq.push_ascii(effective_seq);
-        // let packed_seq = packed_seq::PackedSeqVec::from_ascii(effective_seq);
-
-        // TODO: Extract this to some nicer helper function in packed_seq?
-        // TODO: Use SIMD?
-        // TODO: Should probably add some test for this.
-        // +2: one to round up, and one buffer.
-        invalid_mask.resize(packed_seq.len() / 64 + 2, 0);
-        // let mut invalid_mask = vec![0u64; packed_seq.len() / 64 + 2];
-        for i in (0..effective_seq.len()).step_by(64) {
-            let mut mask = 0;
-            for (j, b) in effective_seq[i..(i + 64).min(effective_seq.len())]
-                .iter()
-                .enumerate()
-            {
-                mask |= ((!matches!(b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't'))
-                    as u64)
-                    << j;
-            }
-
-            invalid_mask[i / 64] = mask;
-        }
+        ambiguous.push_ascii(effective_seq);
 
         // let mut positions = Vec::new();
-        simd_minimizers::canonical_minimizer_positions_with_hasher(
-            packed_seq.as_slice(),
-            &self.hasher,
+        let m = simd_minimizers::canonical_minimizers(
+            self.kmer_length as usize,
             self.window_size as usize,
-            positions,
-        );
-
-        assert!(
-            self.kmer_length <= 57,
-            "Indexing the bitmask of invalid characters requires k<=57, but it is {}",
-            self.kmer_length
-        );
-
-        // Filter positions to only include k-mers with ACGT bases
-        positions.retain(|&pos| {
-            // Extract bits pos .. pos+k from the bitmask.
-
-            // mask of k ones in low positions.
-            let mask = u64::MAX >> (64 - self.kmer_length);
-            let byte = pos as usize / 8;
-            let offset = pos as usize % 8;
-            // The unaligned u64 read is OK, because we ensure that the underlying `Vec` always
-            // has at least 8 bytes of padding at the end.
-            let x =
-                (unsafe { invalid_mask.as_ptr().byte_add(byte).read_unaligned() } >> offset) & mask;
-            x == 0
-        });
+        )
+        .hasher(&self.hasher)
+        .run_skip_ambi(packed_seq.as_slice(), ambiguous.as_slice(), positions);
 
         // Hash valid positions
         if self.kmer_length > 32 {
-            minimizer_values.extend(
-                simd_minimizers::iter_canonical_minimizer_values_u128(
-                    packed_seq.as_slice(),
-                    self.kmer_length as usize,
-                    positions,
-                )
-                .map(|kmer| xxhash_rust::xxh3::xxh3_64(&kmer.to_le_bytes())),
-            );
+            let it = m
+                .values_u64()
+                .map(|kmer| xxhash_rust::xxh3::xxh3_64(&kmer.1.to_le_bytes()));
+            minimizer_values.extend(it);
         } else {
-            minimizer_values.extend(
-                simd_minimizers::iter_canonical_minimizer_values(
-                    packed_seq.as_slice(),
-                    self.kmer_length as usize,
-                    positions,
-                )
-                .map(|kmer| xxhash_rust::xxh3::xxh3_64(&kmer.to_le_bytes())),
-            );
+            let it = m
+                .values_u128()
+                .map(|kmer| xxhash_rust::xxh3::xxh3_64(&kmer.1.to_le_bytes()));
+            minimizer_values.extend(it);
         }
 
         let num_minimizers = minimizer_values.len();
@@ -452,40 +402,22 @@ impl FilterProcessor {
             })
             .collect::<Vec<u8>>();
 
-        let mut positions = Vec::new();
-        simd_minimizers::canonical_minimizer_positions_with_hasher(
-            packed_seq::AsciiSeq(&canonical_seq),
-            &self.hasher,
-            self.window_size as usize,
-            &mut positions,
-        );
-
-        // Filter to valid positions
-        let valid_positions: Vec<u32> = positions
-            .into_iter()
-            .filter(|&pos| {
-                let pos_usize = pos as usize;
-                if pos_usize + self.kmer_length as usize <= seq.len() {
-                    let kmer = &seq[pos_usize..pos_usize + self.kmer_length as usize];
-                    kmer.iter().all(|&b| {
-                        matches!(b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't')
-                    })
-                } else {
-                    false
-                }
-            })
-            .collect();
-
-        // Get hashes
-        let hashes: Vec<u64> = simd_minimizers::iter_canonical_minimizer_values(
-            packed_seq::AsciiSeq(&canonical_seq),
+        let mut positions = vec![];
+        let hashes = simd_minimizers::canonical_minimizers(
             self.kmer_length as usize,
-            &valid_positions,
+            self.window_size as usize,
         )
-        .map(|kmer| xxhash_rust::xxh3::xxh3_64(&kmer.to_le_bytes()))
+        .hasher(&self.hasher)
+        .run_skip_ambi(
+            packed_seq::AsciiSeq(&canonical_seq),
+            packed_seq::BitSeqVec::from_ascii(&canonical_seq).as_slice(),
+            &mut positions,
+        )
+        .values_u64()
+        .map(|(_pos, hash)| xxhash_rust::xxh3::xxh3_64(&hash.to_le_bytes()))
         .collect();
 
-        (hashes, valid_positions)
+        (hashes, positions)
     }
 
     fn should_keep_pair(&self, seq1: &[u8], seq2: &[u8]) -> (bool, usize, usize, Vec<String>) {
