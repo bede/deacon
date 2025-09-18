@@ -5,7 +5,12 @@ use deacon::{
     union_index,
 };
 use serde::{Deserialize, Serialize};
-use std::{os::unix::net::{UnixListener, UnixStream}, path::PathBuf};
+use std::{
+    io::{Read, Write},
+    os::unix::net::{UnixListener, UnixStream},
+    path::PathBuf,
+    process::exit,
+};
 
 #[derive(Parser, Serialize, Deserialize)]
 #[command(author, version, about, long_about = None)]
@@ -19,6 +24,8 @@ struct Cli {
 #[derive(Subcommand, Serialize, Deserialize)]
 enum Commands {
     Server,
+    Exit,
+    Done,
     /// Build and compose minimizer indexes
     Index {
         #[command(subcommand)]
@@ -178,13 +185,37 @@ fn main() -> Result<()> {
     if matches!(cli.command, Commands::Server) {
         let listener = UnixListener::bind("deacon_server_socket")?;
         for stream in listener.incoming() {
-            let command: Commands = serde_json::from_reader(stream.unwrap()).unwrap();
-            process_command(&command)?;
+            let mut stream = stream.unwrap();
+            let mut message = vec![];
+            let mut buf = vec![0; 10000];
+            loop {
+                let len = stream.read(&mut buf)?;
+                let buf = &buf[..len];
+                message.extend_from_slice(buf);
+                if buf.contains(&0) {
+                    assert_eq!(buf.last(), Some(&0));
+                    message.pop();
+                    break;
+                }
+            }
+            let command: Commands = serde_json::from_slice(&message).unwrap();
+            let do_exit = matches!(command, Commands::Exit);
+            if !do_exit {
+                process_command(&command)?;
+            }
+            serde_json::to_writer(stream, &Commands::Done)?;
+            if do_exit {
+                exit(0);
+            }
         }
     } else {
         if cli.use_server {
-            let stream = UnixStream::connect("deacon_server_socket")?;
-             serde_json::to_writer(stream, &cli.command)?;
+            let mut stream = UnixStream::connect("deacon_server_socket")?;
+            serde_json::to_writer(&stream, &cli.command)?;
+            stream.write(b"\0")?;
+            stream.flush()?;
+            let command: Commands = serde_json::from_reader(stream).unwrap();
+            assert!(matches!(command, Commands::Done));
         } else {
             process_command(&cli.command)?;
         }
@@ -196,6 +227,8 @@ fn main() -> Result<()> {
 fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
     match &command {
         Commands::Server => panic!(),
+        Commands::Done => panic!(),
+        Commands::Exit => exit(0),
         Commands::Index { command } => match command {
             IndexCommands::Build {
                 input,
