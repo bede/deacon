@@ -1,23 +1,10 @@
-use packed_seq::AsciiSeq;
+use packed_seq::{BitSeqVec, PackedSeqVec, SeqVec};
 use xxhash_rust::xxh3;
 
 pub const DEFAULT_KMER_LENGTH: u8 = 31;
 pub const DEFAULT_WINDOW_SIZE: u8 = 15;
-
-/// Check if nucleotide is valid ACGT (case insensitive)
-#[inline]
-fn is_valid_acgt(nucleotide: u8) -> bool {
-    matches!(
-        nucleotide,
-        b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't'
-    )
-}
-
-/// Check if k-mer contains only ACGT nucleotides
-#[inline]
-fn kmer_contains_only_acgt(kmer: &[u8]) -> bool {
-    kmer.iter().all(|&b| is_valid_acgt(b))
-}
+/// Canonical NtHash, with 1-bit rotations for backwards compatibility.
+pub type KmerHasher = seq_hash::NtHasher<true, 1>;
 
 /// Canonicalise IUPAC ambiguous nucleotides to ACGT
 #[inline]
@@ -52,6 +39,7 @@ fn canonicalise_sequence(seq: &[u8]) -> Vec<u8> {
 /// Returns vector of all minimizer hashes for a sequence
 pub fn compute_minimizer_hashes(
     seq: &[u8],
+    hasher: &KmerHasher,
     kmer_length: u8,
     window_size: u8,
     entropy_threshold: f32,
@@ -59,6 +47,7 @@ pub fn compute_minimizer_hashes(
     let mut hashes = Vec::new();
     fill_minimizer_hashes(
         seq,
+        hasher,
         kmer_length,
         window_size,
         &mut hashes,
@@ -124,6 +113,7 @@ fn calculate_scaled_entropy(kmer: &[u8], kmer_length: u8) -> f32 {
 /// and optionally filtering by scaled entropy
 pub fn fill_minimizer_hashes(
     seq: &[u8],
+    hasher: &KmerHasher,
     kmer_length: u8,
     window_size: u8,
     hashes: &mut Vec<u64>,
@@ -137,55 +127,48 @@ pub fn fill_minimizer_hashes(
     }
 
     let canonical_seq = canonicalise_sequence(seq);
+    let packed_seq = PackedSeqVec::from_ascii(&canonical_seq);
+    let ambiguous = BitSeqVec::from_ascii(&canonical_seq);
 
     // Get minimizer positions using simd-minimizers
-    let mut positions = Vec::new();
-    simd_minimizers::canonical_minimizer_positions(
-        AsciiSeq(&canonical_seq),
-        kmer_length as usize,
-        window_size as usize,
-        &mut positions,
-    );
+    let mut positions = vec![];
+    let out = simd_minimizers::canonical_minimizers(kmer_length as usize, window_size as usize)
+        .hasher(hasher)
+        .run_skip_ambi(packed_seq.as_slice(), ambiguous.as_slice(), &mut positions);
 
-    // Filter positions to only include k-mers with ACGT bases and sufficient entropy
-    let valid_positions: Vec<u32> = positions
-        .into_iter()
-        .filter(|&pos| {
-            let pos_usize = pos as usize;
-            let kmer = &seq[pos_usize..pos_usize + kmer_length as usize];
-
-            // Check ACGT constraint
-            if !kmer_contains_only_acgt(kmer) {
-                return false;
-            }
-
-            // Check scaled entropy constraint if threshold specified
-            if entropy_threshold == 0.0 {
-                true
-            } else {
-                let entropy = calculate_scaled_entropy(kmer, kmer_length);
-                entropy >= entropy_threshold
-            }
-        })
-        .collect();
-
-    if kmer_length > 32 {
+    if kmer_length <= 32 {
         hashes.extend(
-            simd_minimizers::iter_canonical_minimizer_values_u128(
-                AsciiSeq(&canonical_seq),
-                kmer_length as usize,
-                &valid_positions,
-            )
-            .map(|kmer| xxh3::xxh3_64(&kmer.to_le_bytes())),
+            out.values_u64()
+                .filter(|&(pos, _val)| {
+                    let pos = pos as usize;
+                    let kmer = &seq[pos..pos + kmer_length as usize];
+
+                    // Check scaled entropy constraint if threshold specified
+                    if entropy_threshold == 0.0 {
+                        true
+                    } else {
+                        let entropy = calculate_scaled_entropy(kmer, kmer_length);
+                        entropy >= entropy_threshold
+                    }
+                })
+                .map(|(_pos, val)| xxh3::xxh3_64(&val.to_le_bytes())),
         );
     } else {
         hashes.extend(
-            simd_minimizers::iter_canonical_minimizer_values(
-                AsciiSeq(&canonical_seq),
-                kmer_length as usize,
-                &valid_positions,
-            )
-            .map(|kmer| xxh3::xxh3_64(&kmer.to_le_bytes())),
+            out.values_u128()
+                .filter(|&(pos, _val)| {
+                    let pos = pos as usize;
+                    let kmer = &seq[pos..pos + kmer_length as usize];
+
+                    // Check scaled entropy constraint if threshold specified
+                    if entropy_threshold == 0.0 {
+                        true
+                    } else {
+                        let entropy = calculate_scaled_entropy(kmer, kmer_length);
+                        entropy >= entropy_threshold
+                    }
+                })
+                .map(|(_pos, val)| xxh3::xxh3_64(&val.to_le_bytes())),
         );
     }
 }
@@ -237,15 +220,15 @@ mod tests {
         let seq = b"ACGTACGTACGT";
         let k = 5;
         let w = 3;
-
-        let hashes = compute_minimizer_hashes(seq, k, w, 0.0);
+        let hasher = KmerHasher::new(k as usize);
+        let hashes = compute_minimizer_hashes(seq, &hasher, k, w, 0.0);
 
         // We should have at least one minimizer hash
         assert!(!hashes.is_empty());
 
         // Test with a sequence shorter than k
         let short_seq = b"ACGT";
-        let short_hashes = compute_minimizer_hashes(short_seq, k, w, 0.0);
+        let short_hashes = compute_minimizer_hashes(short_seq, &hasher, k, w, 0.0);
         assert!(short_hashes.is_empty());
     }
 

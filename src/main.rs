@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use deacon::{
-    DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig, diff_index, index_info,
-    union_index,
+    diff_index, index_info, union_index, FilterConfig, IndexConfig, DEFAULT_KMER_LENGTH,
+    DEFAULT_WINDOW_SIZE,
 };
 use std::path::PathBuf;
 
