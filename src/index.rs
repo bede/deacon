@@ -79,7 +79,11 @@ pub fn load_minimizer_hashes_cached<P: AsRef<Path>>(
         let (m, h) = load_minimizer_hashes(path).unwrap();
         (path.as_ref().to_owned(), m, h)
     });
-    assert_eq!(p, path.as_ref(), "Currently, the server can only have one index loaded.");
+    assert_eq!(
+        p,
+        path.as_ref(),
+        "Currently, the server can only have one index loaded."
+    );
 
     Ok((minimizers, header))
 }
