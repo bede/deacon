@@ -4,17 +4,21 @@ use deacon::{
     DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig, diff_index, index_info,
     union_index,
 };
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
+use std::{os::unix::net::{UnixListener, UnixStream}, path::PathBuf};
 
-#[derive(Parser)]
+#[derive(Parser, Serialize, Deserialize)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+    #[arg(long)]
+    use_server: bool,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Serialize, Deserialize)]
 enum Commands {
+    Server,
     /// Build and compose minimizer indexes
     Index {
         #[command(subcommand)]
@@ -82,7 +86,7 @@ enum Commands {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Serialize, Deserialize)]
 enum IndexCommands {
     /// Index minimizers contained within a fastx file
     Build {
@@ -171,7 +175,27 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    match &cli.command {
+    if matches!(cli.command, Commands::Server) {
+        let listener = UnixListener::bind("deacon_server_socket")?;
+        for stream in listener.incoming() {
+            let command: Commands = serde_json::from_reader(stream.unwrap()).unwrap();
+            process_command(&command)?;
+        }
+    } else {
+        if cli.use_server {
+            let stream = UnixStream::connect("deacon_server_socket")?;
+             serde_json::to_writer(stream, &cli.command)?;
+        } else {
+            process_command(&cli.command)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
+    match &command {
+        Commands::Server => panic!(),
         Commands::Index { command } => match command {
             IndexCommands::Build {
                 input,
