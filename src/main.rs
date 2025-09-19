@@ -4,17 +4,26 @@ use deacon::{
     DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig, diff_index, index_info,
     union_index,
 };
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
+use std::{
+    io::{Read, Write},
+    os::unix::net::{UnixListener, UnixStream},
+    path::PathBuf,
+};
 
-#[derive(Parser)]
+#[derive(Parser, Serialize, Deserialize)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+    #[arg(long)]
+    use_server: bool,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Serialize, Deserialize)]
 enum Commands {
+    Server,
+    Exit,
     /// Build and compose minimizer indexes
     Index {
         #[command(subcommand)]
@@ -82,7 +91,7 @@ enum Commands {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Serialize, Deserialize)]
 enum IndexCommands {
     /// Index minimizers contained within a fastx file
     Build {
@@ -160,6 +169,14 @@ enum IndexCommands {
     },
 }
 
+#[derive(Serialize, Deserialize)]
+enum Message {
+    /// client -> server
+    Command(Commands),
+    /// server -> client
+    Done,
+}
+
 fn main() -> Result<()> {
     // Check we have either AVX2 or NEON
     #[cfg(not(any(target_feature = "avx2", target_feature = "neon")))]
@@ -171,7 +188,62 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    match &cli.command {
+    if matches!(cli.command, Commands::Server) {
+        assert!(
+            !cli.use_server,
+            "`deacon --use server Server` does not make sense."
+        );
+        let listener = UnixListener::bind("deacon_server_socket")?;
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut message = vec![];
+            let mut buf = vec![0; 10000];
+            loop {
+                let len = stream.read(&mut buf)?;
+                let buf = &buf[..len];
+                message.extend_from_slice(buf);
+                if buf.contains(&0) {
+                    assert_eq!(buf.last(), Some(&0));
+                    message.pop();
+                    break;
+                }
+            }
+            let message: Message = serde_json::from_slice(&message).unwrap();
+            match message {
+                Message::Command(Commands::Exit) => {
+                    serde_json::to_writer(stream, &Message::Done)?;
+                    break;
+                }
+                Message::Command(commands) => {
+                    process_command(&commands)?;
+                    serde_json::to_writer(stream, &Message::Done)?;
+                }
+                Message::Done => unreachable!("Server should not receive `Done` messages."),
+            }
+        }
+    } else {
+        if cli.use_server {
+            let mut stream = UnixStream::connect("deacon_server_socket")?;
+            serde_json::to_writer(&stream, &Message::Command(cli.command))?;
+            stream.write(b"\0")?;
+            stream.flush()?;
+            let message: Message = serde_json::from_reader(stream).unwrap();
+            match message {
+                Message::Done => {}
+                _ => unreachable!("The client only expects to receive `Done` messages."),
+            }
+        } else {
+            process_command(&cli.command)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
+    match &command {
+        Commands::Server => unreachable!(),
+        Commands::Exit => panic!("Use `deacon --use-server Exit` to stop the server."),
         Commands::Index { command } => match command {
             IndexCommands::Build {
                 input,
