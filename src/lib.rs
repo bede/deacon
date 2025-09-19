@@ -1,3 +1,4 @@
+#![feature(core_intrinsics, impl_trait_in_assoc_type)]
 //! # Deacon
 //!
 //! A fast minimizer-based filter for nucleotide sequences in FASTA or FASTQ format,
@@ -11,6 +12,7 @@
 pub mod filter;
 pub mod index;
 pub mod minimizers;
+mod hashset;
 
 // Re-export the important structures and functions for library users
 pub use filter::{FilterSummary, run as run_filter};
@@ -22,7 +24,8 @@ pub use minimizers::{
 };
 
 use anyhow::Result;
-use rustc_hash::FxHashSet;
+// use rustc_hash::FxHashSet as HashSet;
+use hashset::U64HashSet as HashSet;
 use std::path::{Path, PathBuf};
 
 pub struct FilterConfig<'a> {
@@ -258,12 +261,12 @@ impl IndexConfig {
     }
 }
 
-pub fn load_minimizers<P: AsRef<Path>>(path: P) -> Result<(FxHashSet<u64>, index::IndexHeader)> {
+pub fn load_minimizers<P: AsRef<Path>>(path: P) -> Result<(HashSet, index::IndexHeader)> {
     index::load_minimizer_hashes(&path)
 }
 
 pub fn write_minimizers(
-    minimizers: &FxHashSet<u64>,
+    minimizers: &HashSet,
     header: &index::IndexHeader,
     output_path: Option<&PathBuf>,
 ) -> Result<()> {

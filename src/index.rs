@@ -1,9 +1,9 @@
+use crate::HashSet;
 use crate::IndexConfig;
 use crate::minimizers::KmerHasher;
 use anyhow::{Context, Result};
 use bincode::serde::{decode_from_std_read, encode_into_std_write};
 use rayon::prelude::*;
-use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
@@ -71,11 +71,11 @@ pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, u
     Ok((header, count))
 }
 
-static INDEX: OnceLock<(PathBuf, FxHashSet<u64>, IndexHeader)> = OnceLock::new();
+static INDEX: OnceLock<(PathBuf, HashSet, IndexHeader)> = OnceLock::new();
 
 pub fn load_minimizer_hashes_cached<P: AsRef<Path>>(
     path: &P,
-) -> Result<(&'static FxHashSet<u64>, &'static IndexHeader)> {
+) -> Result<(&'static HashSet, &'static IndexHeader)> {
     let (p, minimizers, header) = INDEX.get_or_init(|| {
         let (m, h) = load_minimizer_hashes(path).unwrap();
         (path.as_ref().to_owned(), m, h)
@@ -92,7 +92,7 @@ pub fn load_minimizer_hashes_cached<P: AsRef<Path>>(
 /// Load the hashes without spiking memory usage with an extra vec
 /// This older version uses variable-width integer encoding.
 /// Use `deacon index convert` for the new format.
-fn load_minimizer_hashes_varint(mut reader: impl std::io::Read) -> Result<FxHashSet<u64>> {
+fn load_minimizer_hashes_varint(mut reader: impl std::io::Read) -> Result<HashSet> {
     let config = bincode::config::standard();
 
     // Deserialise the count of minimizers so we can init a FxHashSet with the right capacity
@@ -100,14 +100,15 @@ fn load_minimizer_hashes_varint(mut reader: impl std::io::Read) -> Result<FxHash
         .context("Failed to deserialise minimizer count")?;
 
     // Populate FxHashSet
-    let minimizers: FxHashSet<u64> = (0..count)
-        .map(|_| decode_from_std_read(&mut reader, config).unwrap())
-        .collect();
+    let mut minimizers = HashSet::with_capacity(count);
+    for _ in 0..count {
+        minimizers.insert(decode_from_std_read(&mut reader, config).unwrap());
+    }
 
     Ok(minimizers)
 }
 
-fn load_minimizer_hashes_fixedint(mut reader: impl std::io::Read) -> Result<FxHashSet<u64>> {
+fn load_minimizer_hashes_fixedint(mut reader: impl std::io::Read) -> Result<HashSet> {
     let config = bincode::config::standard().with_fixed_int_encoding();
 
     // Deserialise the count of minimizers so we can init a FxHashSet with the right capacity
@@ -115,7 +116,7 @@ fn load_minimizer_hashes_fixedint(mut reader: impl std::io::Read) -> Result<FxHa
         .context("Failed to deserialise minimizer count")?;
 
     // Populate FxHashSet
-    let mut minimizers = FxHashSet::<u64>::with_capacity_and_hasher(count, Default::default());
+    let mut minimizers = HashSet::with_capacity(count);
     const B: usize = 16 * 1024;
     let mut hashes = vec![0u8; 8 * B];
     for i in (0..count).step_by(B) {
@@ -134,7 +135,7 @@ fn load_minimizer_hashes_fixedint(mut reader: impl std::io::Read) -> Result<FxHa
 /// Load the hashes without spiking memory usage with an extra vec
 /// This new version uses fixed-width integer encoding.
 /// Use `deacon index convert` to convert from the old format.
-pub fn load_minimizer_hashes<P: AsRef<Path>>(path: &P) -> Result<(FxHashSet<u64>, IndexHeader)> {
+pub fn load_minimizer_hashes<P: AsRef<Path>>(path: &P) -> Result<(HashSet, IndexHeader)> {
     let file =
         File::open(path).context(format!("Failed to open index file {:?}", path.as_ref()))?;
     let mut reader = BufReader::with_capacity(1 << 20, file);
@@ -156,7 +157,7 @@ pub fn load_minimizer_hashes<P: AsRef<Path>>(path: &P) -> Result<(FxHashSet<u64>
 
 /// Helper function to write minimizers to output file or stdout
 pub fn write_minimizers(
-    minimizers: &FxHashSet<u64>,
+    minimizers: &HashSet,
     header: &IndexHeader,
     output_path: Option<&PathBuf>,
 ) -> Result<()> {
@@ -186,7 +187,7 @@ pub fn write_minimizers(
         .context("Failed to serialise minimizer count")?;
 
     // Serialise each minimizer directly
-    for &hash in minimizers {
+    for hash in minimizers {
         encode_into_std_write(hash, &mut writer, config)
             .context("Failed to serialise minimizer hash")?;
     }
@@ -240,8 +241,8 @@ pub fn build(config: &IndexConfig) -> Result<()> {
 
     // Init FxHashSet with user-specified capacity
     let capacity = config.capacity_millions * 1_000_000;
-    let mut all_minimizers: FxHashSet<u64> =
-        FxHashSet::with_capacity_and_hasher(capacity, Default::default());
+    let mut all_minimizers: HashSet =
+        HashSet::with_capacity(capacity);
 
     eprintln!(
         "Building index (k={}, w={})",
@@ -300,7 +301,9 @@ pub fn build(config: &IndexConfig) -> Result<()> {
         for (i, hashes) in batch_results.iter().enumerate() {
             let (seq_data, id) = &batch[i];
 
-            all_minimizers.extend(hashes.iter());
+            for x in hashes {
+                all_minimizers.insert(*x);
+            }
 
             seq_count += 1;
             total_bp += seq_data.len();
@@ -346,7 +349,7 @@ fn stream_diff_fastx<P: AsRef<Path>>(
     kmer_length: u8,
     window_size: u8,
     first_header: &IndexHeader,
-    first_minimizers: &mut FxHashSet<u64>,
+    first_minimizers: &mut HashSet,
 ) -> Result<(usize, usize)> {
     let path = fastx_path.as_ref();
 
@@ -436,9 +439,10 @@ fn stream_diff_fastx<P: AsRef<Path>>(
 
             // Remove matching minimizers from first_minimizers immediately
             for &hash in hashes {
-                if first_minimizers.remove(&hash) {
-                    removed_count += 1;
-                }
+                todo!();
+                // if first_minimizers.remove(&hash) {
+                //     removed_count += 1;
+                // }
             }
 
             seq_count += 1;
@@ -559,7 +563,8 @@ pub fn diff<P: AsRef<Path>>(
 
     // Remove all hashes in second_minimizers from first_minimizers
     for hash in &second_minimizers {
-        first_minimizers.remove(hash);
+        todo!();
+        // first_minimizers.remove(hash);
     }
 
     // Report results
@@ -684,8 +689,8 @@ pub fn union<P: AsRef<Path>>(
     }
 
     // Pre-allocate hash set with total capacity to avoid resizing
-    let mut all_minimizers: FxHashSet<u64> =
-        FxHashSet::with_capacity_and_hasher(total_capacity, Default::default());
+    let mut all_minimizers: HashSet =
+        HashSet::with_capacity(total_capacity);
 
     // Now load and merge all indexes
     for (i, path) in inputs.iter().enumerate() {
@@ -693,7 +698,9 @@ pub fn union<P: AsRef<Path>>(
         let before_count = all_minimizers.len();
 
         // Merge minimizers (set union)
-        all_minimizers.extend(minimizers);
+        for h in &minimizers {
+            all_minimizers.insert(h);
+        }
 
         let expected_count = headers_and_counts[i].1;
         eprintln!(
