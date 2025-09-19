@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "compression"), allow(unused))]
 use assert_cmd::Command;
 use std::fs;
 use std::fs::File;
@@ -755,6 +756,7 @@ mod output2_tests {
         assert!(output.status.success(), "Index build command failed");
     }
 
+    #[cfg(feature = "compression")]
     #[test]
     fn test_filter_paired_with_output2() {
         let temp_dir = tempdir().unwrap();
@@ -828,6 +830,7 @@ mod output2_tests {
         );
     }
 
+    #[cfg(feature = "compression")]
     #[test]
     fn test_filter_paired_with_output2_gzip() {
         let temp_dir = tempdir().unwrap();

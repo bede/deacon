@@ -17,7 +17,6 @@ path = "src/lib.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
-flate2 = { version = "1.1", features = ["zlib-rs"] }
 anyhow = "1.0"
 thiserror = "2.0"
 simd-minimizers = "1.3"
@@ -28,13 +27,16 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 bincode = { version = "2.0", features = ["serde"] }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-needletail = "0.6"
-paraseq = "0.4"
-niffler = "3"
 parking_lot = "0.12"
-zstd = "0.13"
 indicatif = "0.17"
-liblzma = "0.3.1"
+
+needletail = { version = "0.6", default-features = false }
+niffler = { version = "3", default-features = false }
+paraseq = { version = "0.4.1", default-features = false, features = ["anyhow", "niffler"] }
+
+liblzma = { version = "0.3.1", optional = true }
+flate2 = { version = "1.1", features = ["zlib-rs"], optional = true }
+zstd = { version = "0.13", optional = true }
 
 [lints.clippy]
 too_many_arguments = "allow"
@@ -44,6 +46,15 @@ assert_cmd = "2.0"
 predicates = "3.0"
 tempfile = "3.20"
 rstest = "0.25"
+
+[features]
+# Disable for faster builds.
+compression = ["zstd", "liblzma", "flate2", "needletail/compression", "niffler/default"]
+# Use to still handle .gz files when "compression" is not enabled.
+gz = ["niffler/gz", "flate2", "flate2/default"]
+# `deacon server` feature.
+server = []
+default = ["server", "compression"]
 
 [[test]]
 name = "cli_tests"
