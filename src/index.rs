@@ -187,8 +187,13 @@ pub fn write_minimizers(
     encode_into_std_write(count, &mut writer, config)
         .context("Failed to serialise minimizer count")?;
 
+    eprintln!("Sorting minimizer hashes..");
+    let mut hashes: Vec<_> = minimizers.into_iter().collect();
+    hashes.sort_unstable();
+
+    eprintln!("Writing minimizer hashes..");
     // Serialise each minimizer directly
-    for hash in minimizers {
+    for hash in hashes {
         encode_into_std_write(hash, &mut writer, config)
             .context("Failed to serialise minimizer hash")?;
     }
