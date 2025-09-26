@@ -9,8 +9,6 @@ use std::hash::{BuildHasher, BuildHasherDefault};
 
 use wide::CmpEq;
 
-type Hasher = BuildHasherDefault<rustc_hash::FxHasher>;
-
 pub struct U64HashSet {
     table: Box<[Bucket]>,
     len: usize,
@@ -51,9 +49,8 @@ impl U64HashSet {
 
     #[inline(always)]
     pub fn prefetch(&self, key: u64) {
-        let hash64 = Hasher::default().hash_one(key);
         let bucket_mask = self.table.len() - 1;
-        let bucket_i = hash64 as usize;
+        let bucket_i = key as usize;
         // Safety: bucket_mask is correct because the number of buckets is a power of 2.
         unsafe {
             std::intrinsics::prefetch_write_data::<_, 0>(
@@ -67,9 +64,8 @@ impl U64HashSet {
         if key == 0 {
             return self.has_zero;
         }
-        let hash64 = Hasher::default().hash_one(key);
         let bucket_mask = self.table.len() - 1;
-        let mut bucket_i = hash64 as usize;
+        let mut bucket_i = key as usize;
 
         // type S = wide::u64x4;
         type S = wide::i64x4;
@@ -100,10 +96,9 @@ impl U64HashSet {
             self.has_zero = true;
             return;
         }
-        let hash64 = Hasher::default().hash_one(key);
         let bucket_mask = self.table.len() - 1;
-        let element_offset_in_bucket = (hash64 >> 61) as usize;
-        let mut bucket_i = hash64 as usize;
+        let element_offset_in_bucket = (key >> 61) as usize;
+        let mut bucket_i = key as usize;
 
         loop {
             // Safety: bucket_mask is correct because the number of buckets is a power of 2.
