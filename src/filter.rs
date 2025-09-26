@@ -1,8 +1,6 @@
 use crate::{FilterConfig, index::load_minimizer_hashes};
 use anyhow::{Context, Result};
-use flate2::write::GzEncoder;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use liblzma::write::XzEncoder;
 use packed_seq::SeqVec;
 use paraseq::Record;
 use paraseq::fastx::Reader;
@@ -16,7 +14,6 @@ use std::io::{self, BufWriter, Write};
 use std::sync::Arc;
 use std::time::Instant;
 use xxhash_rust;
-use zstd::stream::write::Encoder as ZstdEncoder;
 
 const OUTPUT_BUFFER_SIZE: usize = 8 * 1024 * 1024; // Opt: 8MB output buffer
 const DEFAULT_BUFFER_SIZE: usize = 64 * 1024;
@@ -150,23 +147,26 @@ fn get_writer(output_path: &str, compression_level: u8) -> Result<BoxedWriter> {
     let buffered_file = BufWriter::with_capacity(OUTPUT_BUFFER_SIZE, file);
 
     match output_path {
+        #[cfg(feature = "compression")]
         p if p.ends_with(".gz") => {
             validate_compression_level(compression_level, 1, 9, "gzip")?;
-            Ok(Box::new(GzEncoder::new(
+            Ok(Box::new(flate2::write::GzEncoder::new(
                 buffered_file,
                 flate2::Compression::new(compression_level as u32),
             )))
         }
+        #[cfg(feature = "compression")]
         p if p.ends_with(".zst") => {
             validate_compression_level(compression_level, 1, 22, "zstd")?;
-            Ok(Box::new(ZstdEncoder::new(
+            Ok(Box::new(zstd::stream::write::Encoder::new(
                 buffered_file,
                 compression_level as i32,
             )?))
         }
+        #[cfg(feature = "compression")]
         p if p.ends_with(".xz") => {
             validate_compression_level(compression_level, 0, 9, "xz")?;
-            Ok(Box::new(XzEncoder::new(
+            Ok(Box::new(liblzma::write::XzEncoder::new(
                 buffered_file,
                 compression_level as u32,
             )))
