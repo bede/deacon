@@ -1,3 +1,4 @@
+use crate::FxHashSet;
 use crate::HashSet;
 use crate::IndexConfig;
 use crate::filter::Buffers;
@@ -156,7 +157,8 @@ pub fn load_minimizer_hashes(path: &Path) -> Result<(HashSet, IndexHeader)> {
 
 /// Helper function to write minimizers to output file or stdout
 pub fn write_minimizers(
-    minimizers: &HashSet,
+    count: usize,
+    minimizers: impl IntoIterator<Item = u64>,
     header: &IndexHeader,
     output_path: Option<&Path>,
 ) -> Result<()> {
@@ -181,7 +183,6 @@ pub fn write_minimizers(
         .context("Failed to serialise index header")?;
 
     // Serialise the count of minimizers first
-    let count = minimizers.len();
     encode_into_std_write(count, &mut writer, config)
         .context("Failed to serialise minimizer count")?;
 
@@ -333,7 +334,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     let header = IndexHeader::new(config.kmer_length, config.window_size);
 
     // Write to output path or stdout
-    write_minimizers(&all_minimizers, &header, config.output_path.as_deref())?;
+    write_minimizers(all_minimizers.len(), all_minimizers.iter(), &header, config.output_path.as_deref())?;
 
     let total_time = start_time.elapsed();
     eprintln!("Completed in {:.2?}", total_time);
@@ -347,7 +348,7 @@ fn stream_diff_fastx(
     kmer_length: u8,
     window_size: u8,
     first_header: &IndexHeader,
-    first_minimizers: &mut HashSet,
+    first_minimizers: &mut FxHashSet,
 ) -> Result<(usize, usize)> {
     let path = fastx_path;
 
@@ -439,10 +440,9 @@ fn stream_diff_fastx(
 
             // Remove matching minimizers from first_minimizers immediately
             for &hash in hashes {
-                todo!();
-                // if first_minimizers.remove(&hash) {
-                //     removed_count += 1;
-                // }
+                if first_minimizers.remove(&hash) {
+                    removed_count += 1;
+                }
             }
 
             seq_count += 1;
@@ -483,7 +483,9 @@ pub fn diff(
     let start_time = Instant::now();
 
     // Load first file (always an index)
-    let (mut first_minimizers, header) = load_minimizer_hashes(first)?;
+    let (first_minimizers, header) = load_minimizer_hashes(first)?;
+    // Convert to FxHashSet which supports deletion.
+    let mut first_minimizers = FxHashSet::from_iter(first_minimizers.iter());
     eprintln!("First index: loaded {} minimizers", first_minimizers.len());
 
     // Guess if second file is an index or FASTX file
@@ -500,7 +502,7 @@ pub fn diff(
             first_minimizers.len()
         );
 
-        write_minimizers(&first_minimizers, &header, output)?;
+        write_minimizers(first_minimizers.len(), first_minimizers.iter().copied(), &header, output)?;
 
         let total_time = start_time.elapsed();
         eprintln!("Completed difference operation in {:.2?}", total_time);
@@ -548,7 +550,7 @@ pub fn diff(
                 first_minimizers.len()
             );
 
-            write_minimizers(&first_minimizers, &header, output)?;
+            write_minimizers(first_minimizers.len(), first_minimizers.iter().copied(), &header, output)?;
 
             let total_time = start_time.elapsed();
             eprintln!("Completed difference operation in {:.2?}", total_time);
@@ -562,9 +564,8 @@ pub fn diff(
     let before_count = first_minimizers.len();
 
     // Remove all hashes in second_minimizers from first_minimizers
-    for hash in &second_minimizers {
-        todo!();
-        // first_minimizers.remove(hash);
+    for hash in second_minimizers.iter() {
+        first_minimizers.remove(&hash);
     }
 
     // Report results
@@ -574,7 +575,7 @@ pub fn diff(
         first_minimizers.len()
     );
 
-    write_minimizers(&first_minimizers, &header, output)?;
+    write_minimizers(first_minimizers.len(), first_minimizers.iter().copied(), &header, output)?;
 
     let total_time = start_time.elapsed();
     eprintln!("Completed diff operation in {:.2?}", total_time);
@@ -613,7 +614,7 @@ pub fn convert_index(from: &Path, to: Option<&Path>) -> Result<()> {
     assert_eq!(header.format_version, 2);
     header.format_version = 3;
     let start_time = Instant::now();
-    write_minimizers(&minimizers, &header, to)?;
+    write_minimizers(minimizers.len(), minimizers.iter(), &header, to)?;
     let write_time = start_time.elapsed();
     eprintln!("Converted index in {:.2?}", write_time);
 
@@ -672,7 +673,7 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
         let before_count = all_minimizers.len();
 
         // Merge minimizers (set union)
-        for h in &minimizers {
+        for h in minimizers.iter() {
             all_minimizers.insert(h);
         }
 
@@ -686,7 +687,7 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
         );
     }
 
-    write_minimizers(&all_minimizers, header, output)?;
+    write_minimizers(all_minimizers.len(), all_minimizers.iter(), header, output)?;
 
     let total_time = start_time.elapsed();
     eprintln!(

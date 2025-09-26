@@ -17,21 +17,6 @@ pub struct U64HashSet {
     has_zero: bool,
 }
 
-impl IntoIterator for &U64HashSet {
-    type Item = u64;
-
-    type IntoIter = impl Iterator<Item = u64>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        std::iter::repeat_n(0, self.has_zero as usize).chain(
-            self.table
-                .iter()
-                .flat_map(|b| b.0.iter().copied())
-                .filter(|x| *x != 0),
-        )
-    }
-}
-
 const BUCKET_SIZE: usize = 8;
 
 #[derive(Clone, Copy)]
@@ -53,6 +38,15 @@ impl U64HashSet {
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.len + self.has_zero as usize
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = u64>{
+        std::iter::repeat_n(0, self.has_zero as usize).chain(
+            self.table
+                .iter()
+                .flat_map(|b| b.0.iter().copied())
+                .filter(|x| *x != 0),
+        )
     }
 
     #[inline(always)]
