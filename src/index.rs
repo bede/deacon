@@ -1,9 +1,10 @@
+use crate::FxHashSet;
+use crate::HashSet;
 use crate::IndexConfig;
 use crate::minimizers::KmerHasher;
 use anyhow::{Context, Result};
 use bincode::serde::{decode_from_std_read, encode_into_std_write};
 use rayon::prelude::*;
-use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Write};
@@ -24,7 +25,7 @@ pub struct IndexHeader {
 impl IndexHeader {
     pub fn new(kmer_length: u8, window_size: u8) -> Self {
         IndexHeader {
-            format_version: 2,
+            format_version: 3,
             kmer_length,
             window_size,
         }
@@ -32,7 +33,7 @@ impl IndexHeader {
 
     /// Validate header
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.format_version != 2 {
+        if self.format_version != 2 && self.format_version != 3 {
             return Err(anyhow::anyhow!(
                 "Unsupported index format version: {}",
                 self.format_version
@@ -71,11 +72,11 @@ pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, u
     Ok((header, count))
 }
 
-static INDEX: OnceLock<(PathBuf, FxHashSet<u64>, IndexHeader)> = OnceLock::new();
+static INDEX: OnceLock<(PathBuf, HashSet, IndexHeader)> = OnceLock::new();
 
 pub fn load_minimizer_hashes_cached<P: AsRef<Path>>(
     path: &P,
-) -> Result<(&'static FxHashSet<u64>, &'static IndexHeader)> {
+) -> Result<(&'static HashSet, &'static IndexHeader)> {
     let (p, minimizers, header) = INDEX.get_or_init(|| {
         let (m, h) = load_minimizer_hashes(path).unwrap();
         (path.as_ref().to_owned(), m, h)
@@ -90,36 +91,79 @@ pub fn load_minimizer_hashes_cached<P: AsRef<Path>>(
 }
 
 /// Load the hashes without spiking memory usage with an extra vec
-pub fn load_minimizer_hashes<P: AsRef<Path>>(path: &P) -> Result<(FxHashSet<u64>, IndexHeader)> {
-    let file =
-        File::open(path).context(format!("Failed to open index file {:?}", path.as_ref()))?;
-    let mut reader = BufReader::new(file);
+/// This older version uses variable-width integer encoding.
+/// Use `deacon index convert` for the new format.
+fn load_minimizer_hashes_varint(mut reader: impl std::io::Read) -> Result<HashSet> {
+    let config = bincode::config::standard();
 
-    // Deserialise header
-    let header: IndexHeader = decode_from_std_read(&mut reader, bincode::config::standard())
-        .context("Failed to deserialise index header")?;
-    header.validate()?;
+    println!(
+        "Use `deacon index convert <old> <new>` to upgrade the index to the faster and smaller v3 format."
+    );
 
     // Deserialise the count of minimizers so we can init a FxHashSet with the right capacity
-    let count: usize = decode_from_std_read(&mut reader, bincode::config::standard())
+    let count: usize = decode_from_std_read(&mut reader, config)
         .context("Failed to deserialise minimizer count")?;
 
-    // Pre-allocate FxHashSet with correct capacity
-    let mut minimizers = FxHashSet::with_capacity_and_hasher(count, Default::default());
+    // Populate FxHashSet
+    let mut minimizers = HashSet::with_capacity(count);
+    for _ in 0..count {
+        minimizers.insert(decode_from_std_read(&mut reader, config).unwrap());
+    }
+
+    Ok(minimizers)
+}
+
+fn load_minimizer_hashes_fixedint(mut reader: impl std::io::Read) -> Result<HashSet> {
+    let config = bincode::config::standard().with_fixed_int_encoding();
+
+    // Deserialise the count of minimizers so we can init a FxHashSet with the right capacity
+    let count: usize = decode_from_std_read(&mut reader, config)
+        .context("Failed to deserialise minimizer count")?;
 
     // Populate FxHashSet
-    for _ in 0..count {
-        let hash: u64 = decode_from_std_read(&mut reader, bincode::config::standard())
-            .context("Failed to deserialise minimizer hash")?;
-        minimizers.insert(hash);
+    let mut minimizers = HashSet::with_capacity(count);
+    const B: usize = 16 * 1024;
+    let mut hashes = vec![0u8; 8 * B];
+    for i in (0..count).step_by(B) {
+        let batch_count = B.min(count - i);
+        let batch = &mut hashes[..8 * batch_count];
+        reader.read_exact(batch).unwrap();
+        for h in batch.as_chunks::<8>().0 {
+            // Read as little-endian.
+            minimizers.insert_in_order(u64::from_le_bytes(*h));
+        }
     }
+
+    Ok(minimizers)
+}
+
+/// Load the hashes without spiking memory usage with an extra vec
+/// This new version uses fixed-width integer encoding.
+/// Use `deacon index convert` to convert from the old format.
+pub fn load_minimizer_hashes<P: AsRef<Path>>(path: &P) -> Result<(HashSet, IndexHeader)> {
+    let file =
+        File::open(path).context(format!("Failed to open index file {:?}", path.as_ref()))?;
+    let mut reader = BufReader::with_capacity(1 << 20, file);
+    let config = bincode::config::standard().with_fixed_int_encoding();
+
+    // Deserialise header
+    let header: IndexHeader =
+        decode_from_std_read(&mut reader, config).context("Failed to deserialise index header")?;
+    header.validate()?;
+
+    let minimizers = match header.format_version {
+        2 => load_minimizer_hashes_varint(reader)?,
+        3 => load_minimizer_hashes_fixedint(reader)?,
+        _ => unreachable!(),
+    };
 
     Ok((minimizers, header))
 }
 
 /// Helper function to write minimizers to output file or stdout
 pub fn write_minimizers(
-    minimizers: &FxHashSet<u64>,
+    count: usize,
+    minimizers: impl IntoIterator<Item = u64>,
     header: &IndexHeader,
     output_path: Option<&PathBuf>,
 ) -> Result<()> {
@@ -138,17 +182,23 @@ pub fn write_minimizers(
 
     // Serialise header and minimizers
     let mut writer = BufWriter::new(writer);
-    encode_into_std_write(header, &mut writer, bincode::config::standard())
+    // Use fixed-width little-endian encoding for all values.
+    let config = bincode::config::standard().with_fixed_int_encoding();
+    encode_into_std_write(header, &mut writer, config)
         .context("Failed to serialise index header")?;
 
     // Serialise the count of minimizers first
-    let count = minimizers.len();
-    encode_into_std_write(count, &mut writer, bincode::config::standard())
+    encode_into_std_write(count, &mut writer, config)
         .context("Failed to serialise minimizer count")?;
 
+    eprintln!("Sorting minimizer hashes..");
+    let mut hashes: Vec<_> = minimizers.into_iter().collect();
+    hashes.sort_unstable();
+
+    eprintln!("Writing minimizer hashes..");
     // Serialise each minimizer directly
-    for &hash in minimizers {
-        encode_into_std_write(hash, &mut writer, bincode::config::standard())
+    for hash in hashes {
+        encode_into_std_write(hash, &mut writer, config)
             .context("Failed to serialise minimizer hash")?;
     }
     Ok(())
@@ -201,8 +251,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
 
     // Init FxHashSet with user-specified capacity
     let capacity = config.capacity_millions * 1_000_000;
-    let mut all_minimizers: FxHashSet<u64> =
-        FxHashSet::with_capacity_and_hasher(capacity, Default::default());
+    let mut all_minimizers: HashSet = HashSet::with_capacity(capacity);
 
     eprintln!(
         "Building index (k={}, w={})",
@@ -261,7 +310,9 @@ pub fn build(config: &IndexConfig) -> Result<()> {
         for (i, hashes) in batch_results.iter().enumerate() {
             let (seq_data, id) = &batch[i];
 
-            all_minimizers.extend(hashes.iter());
+            for x in hashes {
+                all_minimizers.insert(*x);
+            }
 
             seq_count += 1;
             total_bp += seq_data.len();
@@ -293,7 +344,12 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     let header = IndexHeader::new(config.kmer_length, config.window_size);
 
     // Write to output path or stdout
-    write_minimizers(&all_minimizers, &header, config.output_path.as_ref())?;
+    write_minimizers(
+        all_minimizers.len(),
+        all_minimizers.iter(),
+        &header,
+        config.output_path.as_ref(),
+    )?;
 
     let total_time = start_time.elapsed();
     eprintln!("Completed in {:.2?}", total_time);
@@ -307,7 +363,7 @@ fn stream_diff_fastx<P: AsRef<Path>>(
     kmer_length: u8,
     window_size: u8,
     first_header: &IndexHeader,
-    first_minimizers: &mut FxHashSet<u64>,
+    first_minimizers: &mut FxHashSet,
 ) -> Result<(usize, usize)> {
     let path = fastx_path.as_ref();
 
@@ -440,7 +496,9 @@ pub fn diff<P: AsRef<Path>>(
     let start_time = Instant::now();
 
     // Load first file (always an index)
-    let (mut first_minimizers, header) = load_minimizer_hashes(&first)?;
+    let (first_minimizers, header) = load_minimizer_hashes(&first)?;
+    // Convert to FxHashSet which supports deletion.
+    let mut first_minimizers = FxHashSet::from_iter(first_minimizers.iter());
     eprintln!("First index: loaded {} minimizers", first_minimizers.len());
 
     // Guess if second file is an index or FASTX file
@@ -457,7 +515,12 @@ pub fn diff<P: AsRef<Path>>(
             first_minimizers.len()
         );
 
-        write_minimizers(&first_minimizers, &header, output)?;
+        write_minimizers(
+            first_minimizers.len(),
+            first_minimizers.iter().copied(),
+            &header,
+            output,
+        )?;
 
         let total_time = start_time.elapsed();
         eprintln!("Completed difference operation in {:.2?}", total_time);
@@ -505,7 +568,12 @@ pub fn diff<P: AsRef<Path>>(
                 first_minimizers.len()
             );
 
-            write_minimizers(&first_minimizers, &header, output)?;
+            write_minimizers(
+                first_minimizers.len(),
+                first_minimizers.iter().copied(),
+                &header,
+                output,
+            )?;
 
             let total_time = start_time.elapsed();
             eprintln!("Completed difference operation in {:.2?}", total_time);
@@ -519,8 +587,8 @@ pub fn diff<P: AsRef<Path>>(
     let before_count = first_minimizers.len();
 
     // Remove all hashes in second_minimizers from first_minimizers
-    for hash in &second_minimizers {
-        first_minimizers.remove(hash);
+    for hash in second_minimizers.iter() {
+        first_minimizers.remove(&hash);
     }
 
     // Report results
@@ -530,7 +598,12 @@ pub fn diff<P: AsRef<Path>>(
         first_minimizers.len()
     );
 
-    write_minimizers(&first_minimizers, &header, output)?;
+    write_minimizers(
+        first_minimizers.len(),
+        first_minimizers.iter().copied(),
+        &header,
+        output,
+    )?;
 
     let total_time = start_time.elapsed();
     eprintln!("Completed diff operation in {:.2?}", total_time);
@@ -554,6 +627,29 @@ pub fn info<P: AsRef<Path>>(index_path: P) -> Result<()> {
 
     let total_time = start_time.elapsed();
     eprintln!("Retrieved index info in {:.2?}", total_time);
+
+    Ok(())
+}
+
+pub fn convert_index<P: AsRef<Path>>(from: P, to: P) -> Result<()> {
+    let start_time = Instant::now();
+    let (minimizers, mut header) = load_minimizer_hashes(&from)?;
+    let load_time = start_time.elapsed();
+    eprintln!(
+        "Loaded index (k={}, w={}) in {:.2?}",
+        header.kmer_length, header.window_size, load_time
+    );
+    assert_eq!(header.format_version, 2);
+    header.format_version = 3;
+    let start_time = Instant::now();
+    write_minimizers(
+        minimizers.len(),
+        minimizers.iter(),
+        &header,
+        Some(&to.as_ref().to_owned()),
+    )?;
+    let write_time = start_time.elapsed();
+    eprintln!("Wrote index in {:.2?}", write_time);
 
     Ok(())
 }
@@ -627,8 +723,7 @@ pub fn union<P: AsRef<Path>>(
     }
 
     // Pre-allocate hash set with total capacity to avoid resizing
-    let mut all_minimizers: FxHashSet<u64> =
-        FxHashSet::with_capacity_and_hasher(total_capacity, Default::default());
+    let mut all_minimizers: HashSet = HashSet::with_capacity(total_capacity);
 
     // Now load and merge all indexes
     for (i, path) in inputs.iter().enumerate() {
@@ -636,7 +731,9 @@ pub fn union<P: AsRef<Path>>(
         let before_count = all_minimizers.len();
 
         // Merge minimizers (set union)
-        all_minimizers.extend(minimizers);
+        for h in minimizers.iter() {
+            all_minimizers.insert(h);
+        }
 
         let expected_count = headers_and_counts[i].1;
         eprintln!(
@@ -648,7 +745,7 @@ pub fn union<P: AsRef<Path>>(
         );
     }
 
-    write_minimizers(&all_minimizers, header, output)?;
+    write_minimizers(all_minimizers.len(), all_minimizers.iter(), header, output)?;
 
     let total_time = start_time.elapsed();
     eprintln!(
@@ -669,7 +766,7 @@ mod tests {
     fn test_header_creation() {
         let header = IndexHeader::new(31, 21);
 
-        assert_eq!(header.format_version, 2);
+        assert_eq!(header.format_version, 3);
         assert_eq!(header.kmer_length(), 31);
         assert_eq!(header.window_size(), 21);
     }
@@ -678,7 +775,7 @@ mod tests {
     fn test_header_validation() {
         // Valid header
         let valid_header = IndexHeader {
-            format_version: 2,
+            format_version: 3,
             kmer_length: 31,
             window_size: 21,
         };

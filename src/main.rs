@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use deacon::index::convert_index;
 use deacon::{
     DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig, diff_index, index_info,
     union_index,
@@ -173,6 +174,11 @@ enum IndexCommands {
         #[arg(short = 'o', long = "output", default_value = "-")]
         output: Option<PathBuf>,
     },
+    Convert {
+        /// Path to index file
+        from: PathBuf,
+        to: PathBuf,
+    },
 }
 
 #[cfg(feature = "server")]
@@ -317,6 +323,9 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             } => {
                 diff_index(first, second, *kmer_length, *window_size, output.as_ref())
                     .context("Failed to run index diff command")?;
+            }
+            IndexCommands::Convert { from, to } => {
+                convert_index(from, to)?;
             }
         },
         Commands::Filter {
