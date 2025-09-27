@@ -9,9 +9,9 @@
 
 // Re-export public functionality
 pub mod filter;
+mod hashset;
 pub mod index;
 pub mod minimizers;
-mod hashset;
 
 // Re-export the important structures and functions for library users
 pub use filter::{FilterSummary, run as run_filter};
@@ -21,8 +21,10 @@ pub use index::{
 pub use minimizers::{DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, compute_minimizer_hashes};
 
 use anyhow::Result;
-type FxHashSet = rustc_hash::FxHashSet<u64>;
+// Use insert-only hashset whenever possible.
 use hashset::U64HashSet as HashSet;
+// Fall back to proper FxHashSet for set operations.
+type FxHashSet = rustc_hash::FxHashSet<u64>;
 use std::path::{Path, PathBuf};
 
 pub struct FilterConfig<'a> {

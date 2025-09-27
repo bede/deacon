@@ -1,4 +1,5 @@
 use crate::FilterConfig;
+use crate::HashSet;
 use crate::index::load_minimizer_hashes_cached;
 use crate::minimizers::KmerHasher;
 use anyhow::{Context, Result};
@@ -17,7 +18,6 @@ use std::io::{self, BufWriter, Write};
 use std::iter::zip;
 use std::sync::Arc;
 use std::time::Instant;
-use crate::HashSet;
 use xxhash_rust;
 use zstd::stream::write::Encoder as ZstdEncoder;
 
