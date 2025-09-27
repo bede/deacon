@@ -96,6 +96,10 @@ pub fn load_minimizer_hashes_cached<P: AsRef<Path>>(
 fn load_minimizer_hashes_varint(mut reader: impl std::io::Read) -> Result<HashSet> {
     let config = bincode::config::standard();
 
+    println!(
+        "Use `deacon index convert <old> <new>` to upgrade the index to the faster and smaller v3 format."
+    );
+
     // Deserialise the count of minimizers so we can init a FxHashSet with the right capacity
     let count: usize = decode_from_std_read(&mut reader, config)
         .context("Failed to deserialise minimizer count")?;
@@ -126,7 +130,7 @@ fn load_minimizer_hashes_fixedint(mut reader: impl std::io::Read) -> Result<Hash
         reader.read_exact(batch).unwrap();
         for h in batch.as_chunks::<8>().0 {
             // Read as little-endian.
-            minimizers.insert(u64::from_le_bytes(*h));
+            minimizers.insert_in_order(u64::from_le_bytes(*h));
         }
     }
 
@@ -247,8 +251,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
 
     // Init FxHashSet with user-specified capacity
     let capacity = config.capacity_millions * 1_000_000;
-    let mut all_minimizers: HashSet =
-        HashSet::with_capacity(capacity);
+    let mut all_minimizers: HashSet = HashSet::with_capacity(capacity);
 
     eprintln!(
         "Building index (k={}, w={})",
@@ -341,7 +344,12 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     let header = IndexHeader::new(config.kmer_length, config.window_size);
 
     // Write to output path or stdout
-    write_minimizers(all_minimizers.len(), all_minimizers.iter(), &header, config.output_path.as_ref())?;
+    write_minimizers(
+        all_minimizers.len(),
+        all_minimizers.iter(),
+        &header,
+        config.output_path.as_ref(),
+    )?;
 
     let total_time = start_time.elapsed();
     eprintln!("Completed in {:.2?}", total_time);
@@ -507,7 +515,12 @@ pub fn diff<P: AsRef<Path>>(
             first_minimizers.len()
         );
 
-        write_minimizers(first_minimizers.len(), first_minimizers.iter().copied(), &header, output)?;
+        write_minimizers(
+            first_minimizers.len(),
+            first_minimizers.iter().copied(),
+            &header,
+            output,
+        )?;
 
         let total_time = start_time.elapsed();
         eprintln!("Completed difference operation in {:.2?}", total_time);
@@ -555,7 +568,12 @@ pub fn diff<P: AsRef<Path>>(
                 first_minimizers.len()
             );
 
-            write_minimizers(first_minimizers.len(), first_minimizers.iter().copied(), &header, output)?;
+            write_minimizers(
+                first_minimizers.len(),
+                first_minimizers.iter().copied(),
+                &header,
+                output,
+            )?;
 
             let total_time = start_time.elapsed();
             eprintln!("Completed difference operation in {:.2?}", total_time);
@@ -580,7 +598,12 @@ pub fn diff<P: AsRef<Path>>(
         first_minimizers.len()
     );
 
-    write_minimizers(first_minimizers.len(), first_minimizers.iter().copied(), &header, output)?;
+    write_minimizers(
+        first_minimizers.len(),
+        first_minimizers.iter().copied(),
+        &header,
+        output,
+    )?;
 
     let total_time = start_time.elapsed();
     eprintln!("Completed diff operation in {:.2?}", total_time);
@@ -619,7 +642,12 @@ pub fn convert_index<P: AsRef<Path>>(from: P, to: P) -> Result<()> {
     assert_eq!(header.format_version, 2);
     header.format_version = 3;
     let start_time = Instant::now();
-    write_minimizers(minimizers.len(), minimizers.iter(), &header, Some(&to.as_ref().to_owned()))?;
+    write_minimizers(
+        minimizers.len(),
+        minimizers.iter(),
+        &header,
+        Some(&to.as_ref().to_owned()),
+    )?;
     let write_time = start_time.elapsed();
     eprintln!("Wrote index in {:.2?}", write_time);
 
@@ -695,8 +723,7 @@ pub fn union<P: AsRef<Path>>(
     }
 
     // Pre-allocate hash set with total capacity to avoid resizing
-    let mut all_minimizers: HashSet =
-        HashSet::with_capacity(total_capacity);
+    let mut all_minimizers: HashSet = HashSet::with_capacity(total_capacity);
 
     // Now load and merge all indexes
     for (i, path) in inputs.iter().enumerate() {
