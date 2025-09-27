@@ -7,10 +7,8 @@
 
 use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
 use std::hint::select_unpredictable;
-use std::mem::transmute;
 type S = wide::i64x4;
 
-use rustc_hash::FxHashMap;
 use wide::CmpEq;
 
 fn mul_high(a: u64, b: usize) -> usize {
@@ -36,7 +34,7 @@ const BUCKET_SIZE: usize = 8;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(align(64))] // Cache line alignment
-struct Bucket([u64; BUCKET_SIZE]);
+struct Bucket([S; 2]);
 
 impl U64HashSet {
     pub fn with_capacity(n: usize) -> Self {
@@ -44,7 +42,7 @@ impl U64HashSet {
         let capacity = n * 15 / 10;
         eprintln!("CAPACITY {capacity:>10}");
         let buckets = capacity.div_ceil(BUCKET_SIZE);
-        let table = vec![Bucket([0u64; BUCKET_SIZE]); buckets + PADDING].into_boxed_slice();
+        let table = vec![Bucket([S::ZERO; 2]); buckets + PADDING].into_boxed_slice();
         Self {
             buckets,
             table,
@@ -65,12 +63,9 @@ impl U64HashSet {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = u64> {
-        std::iter::repeat_n(0, self.has_zero as usize).chain(
-            self.table
-                .iter()
-                .flat_map(|b| b.0.iter().copied())
-                .filter(|x| *x != 0),
-        )
+        let (prefix, flat, suffix) = unsafe { self.table.align_to::<u64>() };
+        assert!(prefix == &[] && suffix == &[]);
+        std::iter::repeat_n(0, self.has_zero as usize).chain(flat.iter().copied().filter(|x| *x != 0))
     }
 
     pub fn test(&self) {
@@ -80,7 +75,7 @@ impl U64HashSet {
                 let hash64 = x;
                 let bucket_i = mul_high(hash64, self.buckets);
 
-                let [h1, h2]: &[S; 2] = unsafe { transmute(&self.table[bucket_i]) };
+                let [h1, h2]: &[S; 2] = &self.table[bucket_i].0;
                 let c0 = h1.cmp_eq(S::ZERO).move_mask().count_ones() as usize;
                 let c1 = h2.cmp_eq(S::ZERO).move_mask().count_ones() as usize;
                 let elems = BUCKET_SIZE - c0 - c1;
@@ -111,7 +106,7 @@ impl U64HashSet {
         let mut sum = 0;
         let mut cnt = 0;
         for bucket in &self.table {
-            let [h1, h2]: &[S; 2] = unsafe { transmute(&bucket.0) };
+            let [h1, h2]: &[S; 2] = &bucket.0;
             let c0 = h1.cmp_eq(S::ZERO).move_mask().count_ones() as usize;
             let c1 = h2.cmp_eq(S::ZERO).move_mask().count_ones() as usize;
             let elems = BUCKET_SIZE - c0 - c1;
@@ -139,7 +134,6 @@ impl U64HashSet {
     pub fn prefetch(&self, key: u64) {
         let hash64 = key;
         let bucket_i = self.bucket_idx(hash64);
-        // Safety: bucket_mask is correct because the number of buckets is a power of 2.
         unsafe {
             _mm_prefetch::<_MM_HINT_T0>(
                 self.table.get_unchecked(bucket_i) as *const Bucket as *const i8
@@ -160,10 +154,7 @@ impl U64HashSet {
         let keys = S::splat(key as i64);
 
         loop {
-            use std::mem::transmute;
-            // Safety: bucket_mask is correct because the number of buckets is a power of 2.
-            let bucket = unsafe { self.table.get_unchecked(bucket_i) };
-            let [h1, h2]: &[S; 2] = unsafe { transmute(&bucket.0) };
+            let [h1, h2]: &[S; 2] = &self.table[bucket_i].0;
             let mask = (h1.cmp_eq(keys) | h2.cmp_eq(keys)).move_mask() as u8;
             if mask > 0 {
                 return true;
@@ -191,9 +182,8 @@ impl U64HashSet {
 
         let mut i = 0;
         loop {
-            // Safety: bucket_mask is correct because the number of buckets is a power of 2.
             let bucket = &mut self.table[bucket_i];
-            let [h1, h2]: &[S; 2] = unsafe { transmute(&bucket.0) };
+            let [h1, h2]: &[S; 2] = &bucket.0;
 
             let mask = (h1.cmp_eq(keys) | h2.cmp_eq(keys)).move_mask() as u8;
             if mask > 0 {
@@ -207,16 +197,14 @@ impl U64HashSet {
 
             if taken < BUCKET_SIZE {
                 let element_i = taken;
-                let element = &mut bucket.0[element_i];
-                if *element == 0 {
-                    self.hits += 1;
-                    *element = key;
-                    self.len += 1;
-                    self.skips = i;
-                    self.skips2 += i * i;
-                    return true;
-                }
-                panic!();
+                let element = &mut bucket.0[element_i / 4].as_array_mut()[element_i % 4];
+                assert_eq!(*element, 0);
+                self.hits += 1;
+                *element = key as i64;
+                self.len += 1;
+                self.skips = i;
+                self.skips2 += i * i;
+                return true;
             }
 
             bucket_i += 1;
@@ -249,6 +237,6 @@ impl U64HashSet {
         self.hits += 1;
         self.skips += self.last_b - bucket_i;
         self.skips2 += (self.last_b - bucket_i).pow(2);
-        self.table[self.last_b].0[self.last_j] = key;
+        self.table[self.last_b].0[self.last_j / 4].as_array_mut()[self.last_j % 4] = key as i64;
     }
 }
