@@ -14,12 +14,12 @@ pub mod index;
 pub mod minimizers;
 
 // Re-export the important structures and functions for library users
-pub use filter::{run as run_filter, FilterSummary};
+pub use filter::{FilterSummary, run as run_filter};
 pub use index::{
-    build as build_index, diff as diff_index, info as index_info, union as union_index, IndexHeader,
+    IndexHeader, build as build_index, diff as diff_index, info as index_info, union as union_index,
 };
 pub use minimizers::{
-    compute_minimizer_hashes, fill_minimizer_hashes, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE,
+    DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, compute_minimizer_hashes, fill_minimizer_hashes,
 };
 
 use anyhow::Result;

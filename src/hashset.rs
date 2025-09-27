@@ -65,7 +65,8 @@ impl U64HashSet {
     pub fn iter(&self) -> impl Iterator<Item = u64> {
         let (prefix, flat, suffix) = unsafe { self.table.align_to::<u64>() };
         assert!(prefix == &[] && suffix == &[]);
-        std::iter::repeat_n(0, self.has_zero as usize).chain(flat.iter().copied().filter(|x| *x != 0))
+        std::iter::repeat_n(0, self.has_zero as usize)
+            .chain(flat.iter().copied().filter(|x| *x != 0))
     }
 
     pub fn test(&self) {
@@ -237,6 +238,6 @@ impl U64HashSet {
         self.hits += 1;
         self.skips += self.last_b - bucket_i;
         self.skips2 += (self.last_b - bucket_i).pow(2);
-        self.table[self.last_b].0[self.last_j / 4].as_array_mut()[self.last_j] = key as i64;
+        self.table[self.last_b].0[self.last_j / 4].as_array_mut()[self.last_j % 4] = key as i64;
     }
 }
