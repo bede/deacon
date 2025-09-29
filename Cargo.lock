@@ -344,6 +344,7 @@ dependencies = [
  "simd-minimizers",
  "tempfile",
  "thiserror 2.0.16",
+ "wide",
  "xxhash-rust",
  "zstd",
 ]

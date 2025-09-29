@@ -34,6 +34,7 @@ parking_lot = "0.12"
 zstd = "0.13"
 indicatif = "0.17"
 liblzma = "0.3.1"
+wide = "0.7.33"
 
 [lints.clippy]
 too_many_arguments = "allow"

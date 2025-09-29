@@ -9,6 +9,7 @@
 
 // Re-export public functionality
 pub mod filter;
+mod hashset;
 pub mod index;
 pub mod minimizers;
 
@@ -20,7 +21,10 @@ pub use index::{
 pub use minimizers::{DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, compute_minimizer_hashes};
 
 use anyhow::Result;
-use rustc_hash::FxHashSet;
+// Use insert-only hashset whenever possible.
+use hashset::U64HashSet as HashSet;
+// Fall back to proper FxHashSet for set operations.
+type FxHashSet = rustc_hash::FxHashSet<u64>;
 use std::path::{Path, PathBuf};
 
 pub struct FilterConfig<'a> {
@@ -246,14 +250,14 @@ impl IndexConfig {
     }
 }
 
-pub fn load_minimizers(path: &Path) -> Result<(FxHashSet<u64>, index::IndexHeader)> {
+pub fn load_minimizers(path: &Path) -> Result<(HashSet, index::IndexHeader)> {
     index::load_minimizer_hashes(path)
 }
 
 pub fn write_minimizers(
-    minimizers: &FxHashSet<u64>,
+    minimizers: &HashSet,
     header: &index::IndexHeader,
     output_path: Option<&Path>,
 ) -> Result<()> {
-    index::write_minimizers(minimizers, header, output_path)
+    index::write_minimizers(minimizers.len(), minimizers.iter(), header, output_path)
 }

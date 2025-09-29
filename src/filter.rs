@@ -1,4 +1,5 @@
 use crate::FilterConfig;
+use crate::HashSet;
 use crate::index::load_minimizer_hashes_cached;
 use crate::minimizers::KmerHasher;
 use anyhow::{Context, Result};
@@ -222,7 +223,7 @@ pub struct FilterSummary {
 #[derive(Clone)]
 struct FilterProcessor {
     // Minimizer matching parameters
-    minimizer_hashes: &'static FxHashSet<u64>,
+    minimizer_hashes: &'static HashSet,
     kmer_length: u8,
     window_size: u8,
     abs_threshold: usize,
@@ -288,7 +289,7 @@ impl FilterProcessor {
         }
     }
     fn new(
-        minimizer_hashes: &'static FxHashSet<u64>,
+        minimizer_hashes: &'static HashSet,
         kmer_length: u8,
         window_size: u8,
         config: &FilterProcessorConfig,
@@ -336,7 +337,7 @@ impl FilterProcessor {
         let mut hit_kmers = Vec::new();
 
         for (&pos, &hash) in zip(positions, hashes) {
-            if self.minimizer_hashes.contains(&hash) && seen_hits.insert(hash) {
+            if self.minimizer_hashes.contains(hash) && seen_hits.insert(hash) {
                 // Extract the k-mer sequence at this position
                 if self.debug {
                     let pos = pos as usize;
@@ -417,7 +418,7 @@ impl FilterProcessor {
             num_minimizers += positions.len();
 
             for (&pos, &hash) in zip(positions, hashes) {
-                if self.minimizer_hashes.contains(&hash) && seen_hits.insert(hash) {
+                if self.minimizer_hashes.contains(hash) && seen_hits.insert(hash) {
                     // Extract the k-mer sequence at this position
                     if self.debug {
                         let pos = pos as usize;
