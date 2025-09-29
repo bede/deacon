@@ -5,7 +5,7 @@
 //! we may need to do longer probe sequences (each probe is 8 bytes, not 1 byte), but on the other hand we only take
 //! 1 cache miss per access, not 2.
 
-use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
 use std::hint::select_unpredictable;
 type S = wide::i64x4;
 
@@ -65,7 +65,8 @@ impl U64HashSet {
     pub fn iter(&self) -> impl Iterator<Item = u64> {
         let (prefix, flat, suffix) = unsafe { self.table.align_to::<u64>() };
         assert!(prefix == &[] && suffix == &[]);
-        std::iter::repeat_n(0, self.has_zero as usize).chain(flat.iter().copied().filter(|x| *x != 0))
+        std::iter::repeat_n(0, self.has_zero as usize)
+            .chain(flat.iter().copied().filter(|x| *x != 0))
     }
 
     pub fn test(&self) {
