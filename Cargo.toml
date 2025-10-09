@@ -68,8 +68,11 @@ path = "tests/filter_tests.rs"
 
 [profile.release]
 opt-level = 3
-lto = true
+lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = false
-debug = false
+debug = true
+
+[patch.crates-io]
+packed-seq = { git = 'https://github.com/rust-seq/packed-seq.git' }
