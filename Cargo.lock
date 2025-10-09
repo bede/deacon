@@ -1043,7 +1043,7 @@ checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 [[package]]
 name = "seq-hash"
 version = "0.1.0"
-source = "git+https://github.com/rust-seq/seq-hash.git?rev=afba51e#afba51edca82daef3874e082a15aab5975738c76"
+source = "git+https://github.com/rust-seq/seq-hash.git?rev=b7ede94#b7ede94964fb270ae482563230cd017c648da244"
 dependencies = [
  "packed-seq",
  "wide",
