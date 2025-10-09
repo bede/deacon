@@ -710,7 +710,7 @@ checksum = "a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad"
 [[package]]
 name = "packed-seq"
 version = "4.1.1"
-source = "git+https://github.com/rust-seq/packed-seq.git?rev=09997c1#09997c14b9d661f082a52b0659ade89d8816fe6b"
+source = "git+https://github.com/rust-seq/packed-seq.git?rev=34a251c#34a251cba1eec4ba56183a5435291ea0465e1caa"
 dependencies = [
  "cfg-if",
  "mem_dbg",
@@ -1043,7 +1043,7 @@ checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 [[package]]
 name = "seq-hash"
 version = "0.1.0"
-source = "git+https://github.com/rust-seq/seq-hash.git?rev=8ef9e15#8ef9e15368333d6df55f95bab66db9afd51cc2e6"
+source = "git+https://github.com/rust-seq/seq-hash.git?rev=afba51e#afba51edca82daef3874e082a15aab5975738c76"
 dependencies = [
  "packed-seq",
  "wide",
@@ -1107,7 +1107,7 @@ checksum = "d66dc143e6b11c1eddc06d5c423cfc97062865baf299914ab64caa38182078fe"
 [[package]]
 name = "simd-minimizers"
 version = "2.1.0"
-source = "git+https://github.com/rust-seq/simd-minimizers.git?rev=3f3487f#3f3487f4be88790c3448076817faa1bfd4030406"
+source = "git+https://github.com/rust-seq/simd-minimizers.git?rev=12601cb#12601cb29b9d112039b4d55759d26e53aaa7e773"
 dependencies = [
  "clap",
  "itertools",
