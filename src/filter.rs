@@ -58,14 +58,19 @@ fn check_input_paths(config: &FilterConfig) -> Result<()> {
     Ok(())
 }
 
-/// Gracefully handle empty files and non-empty files shorter than 5 bytes (niffler threshold)
+/// Check if file metadata len < 5 (catches empty uncompressed files only)
 fn is_empty_file(path: &str) -> Result<bool> {
     if path == "-" {
-        return Ok(false); // stdin is not considered empty
+        return Ok(false); // Can't check stdin
     }
     let metadata = std::fs::metadata(path)
         .map_err(|e| anyhow::anyhow!("Failed to read file metadata {}: {}", path, e))?;
-    Ok(metadata.len() < 5) // Niffler requires >=5 bytes to work
+    Ok(metadata.len() < 5)
+}
+
+/// Error thrown when paraseq reads empty compressed file
+fn is_empty_input_error(err: &anyhow::Error) -> bool {
+    err.to_string().contains("failed to fill whole buffer")
 }
 
 /// Create a paraseq reader from optional path (stdin if None or "-")
@@ -84,8 +89,7 @@ fn create_paraseq_reader(path: Option<&str>) -> Result<Reader<Box<dyn std::io::R
 }
 
 /// Format a single record into a buffer (FASTA/FASTQ format)
-///
-/// `seq` is the newline-free sequence corresponding to the record, obtained from `record.seq()`.
+/// `seq` is the newline-stripped sequence corresponding to the record from `record.seq()`.
 fn format_record_to_buffer<R: Record>(
     record: &R,
     seq: &[u8],
@@ -95,7 +99,7 @@ fn format_record_to_buffer<R: Record>(
 ) -> Result<()> {
     let is_fasta = record.qual().is_none();
 
-    // Header line
+    // Header
     buffer.write_all(if is_fasta { b">" } else { b"@" })?;
     if rename {
         buffer.extend_from_slice(counter.to_string().as_bytes());
@@ -104,13 +108,13 @@ fn format_record_to_buffer<R: Record>(
     }
     buffer.write_all(b"\n")?;
 
-    // Sequence line
+    // Sequence
     buffer.extend_from_slice(seq);
 
     if is_fasta {
         buffer.write_all(b"\n")?;
     } else {
-        // FASTQ: plus line and quality
+        // FASTQ: plus and qual lines
         buffer.write_all(b"\n+\n")?;
         if let Some(qual) = record.qual() {
             buffer.extend_from_slice(qual);
@@ -136,7 +140,7 @@ fn validate_compression_level(level: u8, min: u8, max: u8, format: &str) -> Resu
     }
 }
 
-// Return a file writer appropriate for the output path extension
+// Return a suitable writer for the output path extension
 #[cfg_attr(not(feature = "compression"), allow(unused_variables))]
 fn get_writer(output_path: Option<&std::path::Path>, compression_level: u8) -> Result<BoxedWriter> {
     let Some(path) = output_path else {
@@ -184,7 +188,7 @@ fn get_writer(output_path: Option<&std::path::Path>, compression_level: u8) -> R
     }
 }
 
-// JSON summary structure
+// JSON summary struct
 #[derive(Serialize, Deserialize)]
 pub struct FilterSummary {
     version: String,
@@ -797,7 +801,6 @@ pub fn run(config: &FilterConfig) -> Result<()> {
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
                 .template("{msg}")?,
         );
-        pb.set_message("Filtering");
         Some(Arc::new(Mutex::new(pb)))
     } else {
         None
@@ -826,7 +829,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         filtering_start_time,
     );
 
-    // Check for empty files and handle gracefully
+    // Check for empty files via metadata (fast path for uncompressed files <5 bytes)
     let input1_empty = is_empty_file(config.input_path)?;
     let input2_empty = config
         .input2_path
@@ -834,46 +837,73 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         .transpose()?
         .unwrap_or(false);
 
-    // If all input files are empty, skip processing entirely
-    if input1_empty && (config.input2_path.is_none() || input2_empty) {
-        if !quiet {
-            eprintln!("Input file(s) are empty, producing empty output");
-        }
-        // Skip the processing entirely - stats will remain at zero
+    // Process based on input type
+    let num_threads = if config.threads == 0 {
+        rayon::current_num_threads()
     } else {
-        // Process based on input type
-        let num_threads = if config.threads == 0 {
-            rayon::current_num_threads()
-        } else {
-            config.threads
-        };
+        config.threads
+    };
 
-        if paired_stdin {
-            // Interleaved paired stdin - use interleaved processor
-            let reader = create_paraseq_reader(Some("-"))?;
-            reader.process_parallel_interleaved(&mut processor, num_threads)?;
-        } else if let Some(input2_path) = config.input2_path {
-            // Paired files - handle empty files gracefully
-            if input1_empty || input2_empty {
-                if !quiet {
-                    eprintln!("One or both paired input files are empty, producing empty output");
+    if paired_stdin {
+        // Interleaved paired stdin - use interleaved processor
+        let reader = create_paraseq_reader(Some("-"))?;
+        reader.process_parallel_interleaved(&mut processor, num_threads)?;
+    } else if let Some(input2_path) = config.input2_path {
+        // Paired files - both must be empty or both non-empty
+        if input1_empty && input2_empty {
+            if !quiet {
+                eprintln!("Empty input file(s) detected");
+            }
+        } else if input1_empty || input2_empty {
+            return Err(anyhow::anyhow!(
+                "One paired file is empty but the other is not"
+            ));
+        } else {
+            // Try to create readers, catching empty compressed files
+            let r1_result = create_paraseq_reader(Some(config.input_path));
+            let r2_result = create_paraseq_reader(Some(input2_path));
+
+            match (r1_result, r2_result) {
+                (Ok(r1), Ok(r2)) => {
+                    r1.process_parallel_paired(r2, &mut processor, num_threads)?;
                 }
-                // Skip processing when either paired file is empty
-            } else {
-                let r1_reader = create_paraseq_reader(Some(config.input_path))?;
-                let r2_reader = create_paraseq_reader(Some(input2_path))?;
-                r1_reader.process_parallel_paired(r2_reader, &mut processor, num_threads)?;
+                (Err(e1), Err(e2)) if is_empty_input_error(&e1) && is_empty_input_error(&e2) => {
+                    if !quiet {
+                        eprintln!("Empty input file(s) detected");
+                    }
+                }
+                (Err(e), _) if is_empty_input_error(&e) => {
+                    return Err(anyhow::anyhow!(
+                        "First paired file appears empty while second is not"
+                    ));
+                }
+                (_, Err(e)) if is_empty_input_error(&e) => {
+                    return Err(anyhow::anyhow!(
+                        "Second paired file appears empty while first is not"
+                    ));
+                }
+                (Err(e), _) => return Err(e),
+                (_, Err(e)) => return Err(e),
+            }
+        }
+    } else {
+        // Single file or stdin
+        if input1_empty {
+            if !quiet {
+                eprintln!("Empty input file(s) detected");
             }
         } else {
-            // Single file or stdin
-            if input1_empty {
-                if !quiet {
-                    eprintln!("Input file is empty, producing empty output");
+            // Try to create reader, catching empty compressed files
+            match create_paraseq_reader(Some(config.input_path)) {
+                Ok(reader) => {
+                    reader.process_parallel(&mut processor, num_threads)?;
                 }
-                // Skip processing for empty single file
-            } else {
-                let reader = create_paraseq_reader(Some(config.input_path))?;
-                reader.process_parallel(&mut processor, num_threads)?;
+                Err(e) if is_empty_input_error(&e) => {
+                    if !quiet {
+                        eprintln!("Empty input file(s) detected");
+                    }
+                }
+                Err(e) => return Err(e),
             }
         }
     }
