@@ -1107,7 +1107,7 @@ checksum = "d66dc143e6b11c1eddc06d5c423cfc97062865baf299914ab64caa38182078fe"
 [[package]]
 name = "simd-minimizers"
 version = "2.1.0"
-source = "git+https://github.com/rust-seq/simd-minimizers.git?rev=674c28a#674c28ae96a0543f0e0a340955da2ac5db2eb1f3"
+source = "git+https://github.com/rust-seq/simd-minimizers.git?rev=0d55265#0d55265280affd5e68ed1d5695929053f981e8dc"
 dependencies = [
  "clap",
  "itertools",
