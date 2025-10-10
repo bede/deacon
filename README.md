@@ -9,9 +9,9 @@
 
 <div align="center"><img src="deacon.png" width="180" alt="Logo"></div>
 
-Search and deplete FASTA/FASTQ files and streams at gigabases per second using accelerated minimizer matching. Default parameters balance sensitivity and specificity for the application of microbial metagenomic host depletion, for which a validated prebuilt index is available. Classification sensitivity, specificity and memory requirements may be tuned by varying *k*-mer length (`-k`), window size (`-w`), and the two match thresholds (`-a` and `-r`). Minimizer `k` and `w` are chosen at index time, while the match thresholds can be chosen at filter time. To be considered a match, sequences must meet *both* an absolute threshold (`-a`, default 2 minimizer hits) and a relative threshold (`-r`, default 0.01 or 1% of minimizers). Paired sequences are fully supported: a match in either mate causes both mates in the pair to be retained or discarded; `deacon filter` retains only matches by default (search mode) and discards matches in `--deplete` mode. Deacon reports live filtering performance during execution and optionally writes a JSON `--summary` upon completion. Sequences can optionally be renamed using `--rename` for privacy and smaller file sizes. Gzip, zst and xz compression formats are natively supported and detected by file extension. Other source formats can be converted to FASTA or FASTQ and piped into Deacon using stdin.
+Deacon filters DNA sequences in FASTA/Q files and streams using accelerated minimizer comparison with an indexed query sequence, emitting either matching sequences (**search mode**), or sequences without matches (**deplete mode**). Sequences are matched when they shared enough distinct minimizers with the indexed query to exceed specified absolute and relative thresholds. Query size has little impact on filtering speed, enabling ultrafast search and depletion with gene-, genome- and pangenome-scale queries using a laptop. Deacon filters uncompressed FASTA/Q at gigabases per second on contemporary AMD, Intel (`x86_64`), and Apple `arm64` systems, making it much faster than alternatives. Deacon is built with panhuman host depletion in mind, delivering [leading classification accuracy](https://doi.org/10.1101/2025.06.09.658732) for this application with unrivalled speed and a 5GB memory footprint.
 
-Deacon can filter compressed long reads at ~500Mbp/s, paired short reads at ~250Mbp/s, and index a human genome in 20s on Apple M1 Pro. x86_64 performance is comparable, and 3Gbp/s was recorded with uncompressed long reads on a 32 core amd64 system. For best performance, compressing reads with Zstandard ([`zstd --long`](https://log.bede.im/2025/09/12/zstandard-long-range-genomes.html)) rather than Gzip is recommended. Peak memory usage during filtering is ~5GB for the default panhuman index.
+Default parameters are carefully chosen but easily changed. Classification sensitivity, specificity and memory requirements may be tuned by varying *k*-mer length (`-k`), window size (`-w`), absolute match threshold (`-a`) and relative match threshold (`-r`) . Minimizer `k` and `w` are chosen at index time, while the match thresholds can be chosen at filter time. Matching sequences are those that share enough distinct minimizers with the indexed query to exceed *both* the absolute threshold (`-a`, default 2 shared minimizers) and the relative threshold (`-r`, default 0.01 [1%] shared minimizers). Paired sequences are fully supported: a match in either mate causes both mates in the pair to be matched; `deacon filter` retains  matches by default (search mode) and discards matches in `--deplete` mode. Deacon reports live filtering performance during execution and optionally writes a JSON `--summary` upon completion. Sequences can optionally be renamed using `--rename` for privacy and smaller file sizes. Gzip, zst and xz compression formats are natively supported and detected by file extension. Other source formats can be converted to FASTA or FASTQ for consumption by Deacon via stdin.
 
 Benchmarks for panhuman host depletion of complex microbial metagenomes are described in a [preprint](https://www.biorxiv.org/content/10.1101/2025.06.09.658732v1). Among tested approaches, Deacon with the panhuman-1 (*k*=31, w=15) index exhibited the highest balanced accuracy for both long and short simulated reads. Deacon was however less specific than Hostile for short reads.
 
@@ -34,23 +34,25 @@ conda install -c bioconda deacon
 
 ## Usage
 
-### Indexing
+### Indexing search queries
 
-Use `deacon index build` to quickly build custom indexes. For human host depletion, the prebuilt validated panhuman index is recommended, available for download below from Zenodo or fast object storage provided by the [ModMedMicro research unit](https://www.expmedndm.ox.ac.uk/modernising-medical-microbiology) at the University of Oxford.
+Use `deacon index build` to index a search query. For panhuman host depletion, skip this step and download the validated `panhuman-1` index from the table below.
 
 ```shell
-deacon index build chm13v2.fa > chm13v2.k31w15.idx
+deacon index build chm13v2.fa > human.k31w15.idx
 
-# Discard low complexity minimizers during indexing
+# Discard low complexity minimizers
 deacon index build -e 0.5 chm13v2.fa > human.k31w15e5.idx
 ```
 
+*N.B. Indexing a human genome takes <30s and uses 18GB of RAM. Filtering uses 5GB of RAM.*
+
 #### Prebuilt indexes
 
-|                           Name/URL                           |                         Composition                          | Minimizers  | Subtracted minimizers | Size  | Date    |
+|                          Name & URL                          |                         Composition                          | Minimizers  | Subtracted minimizers | Size  | Date    |
 | :----------------------------------------------------------: | :----------------------------------------------------------: | ----------- | --------------------- | ----- | ------- |
-| **panhuman-1 (*k*=31, *w*=15)** [Cloud](https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panhuman-1.k31w15.idx), [Zenodo](https://zenodo.org/records/17288185) | [HPRC Year 1](https://github.com/human-pangenomics/HPP_Year1_Assemblies/blob/main/assembly_index/Year1_assemblies_v2_genbank.index) ∪ [`CHM13v2.0`](https://www.ncbi.nlm.nih.gov/assembly/11828891) ∪ [`GRCh38.p14`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001405.40) - bacteria (FDA-ARGOS) - viruses (RefSeq) | 409,907,949 | 20,671 (**0.0050%**)  | 3.3GB | 2025-04 |
-| **panmouse-1 (k=31, w=15, e=0.5)** [Cloud](https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panmouse-1.k31w15e05.idx) | [`GRCm39`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001635.27) ∪ [`PRJEB47108`](https://www.ebi.ac.uk/ena/browser/view/PRJEB47108?show=sequences) - bacteria (FDA-ARGOS) - viruses (RefSeq) | 548,328,389 | 8,243 (**0.0015%**)   | 4.4GB | 2025-08 |
+| **`panhuman-1` (*k*=31, *w*=15)** [Cloud](https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panhuman-1.k31w15.idx), [Zenodo](https://zenodo.org/records/17288185) | [HPRC Year 1](https://github.com/human-pangenomics/HPP_Year1_Assemblies/blob/main/assembly_index/Year1_assemblies_v2_genbank.index) ∪ [`CHM13v2.0`](https://www.ncbi.nlm.nih.gov/assembly/11828891) ∪ [`GRCh38.p14`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001405.40) - bacteria (FDA-ARGOS) - viruses (RefSeq) | 409,907,949 | 20,671 (**0.0050%**)  | 3.3GB | 2025-04 |
+| **`panmouse-1` (k=31, w=15, e=0.5)** [Cloud](https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panmouse-1.k31w15e05.idx) | [`GRCm39`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001635.27) ∪ [`PRJEB47108`](https://www.ebi.ac.uk/ena/browser/view/PRJEB47108?show=sequences) - bacteria (FDA-ARGOS) - viruses (RefSeq) | 548,328,389 | 8,243 (**0.0015%**)   | 4.4GB | 2025-08 |
 
 #### Index compatibility
 
@@ -63,7 +65,7 @@ Deacon `0.11.0` and above uses index format version 3. Using version 3 indexes w
 
 ### Filtering
 
-The main command `deacon filter` accepts an index path followed by up to two query FASTA/FASTQ file paths, depending on whether query sequences originate from stdin, a single file, or paired input files. Paired queries are supported as either separate files or interleaved stdin, and written interleaved to either stdout or file, or else to separate paired output files. For paired reads, distinct minimizer hits originating from either mate are counted. By default, query sequences must meet both an absolute threshold of 2 minimizer hits (`-a 2`) and a relative threshold of 1% of minimizers (`-r 0.01`) to pass the filter. Filtering can be inverted for e.g. host depletion using the `--deplete` (`-d`) flag. Gzip, Zstandard, and xz compression formats are detected automatically by file extension.
+The main command `deacon filter` accepts an index path followed by up to two FASTA/FASTQ file paths, depending on whether input sequences originate from stdin, a single file, or paired input files. Paired queries are supported as either separate files or interleaved stdin, and written interleaved to either stdout or file, or else to separate paired output files. For paired reads, distinct minimizer hits originating from either mate are counted. By default, input sequences must meet both an absolute threshold of 2 minimizer hits (`-a 2`) and a relative threshold of 1% of minimizers (`-r 0.01`) to pass the filter. Filtering can be inverted for e.g. host depletion using the `--deplete` (`-d`) flag. Gzip, Zstandard, and xz compression formats are detected automatically by file extension.
 
 **Examples**
 
