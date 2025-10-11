@@ -75,6 +75,6 @@ strip = false
 debug = true
 
 [patch.crates-io]
-packed-seq = { git = 'https://github.com/rust-seq/packed-seq.git', rev = 'e9764be' }
-seq-hash = { git = 'https://github.com/rust-seq/seq-hash.git', rev = 'b7ede94' }
-simd-minimizers = { git = 'https://github.com/rust-seq/simd-minimizers.git', rev = '0d55265' }
+packed-seq = { git = 'https://github.com/rust-seq/packed-seq.git', rev = '12c58ba' }
+seq-hash = { git = 'https://github.com/rust-seq/seq-hash.git', rev = '271e26e' }
+simd-minimizers = { git = 'https://github.com/rust-seq/simd-minimizers.git', rev = '174144a' }
