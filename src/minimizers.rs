@@ -1,4 +1,4 @@
-use packed_seq::{SeqVec, unpack_base};
+use packed_seq::{SeqVec, complement_base, unpack_base};
 
 use crate::filter::Buffers;
 
@@ -10,10 +10,9 @@ pub fn decode_u64(minimizer: u64, k: u8) -> Vec<u8> {
     (0..k)
         .map(|i| {
             let base_bits = ((minimizer >> (2 * i)) & 0b11) as u8;
-            // We seem to need to XOR the packed-seq version to get the complement?
-            unpack_base(base_bits ^ 0b10)
+            unpack_base(complement_base(base_bits))
         })
-        .rev() // Reverse because we extracted LSB first
+        .rev()
         .collect()
 }
 
@@ -22,8 +21,7 @@ pub fn decode_u128(minimizer: u128, k: u8) -> Vec<u8> {
     (0..k)
         .map(|i| {
             let base_bits = ((minimizer >> (2 * i)) & 0b11) as u8;
-            // We seem to need to XOR the packed-seq version to get the complement?
-            unpack_base(base_bits ^ 0b10)
+            unpack_base(complement_base(base_bits))
         })
         .rev()
         .collect()
