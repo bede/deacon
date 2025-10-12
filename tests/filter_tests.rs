@@ -1466,9 +1466,220 @@ fn test_filter_empty_file() {
 }
 
 #[test]
+fn test_filter_empty_gzip_file() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let empty_gz_file = temp_dir.path().join("empty.fastq.gz");
+    let output_path = temp_dir.path().join("output.fastq");
+    let summary_path = temp_dir.path().join("summary.json");
+
+    create_test_fasta(&fasta_path);
+    build_index(&fasta_path, &bin_path);
+
+    // Create empty gzip file
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+
+    let file = File::create(&empty_gz_file).unwrap();
+    let mut encoder = GzEncoder::new(file, Compression::default());
+    encoder.write_all(b"").unwrap();
+    encoder.finish().unwrap();
+
+    Command::cargo_bin("deacon")
+        .unwrap()
+        .arg("filter")
+        .arg(&bin_path)
+        .arg(&empty_gz_file)
+        .arg("--output")
+        .arg(&output_path)
+        .arg("--summary")
+        .arg(&summary_path)
+        .assert()
+        .success();
+
+    // Verify empty output
+    assert!(
+        output_path.exists(),
+        "Output file should be created for empty gzip file"
+    );
+    let output_content = fs::read_to_string(&output_path).unwrap();
+    assert!(
+        output_content.is_empty(),
+        "Output should be empty for empty gzip file"
+    );
+
+    // Verify JSON summary
+    let summary_content = fs::read_to_string(&summary_path).unwrap();
+    let summary: serde_json::Value = serde_json::from_str(&summary_content).unwrap();
+
+    assert_eq!(
+        summary["bp_in"].as_u64().unwrap(),
+        0,
+        "bp_in should be 0 for empty gzip file"
+    );
+    assert_eq!(
+        summary["seqs_in"].as_u64().unwrap(),
+        0,
+        "seqs_in should be 0 for empty gzip file"
+    );
+    assert_eq!(
+        summary["bp_out"].as_u64().unwrap(),
+        0,
+        "bp_out should be 0 for empty gzip file"
+    );
+    assert_eq!(
+        summary["seqs_out"].as_u64().unwrap(),
+        0,
+        "seqs_out should be 0 for empty gzip file"
+    );
+}
+
+#[cfg(feature = "compression")]
+#[test]
+fn test_filter_empty_zstd_file() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let empty_zst_file = temp_dir.path().join("empty.fastq.zst");
+    let output_path = temp_dir.path().join("output.fastq");
+    let summary_path = temp_dir.path().join("summary.json");
+
+    create_test_fasta(&fasta_path);
+    build_index(&fasta_path, &bin_path);
+
+    // Create empty zstd file
+    use std::io::Write;
+
+    let file = File::create(&empty_zst_file).unwrap();
+    let mut encoder = zstd::stream::write::Encoder::new(file, 3).unwrap();
+    encoder.write_all(b"").unwrap();
+    encoder.finish().unwrap();
+
+    Command::cargo_bin("deacon")
+        .unwrap()
+        .arg("filter")
+        .arg(&bin_path)
+        .arg(&empty_zst_file)
+        .arg("--output")
+        .arg(&output_path)
+        .arg("--summary")
+        .arg(&summary_path)
+        .assert()
+        .success();
+
+    // Verify empty output
+    assert!(
+        output_path.exists(),
+        "Output file should be created for empty zstd file"
+    );
+    let output_content = fs::read_to_string(&output_path).unwrap();
+    assert!(
+        output_content.is_empty(),
+        "Output should be empty for empty zstd file"
+    );
+
+    // Verify JSON summary
+    let summary_content = fs::read_to_string(&summary_path).unwrap();
+    let summary: serde_json::Value = serde_json::from_str(&summary_content).unwrap();
+
+    assert_eq!(
+        summary["bp_in"].as_u64().unwrap(),
+        0,
+        "bp_in should be 0 for empty zstd file"
+    );
+    assert_eq!(
+        summary["seqs_in"].as_u64().unwrap(),
+        0,
+        "seqs_in should be 0 for empty zstd file"
+    );
+    assert_eq!(
+        summary["bp_out"].as_u64().unwrap(),
+        0,
+        "bp_out should be 0 for empty zstd file"
+    );
+    assert_eq!(
+        summary["seqs_out"].as_u64().unwrap(),
+        0,
+        "seqs_out should be 0 for empty zstd file"
+    );
+}
+
+#[cfg(feature = "compression")]
+#[test]
+fn test_filter_empty_xz_file() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let empty_xz_file = temp_dir.path().join("empty.fastq.xz");
+    let output_path = temp_dir.path().join("output.fastq");
+    let summary_path = temp_dir.path().join("summary.json");
+
+    create_test_fasta(&fasta_path);
+    build_index(&fasta_path, &bin_path);
+
+    // Create empty xz file
+    use std::io::Write;
+
+    let file = File::create(&empty_xz_file).unwrap();
+    let mut encoder = liblzma::write::XzEncoder::new(file, 6);
+    encoder.write_all(b"").unwrap();
+    encoder.finish().unwrap();
+
+    Command::cargo_bin("deacon")
+        .unwrap()
+        .arg("filter")
+        .arg(&bin_path)
+        .arg(&empty_xz_file)
+        .arg("--output")
+        .arg(&output_path)
+        .arg("--summary")
+        .arg(&summary_path)
+        .assert()
+        .success();
+
+    // Verify empty output
+    assert!(
+        output_path.exists(),
+        "Output file should be created for empty xz file"
+    );
+    let output_content = fs::read_to_string(&output_path).unwrap();
+    assert!(
+        output_content.is_empty(),
+        "Output should be empty for empty xz file"
+    );
+
+    // Verify JSON summary
+    let summary_content = fs::read_to_string(&summary_path).unwrap();
+    let summary: serde_json::Value = serde_json::from_str(&summary_content).unwrap();
+
+    assert_eq!(
+        summary["bp_in"].as_u64().unwrap(),
+        0,
+        "bp_in should be 0 for empty xz file"
+    );
+    assert_eq!(
+        summary["seqs_in"].as_u64().unwrap(),
+        0,
+        "seqs_in should be 0 for empty xz file"
+    );
+    assert_eq!(
+        summary["bp_out"].as_u64().unwrap(),
+        0,
+        "bp_out should be 0 for empty xz file"
+    );
+    assert_eq!(
+        summary["seqs_out"].as_u64().unwrap(),
+        0,
+        "seqs_out should be 0 for empty xz file"
+    );
+}
+
+#[test]
 fn test_filter_4_byte_record() {
     // Test filtering 4-byte FASTA record (>a\nA)
-    // Should produce empty output with "Input file(s) are empty" message
+    // Should produce empty output with "Empty input file(s) detected" message
     // This is NOT the case for stdin which is not validated by niffler
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("mn908947.fasta");
@@ -1493,7 +1704,7 @@ fn test_filter_4_byte_record() {
         .arg(&output_path)
         .assert()
         .success()
-        .stderr(predicates::str::contains("Input file(s) are empty"));
+        .stderr(predicates::str::contains("Empty input file(s) detected"));
 
     // Verify empty output
     let output_content = fs::read_to_string(&output_path).unwrap();
