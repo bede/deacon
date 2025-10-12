@@ -1756,3 +1756,41 @@ fn test_filter_5_byte_record() {
         "Output should contain single base"
     );
 }
+
+#[test]
+fn test_fastq_parsing_no_trailing_newline() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output_path = temp_dir.path().join("filtered.fastq");
+
+    let fasta_content = ">ref\nTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\n";
+    fs::write(&fasta_path, fasta_content).unwrap();
+
+    // FASTQ with two short 4bp records (no trailing newline; broken in paraseq < 0.4.3)
+    let fastq_content = "@id1\nACGT\n+\n----\n@id2\nACGT\n+\n----";
+    fs::write(&fastq_path, fastq_content).unwrap();
+
+    build_index(&fasta_path, &bin_path);
+
+    // Run filter in deplete mode with minimal thresholds
+    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    cmd.arg("filter")
+        .arg("--deplete")
+        .arg("-a")
+        .arg("1")
+        .arg("-r")
+        .arg("0")
+        .arg(&bin_path)
+        .arg(&fastq_path)
+        .arg("--output")
+        .arg(&output_path)
+        .assert()
+        .success();
+
+    // Check both are retained
+    let output_content = fs::read_to_string(&output_path).unwrap();
+    let record_count = output_content.matches("@id").count();
+    assert_eq!(record_count, 2, "Output should contaimn 2 records");
+}
