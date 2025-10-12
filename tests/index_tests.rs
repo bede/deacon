@@ -349,3 +349,44 @@ fn test_index_diff_auto_detect_parameters() {
         "Auto-detected and explicit parameters should produce identical results"
     );
 }
+
+#[test]
+fn test_index_dump() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("test.fasta");
+    let bin_path = temp_dir.path().join("test.bin");
+    let dump_path = temp_dir.path().join("dump.fa");
+
+    // All As
+    let test_sequence = ">test\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n";
+    fs::write(&fasta_path, test_sequence).unwrap();
+
+    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    cmd.arg("index")
+        .arg("build")
+        .arg(&fasta_path)
+        .arg("-o")
+        .arg(&bin_path)
+        .assert()
+        .success();
+
+    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    cmd.arg("index")
+        .arg("dump")
+        .arg(&bin_path)
+        .arg("-o")
+        .arg(&dump_path)
+        .assert()
+        .success();
+
+    // Check dump contains exactly one minimizer
+    let dump_content = fs::read_to_string(&dump_path).unwrap();
+    let lines: Vec<&str> = dump_content.trim().lines().collect();
+
+    assert_eq!(lines.len(), 2, "Should have one record");
+    assert_eq!(lines[0], ">1", "Header should be '>1'");
+    assert_eq!(
+        lines[1], "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+        "Should be 31 Ts (canonical minimizer)"
+    );
+}

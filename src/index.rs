@@ -174,16 +174,11 @@ pub fn dump_minimizers(
     output_path: Option<&Path>,
 ) -> Result<()> {
     // Create writer based on output path
-    let mut writer: BufWriter<Box<dyn Write>> = if let Some(path) = output_path {
-        if path.as_os_str() == "-" {
-            BufWriter::new(Box::new(io::stdout()))
-        } else {
-            BufWriter::new(Box::new(
-                File::create(path).context("Failed to create output file")?,
-            ))
-        }
-    } else {
-        BufWriter::new(Box::new(io::stdout()))
+    let mut writer: BufWriter<Box<dyn Write>> = match output_path {
+        Some(path) if path.as_os_str() != "-" => BufWriter::new(Box::new(
+            File::create(path).context("Failed to create output file")?,
+        )),
+        _ => BufWriter::new(Box::new(io::stdout())),
     };
 
     // Use fixed-width little-endian encoding for all values.
@@ -218,6 +213,44 @@ pub fn dump_minimizers(
             }
         }
     }
+    Ok(())
+}
+
+/// Dump indexed minimizers to FASTA
+pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
+    // Load the index
+    let (minimizers, header) = load_minimizers(index_path).context("Failed to load index")?;
+
+    // Create writer based on output path
+    let mut writer: BufWriter<Box<dyn Write>> = match output_path {
+        Some(path) if path.as_os_str() != "-" => BufWriter::new(Box::new(
+            File::create(path).context("Failed to create output file")?,
+        )),
+        _ => BufWriter::new(Box::new(io::stdout())),
+    };
+
+    // Write FASTA
+    let mut counter = 0;
+    match minimizers {
+        crate::MinimizerSet::U64(set) => {
+            for &minimizer in &set {
+                counter += 1;
+                let sequence = crate::minimizers::decode_u64(minimizer, header.kmer_length);
+                writeln!(writer, ">{}", counter)?;
+                writeln!(writer, "{}", String::from_utf8_lossy(&sequence))?;
+            }
+        }
+        crate::MinimizerSet::U128(set) => {
+            for &minimizer in &set {
+                counter += 1;
+                let sequence = crate::minimizers::decode_u128(minimizer, header.kmer_length);
+                writeln!(writer, ">{}", counter)?;
+                writeln!(writer, "{}", String::from_utf8_lossy(&sequence))?;
+            }
+        }
+    }
+
+    writer.flush()?;
     Ok(())
 }
 

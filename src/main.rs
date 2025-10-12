@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use deacon::{
-    DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig, diff_index, index_info,
-    union_index,
+    DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig, diff_index, dump_index,
+    index_info, union_index,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -177,6 +177,15 @@ enum IndexCommands {
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
     },
+    /// Dump minimizer index to fasta
+    Dump {
+        /// Path to index file
+        index: PathBuf,
+
+        /// Path to output file (stdout if not specified)
+        #[arg(short = 'o', long = "output")]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -325,6 +334,9 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                     output.as_deref(),
                 )
                 .context("Failed to run index diff command")?;
+            }
+            IndexCommands::Dump { index, output } => {
+                dump_index(index, output.as_deref()).context("Failed to run index dump command")?;
             }
         },
         Commands::Filter {
