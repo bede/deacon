@@ -159,7 +159,7 @@ Options:
 
 ```bash
 $ deacon index -h
-Create and compose minimizer indexes
+Build, compose and inspect minimizer indexes
 
 Usage: deacon index <COMMAND>
 
@@ -168,6 +168,7 @@ Commands:
   info   Show index information
   union  Combine multiple minimizer indexes (A ∪ B…)
   diff   Subtract minimizers in one index from another (A - B)
+  dump   Dump minimizer index to fasta
   help   Print this message or the help of the given subcommand(s)
 
 Options:
@@ -185,17 +186,17 @@ Arguments:
 
 Options:
   -k <KMER_LENGTH>
-          K-mer length used for indexing (1-32) [default: 31]
+          K-mer length used for indexing (k+w-1 must be <= 96 and odd) [default: 31]
   -w <WINDOW_SIZE>
           Minimizer window size used for indexing [default: 15]
   -o, --output <OUTPUT>
-          Path to output file (- for stdout) [default: -]
+          Path to output file (stdout if not specified)
   -t, --threads <THREADS>
           Number of execution threads (0 = auto) [default: 8]
   -q, --quiet
           Suppress sequence header output
   -e, --entropy-threshold <ENTROPY_THRESHOLD>
-          Minimum scaled entropy threshold for k-mer filtering (0.0-1.0)
+          Minimum scaled entropy threshold for k-mer filtering (0.0-1.0) [default: 0.0]
   -h, --help
           Print help
 ```

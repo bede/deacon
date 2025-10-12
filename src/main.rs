@@ -26,7 +26,7 @@ enum Commands {
         #[command(subcommand)]
         command: ServerCommands,
     },
-    /// Build and compose minimizer indexes
+    /// Build, compose and inspect minimizer indexes
     Index {
         #[command(subcommand)]
         command: IndexCommands,
