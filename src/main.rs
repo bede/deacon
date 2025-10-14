@@ -21,17 +21,12 @@ struct Cli {
 
 #[derive(Subcommand, Serialize, Deserialize)]
 enum Commands {
-    /// Start/stop a server process for reduced latency filtering
-    Server {
-        #[command(subcommand)]
-        command: ServerCommands,
-    },
     /// Build, compose and inspect minimizer indexes
     Index {
         #[command(subcommand)]
         command: IndexCommands,
     },
-    /// Retain or deplete sequence records with sufficient minimizer hits to an index
+    /// Retain or deplete sequence records with sufficient minimizer hits to an indexed query
     Filter {
         /// Path to minimizer index file
         index: PathBuf,
@@ -91,6 +86,13 @@ enum Commands {
         #[arg(short = 'q', long = "quiet", default_value_t = false)]
         quiet: bool,
     },
+    /// Start/stop a server process for reduced latency filtering
+    Server {
+        #[command(subcommand)]
+        command: ServerCommands,
+    },
+    /// Show citation information
+    Cite,
 }
 
 #[derive(Subcommand, Serialize, Deserialize)]
@@ -135,11 +137,6 @@ enum IndexCommands {
         /// Minimum scaled entropy threshold for k-mer filtering (0.0-1.0)
         #[arg(short = 'e', long = "entropy-threshold", default_value = "0.0")]
         entropy_threshold: f32,
-    },
-    /// Show index information
-    Info {
-        /// Path to index file
-        index: PathBuf,
     },
     /// Combine multiple minimizer indexes (A ∪ B…)
     Union {
@@ -186,6 +183,11 @@ enum IndexCommands {
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
     },
+    /// Show index information
+    Info {
+        /// Path to index file
+        index: PathBuf,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -194,6 +196,13 @@ enum Message {
     Command(Commands),
     /// server -> client
     Done,
+}
+
+fn print_citation() {
+    println!("Bede Constantinides, John Lees, Derrick W Crook.");
+    println!("\"Deacon: fast sequence filtering and contaminant depletion\"");
+    println!("bioRxiv 2025.06.09.658732");
+    println!("https://doi.org/10.1101/2025.06.09.658732");
 }
 
 fn main() -> Result<()> {
@@ -284,6 +293,9 @@ fn main() -> Result<()> {
 
 fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
     match &command {
+        Commands::Cite => {
+            print_citation();
+        }
         Commands::Server { .. } => {
             unreachable!("Server commands are handled before this function is called")
         }
