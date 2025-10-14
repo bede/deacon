@@ -390,3 +390,49 @@ fn test_index_dump() {
         "Should be 31 Ts (canonical minimizer)"
     );
 }
+
+#[test]
+fn test_index_intersect() {
+    let temp_dir = tempdir().unwrap();
+    let fasta1_path = temp_dir.path().join("test1.fasta");
+    let fasta2_path = temp_dir.path().join("test2.fasta");
+    let bin1_path = temp_dir.path().join("test1.bin");
+    let bin2_path = temp_dir.path().join("test2.bin");
+    let intersect_path = temp_dir.path().join("intersect.bin");
+
+    create_test_fasta(&fasta1_path, 1);
+    create_test_fasta(&fasta2_path, 2);
+
+    build_index(&fasta1_path, &bin1_path);
+    build_index(&fasta2_path, &bin2_path);
+
+    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    cmd.arg("index")
+        .arg("intersect")
+        .arg("-o")
+        .arg(&intersect_path)
+        .arg(&bin1_path)
+        .arg(&bin2_path)
+        .assert()
+        .success();
+
+    assert!(intersect_path.exists());
+
+    // The intersection should smaller or equal to either index size
+    let intersect_size = fs::metadata(&intersect_path).unwrap().len();
+    let bin1_size = fs::metadata(&bin1_path).unwrap().len();
+    let bin2_size = fs::metadata(&bin2_path).unwrap().len();
+
+    assert!(
+        intersect_size <= bin1_size,
+        "Intersection size {} should be <= first index size {}",
+        intersect_size,
+        bin1_size
+    );
+    assert!(
+        intersect_size <= bin2_size,
+        "Intersection size {} should be <= second index size {}",
+        intersect_size,
+        bin2_size
+    );
+}

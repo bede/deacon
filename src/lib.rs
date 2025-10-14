@@ -16,7 +16,7 @@ pub mod minimizers;
 pub use filter::{FilterSummary, run as run_filter};
 pub use index::{
     IndexHeader, build as build_index, diff as diff_index, dump as dump_index, dump_minimizers,
-    info as index_info, load_minimizers, union as union_index,
+    info as index_info, intersect as intersect_index, load_minimizers, union as union_index,
 };
 pub use minimizers::{DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, decode_u64, decode_u128};
 
@@ -85,6 +85,19 @@ impl MinimizerSet {
                 }
             }
             _ => panic!("Cannot remove U128 minimizers from U64 set or vice versa"),
+        }
+    }
+
+    /// Keep only minimizers present in another set (intersection operation)
+    pub fn intersect(&mut self, other: &Self) {
+        match (self, other) {
+            (MinimizerSet::U64(self_set), MinimizerSet::U64(other_set)) => {
+                self_set.retain(|val| other_set.contains(val));
+            }
+            (MinimizerSet::U128(self_set), MinimizerSet::U128(other_set)) => {
+                self_set.retain(|val| other_set.contains(val));
+            }
+            _ => panic!("Cannot intersect U64 set with U128 set or vice versa"),
         }
     }
 }

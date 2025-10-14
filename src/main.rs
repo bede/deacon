@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use deacon::{
     DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig, diff_index, dump_index,
-    index_info, union_index,
+    index_info, intersect_index, union_index,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -141,6 +141,16 @@ enum IndexCommands {
     /// Combine multiple minimizer indexes (A ∪ B…)
     Union {
         /// Path(s) to one or more index file(s)
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
+
+        /// Path to output file (stdout if not specified)
+        #[arg(short = 'o', long = "output")]
+        output: Option<PathBuf>,
+    },
+    /// Intersect multiple minimizer indexes (A ∩ B…)
+    Intersect {
+        /// Path(s) to two or more index file(s)
         #[arg(required = true)]
         inputs: Vec<PathBuf>,
 
@@ -328,6 +338,10 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             IndexCommands::Union { inputs, output } => {
                 union_index(inputs, output.as_deref())
                     .context("Failed to run index union command")?;
+            }
+            IndexCommands::Intersect { inputs, output } => {
+                intersect_index(inputs, output.as_deref())
+                    .context("Failed to run index intersect command")?;
             }
             IndexCommands::Diff {
                 first,

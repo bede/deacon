@@ -825,7 +825,7 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     let header = &headers_and_counts[0].0;
 
     eprintln!(
-        "Performing union of indexes (k={}, w={})",
+        "Combining indexes (k={}, w={})",
         header.kmer_length(),
         header.window_size()
     );
@@ -860,7 +860,7 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
 
         let expected_count = headers_and_counts[i].1;
         eprintln!(
-            "Index {}: expected {} minimizers, added {} new, total: {}",
+            "Index {}: expected {} minimizers, added {}, total: {}",
             i + 1,
             expected_count,
             all_minimizers.len() - before_count,
@@ -875,6 +875,82 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
         "United {} indexes with {} total minimizers in {:.2?}",
         inputs.len(),
         all_minimizers.len(),
+        total_time
+    );
+
+    Ok(())
+}
+
+pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
+    let start_time = Instant::now();
+    // Check inputs
+    if inputs.len() < 2 {
+        return Err(anyhow::anyhow!(
+            "At least two input files are required for intersection operation"
+        ));
+    }
+
+    // Read all headers first
+    let mut headers_and_counts = Vec::new();
+
+    for path in inputs {
+        let (header, count) = load_header_and_count(path)?;
+        headers_and_counts.push((header, count));
+    }
+
+    // Get header from first file for output
+    let header = &headers_and_counts[0].0;
+
+    eprintln!(
+        "Intersecting indexes (k={}, w={})",
+        header.kmer_length(),
+        header.window_size()
+    );
+
+    // Check header compat
+    for (i, (file_header, _)) in headers_and_counts.iter().enumerate() {
+        if file_header.kmer_length() != header.kmer_length()
+            || file_header.window_size() != header.window_size()
+        {
+            return Err(anyhow::anyhow!(
+                "Incompatible headers: index {} has k={}, w={}, but first index has k={}, w={}",
+                i,
+                file_header.kmer_length(),
+                file_header.window_size(),
+                header.kmer_length(),
+                header.window_size()
+            ));
+        }
+    }
+
+    // Load first index
+    let (mut result_minimizers, _) = load_minimizers(&inputs[0])?;
+    eprintln!("Index 1: loaded {} minimizers", result_minimizers.len());
+
+    // Intersect with remaining indexes
+    for (i, path) in inputs.iter().enumerate().skip(1) {
+        let (minimizers, _) = load_minimizers(path)?;
+
+        // Intersect minimizers (set intersection)
+        result_minimizers.intersect(&minimizers);
+
+        let expected_count = headers_and_counts[i].1;
+        eprintln!(
+            "Index {}: expected {} minimizers, retained {}, total: {}",
+            i + 1,
+            expected_count,
+            result_minimizers.len(),
+            result_minimizers.len()
+        );
+    }
+
+    dump_minimizers(&result_minimizers, header, output)?;
+
+    let total_time = start_time.elapsed();
+    eprintln!(
+        "Intersected {} indexes with {} common minimizers in {:.2?}",
+        inputs.len(),
+        result_minimizers.len(),
         total_time
     );
 
