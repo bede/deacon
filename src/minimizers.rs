@@ -121,6 +121,7 @@ pub(crate) fn fill_minimizers(
         packed_nseq,
         positions,
         minimizers,
+        cache,
     } = buffers;
 
     packed_nseq.seq.clear();
@@ -140,7 +141,7 @@ pub(crate) fn fill_minimizers(
     // Get minimizer positions using simd-minimizers
     let out = simd_minimizers::canonical_minimizers(kmer_length as usize, window_size as usize)
         .hasher(hasher)
-        .run_skip_ambiguous_windows(packed_nseq.as_slice(), positions);
+        .run_skip_ambiguous_windows_with_buf(packed_nseq.as_slice(), positions, cache);
 
     match minimizers {
         crate::MinimizerVec::U64(vec) => {
