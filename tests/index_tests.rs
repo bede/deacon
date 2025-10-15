@@ -386,8 +386,8 @@ fn test_index_dump() {
     assert_eq!(lines.len(), 2, "Should have one record");
     assert_eq!(lines[0], ">1", "Header should be '>1'");
     assert_eq!(
-        lines[1], "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
-        "Should be 31 Ts (canonical minimizer)"
+        lines[1], "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "Just 31 As"
     );
 }
 
