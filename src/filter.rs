@@ -3,7 +3,7 @@ use crate::minimizers::{KmerHasher, decode_u64, decode_u128};
 use crate::{FilterConfig, MinimizerSet};
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use packed_seq::{PackedNSeqVec, SeqVec};
+use packed_seq::{PackedNSeqVec, SeqVec, u32x8};
 use paraseq::Record;
 use paraseq::fastx::Reader;
 use paraseq::parallel::{PairedParallelProcessor, ParallelProcessor, ParallelReader};
@@ -266,6 +266,7 @@ pub(crate) struct Buffers {
     pub packed_nseq: PackedNSeqVec,
     pub positions: Vec<u32>,
     pub minimizers: crate::MinimizerVec,
+    pub cache: (simd_minimizers::Cache, Vec<u32x8>, Vec<u32x8>),
 }
 
 impl Buffers {
@@ -277,6 +278,7 @@ impl Buffers {
             },
             positions: Default::default(),
             minimizers: crate::MinimizerVec::U64(Vec::new()),
+            cache: Default::default(),
         }
     }
 
@@ -288,6 +290,7 @@ impl Buffers {
             },
             positions: Default::default(),
             minimizers: crate::MinimizerVec::U128(Vec::new()),
+            cache: Default::default(),
         }
     }
 }
@@ -412,6 +415,7 @@ impl FilterProcessor {
             packed_nseq,
             positions,
             minimizers,
+            cache,
         } = &mut self.buffers;
 
         packed_nseq.seq.clear();
@@ -428,7 +432,7 @@ impl FilterProcessor {
         let w = self.window_size as usize;
         let m = simd_minimizers::canonical_minimizers(k, w)
             .hasher(&self.hasher)
-            .run_skip_ambiguous_windows(packed_nseq.as_slice(), positions);
+            .run_skip_ambiguous_windows_with_buf(packed_nseq.as_slice(), positions, cache);
 
         // Store k-mer values directly based on variant
         match minimizers {
