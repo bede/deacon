@@ -10,9 +10,8 @@ pub fn decode_u64(minimizer: u64, k: u8) -> Vec<u8> {
     (0..k)
         .map(|i| {
             let base_bits = ((minimizer >> (2 * i)) & 0b11) as u8;
-            unpack_base(complement_base(base_bits))
+            unpack_base(base_bits)
         })
-        .rev()
         .collect()
 }
 
@@ -21,9 +20,8 @@ pub fn decode_u128(minimizer: u128, k: u8) -> Vec<u8> {
     (0..k)
         .map(|i| {
             let base_bits = ((minimizer >> (2 * i)) & 0b11) as u8;
-            unpack_base(complement_base(base_bits))
+            unpack_base(base_bits)
         })
-        .rev()
         .collect()
 }
 
