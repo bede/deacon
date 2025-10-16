@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2025-10-16
+
+### Added
+
+- Command `deacon index intersect` for finding the intersection of two or more minimizer indexes.
+-  Command `deacon index dump` for extracting minimizers from an index as plain text (FASTA).
+- Command `deacon cite` showing citation info.
+
+### Changed
+- Graceful handling of empty compressed input files.
+- Fixes bug where `--debug` incorrectly showed the complement of the hitting minimizer.
+- Uses paraseq 0.4.3, addressing a bug identified in paraseq 0.4.2 causing FASTQ records without a trailing newline byte to be ignored.
+- 2x increase in filtering throughput on arm64 / MacOS systems enabled by a series of optimisations in latest versions of libraries packed-seq, seq-hash and simd-minimizers.
+
+
+
+
 ## [0.11.0] - 2025-10-07
 
 ### Added
