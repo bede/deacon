@@ -55,7 +55,7 @@ deacon index build -e 0.5 chm13v2.fa > human.k31w15e5.idx
 
 #### Index compatibility
 
-Deacon `0.11.0` and above uses index format version 3. Using version 3 indexes with older Deacon versions and vice versa triggers an error. Prebuilt indexes in legacy formats are therefore archived in object storage for reproducibility. Should you wish to download indexes in legacy formats, replace the `/3/` in any prebuilt index download URL with either `/2/` or `/1/`  accordingly. Indexes are not however backported to Deacon versions predating their existence.
+Deacon `0.11.0` and above uses index format version 3. Using version 3 indexes with older Deacon versions and vice versa triggers an error. Prebuilt indexes in legacy formats are therefore archived in object storage and Zenodo for reproducibility. Should you wish to download indexes in legacy formats, replace the `/3/` in any prebuilt index download URL with either `/2/` or `/1/`  accordingly. Indexes are not backported to Deacon versions predating their existence.
 
 - Deacon **`0.11.0`** and above uses index format version **`3`**
 - Deacon **`0.7.0`** through to **`0.10.0`** used index format version **`2`**
