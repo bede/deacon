@@ -10,10 +10,8 @@ pub const DEFAULT_WINDOW_SIZE: u8 = 15;
 pub enum ComplexityMeasure {
     /// Shannon entropy scaled to [0, 1] range (default)
     ScaledShannon,
-    // Future measures can be added here:
-    // LempelZiv,
-    // Linguistic,
-    // etc.
+    /// Linguistic complexity (vocabulary richness, W=4)
+    Linguistic,
 }
 
 impl ComplexityMeasure {
@@ -21,8 +19,9 @@ impl ComplexityMeasure {
     pub fn from_str(s: &str) -> Result<Self, String> {
         match s.to_lowercase().as_str() {
             "scaled-shannon" => Ok(ComplexityMeasure::ScaledShannon),
+            "linguistic" => Ok(ComplexityMeasure::Linguistic),
             _ => Err(format!(
-                "Unknown complexity measure: '{}'. Supported: scaled-shannon",
+                "Unknown complexity measure: '{}'. Supported: scaled-shannon, linguistic",
                 s
             )),
         }
@@ -32,6 +31,7 @@ impl ComplexityMeasure {
     pub fn as_str(&self) -> &'static str {
         match self {
             ComplexityMeasure::ScaledShannon => "scaled-shannon",
+            ComplexityMeasure::Linguistic => "linguistic",
         }
     }
 
@@ -40,6 +40,7 @@ impl ComplexityMeasure {
     pub fn calculate(&self, kmer: &[u8], kmer_length: u8) -> f32 {
         match self {
             ComplexityMeasure::ScaledShannon => calculate_scaled_shannon_entropy(kmer, kmer_length),
+            ComplexityMeasure::Linguistic => calculate_linguistic_complexity(kmer, kmer_length),
         }
     }
 }
@@ -96,6 +97,40 @@ pub fn compute_minimizers(
         &mut buffers,
     );
     buffers.minimizers
+}
+
+/// Calculate linguistic complexity using vocabulary richness (W=4)
+/// Returns complexity between 0.0 and 1.0
+#[inline]
+fn calculate_linguistic_complexity(kmer: &[u8], kmer_length: u8) -> f32 {
+    use rustc_hash::FxHashSet;
+
+    // K-mers less than 10 bases long always pass filter
+    if kmer_length < 10 {
+        return 1.0;
+    }
+
+    let mut lc = 1.0f32;
+    let k = kmer_length as usize;
+
+    // For each word length w from 1 to 4
+    for w in 1..=4 {
+        let mut seen = FxHashSet::default();
+
+        // Count distinct w-grams
+        for i in 0..=(k - w) {
+            seen.insert(&kmer[i..i + w]);
+        }
+
+        // Calculate Uw = (distinct w-grams) / (max possible w-grams)
+        // Max possible is 4^w (all possible DNA w-grams)
+        let max_possible = 4_usize.pow(w as u32);
+        let u_w = seen.len() as f32 / max_possible as f32;
+
+        lc *= u_w;
+    }
+
+    lc
 }
 
 /// Calculate scaled Shannon entropy using character frequency analysis
@@ -620,5 +655,42 @@ mod tests {
             }
             crate::MinimizerVec::U64(_) => panic!("Expected U128 for k=33"),
         }
+    }
+
+    #[test]
+    fn test_linguistic_complexity() {
+        // Test homopolymer - should have very low complexity
+        let homopolymer = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 31 A's
+        let lc_homo = calculate_linguistic_complexity(homopolymer, 31);
+        assert!(
+            lc_homo < 0.0001,
+            "Homopolymer LC should be near 0, got {}",
+            lc_homo
+        );
+
+        // Test repeating pattern - should have low complexity
+        let repeat = b"ACGTACGTACGTACGTACGTACGTACGTACG"; // 31bp repeating pattern
+        let lc_repeat = calculate_linguistic_complexity(repeat, 31);
+        assert!(
+            lc_repeat < 0.001,
+            "Repeating pattern LC should be low, got {}",
+            lc_repeat
+        );
+
+        // Test more diverse sequence - should have higher complexity than homopolymer
+        let diverse = b"ACGTAGCTAGCTAGTCGATCGTAGCTAGCTA"; // 31bp more random
+        let lc_diverse = calculate_linguistic_complexity(diverse, 31);
+        assert!(
+            lc_diverse > 0.001,
+            "Diverse sequence LC should be > 0.001, got {}",
+            lc_diverse
+        );
+        assert!(lc_diverse > lc_homo, "Diverse should be > homopolymer");
+        assert!(lc_diverse > lc_repeat, "Diverse should be > repeat");
+
+        // Test k<10 always returns 1.0
+        let short = b"ACGTACGT"; // 8bp
+        let lc = calculate_linguistic_complexity(short, 8);
+        assert_eq!(lc, 1.0, "Short k-mer (k<10) should return 1.0, got {}", lc);
     }
 }
