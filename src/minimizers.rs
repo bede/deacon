@@ -5,6 +5,51 @@ use crate::filter::Buffers;
 pub const DEFAULT_KMER_LENGTH: u8 = 31;
 pub const DEFAULT_WINDOW_SIZE: u8 = 15;
 
+/// Supported complexity measures for k-mer filtering
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComplexityMeasure {
+    /// Shannon entropy scaled to [0, 1] range (default)
+    ScaledShannon,
+    // Future measures can be added here:
+    // LempelZiv,
+    // Linguistic,
+    // etc.
+}
+
+impl ComplexityMeasure {
+    /// Parse complexity measure from string
+    pub fn from_str(s: &str) -> Result<Self, String> {
+        match s.to_lowercase().as_str() {
+            "scaled-shannon" => Ok(ComplexityMeasure::ScaledShannon),
+            _ => Err(format!(
+                "Unknown complexity measure: '{}'. Supported: scaled-shannon",
+                s
+            )),
+        }
+    }
+
+    /// Get the string representation of the measure
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ComplexityMeasure::ScaledShannon => "scaled-shannon",
+        }
+    }
+
+    /// Calculate complexity for a k-mer using the specified measure
+    #[inline]
+    pub fn calculate(&self, kmer: &[u8], kmer_length: u8) -> f32 {
+        match self {
+            ComplexityMeasure::ScaledShannon => calculate_scaled_shannon_entropy(kmer, kmer_length),
+        }
+    }
+}
+
+impl Default for ComplexityMeasure {
+    fn default() -> Self {
+        ComplexityMeasure::ScaledShannon
+    }
+}
+
 /// Decode u64 minimizer (2-bit canonical k-mer) to ASCII
 pub fn decode_u64(minimizer: u64, k: u8) -> Vec<u8> {
     (0..k)
@@ -34,7 +79,7 @@ pub fn compute_minimizers(
     hasher: &KmerHasher,
     kmer_length: u8,
     window_size: u8,
-    entropy_threshold: f32,
+    complexity_threshold: f32,
 ) -> crate::MinimizerVec {
     let mut buffers = if kmer_length <= 32 {
         Buffers::new_u64()
@@ -46,16 +91,17 @@ pub fn compute_minimizers(
         hasher,
         kmer_length,
         window_size,
-        entropy_threshold,
+        complexity_threshold,
+        ComplexityMeasure::default(),
         &mut buffers,
     );
     buffers.minimizers
 }
 
-/// Calculate scaled entropy using character frequency analysis
+/// Calculate scaled Shannon entropy using character frequency analysis
 /// Returns scaled entropy between 0.0 and 1.0
 #[inline]
-fn calculate_scaled_entropy(kmer: &[u8], kmer_length: u8) -> f32 {
+fn calculate_scaled_shannon_entropy(kmer: &[u8], kmer_length: u8) -> f32 {
     // K-mers less than 10 bases long always pass filter
     if kmer_length < 10 {
         return 1.0;
@@ -106,13 +152,14 @@ fn calculate_scaled_entropy(kmer: &[u8], kmer_length: u8) -> f32 {
 }
 
 /// Fill a vector with minimizers, skipping k-mers with non-ACGT bases
-/// and optionally filtering by scaled entropy
+/// and optionally filtering by complexity
 pub(crate) fn fill_minimizers(
     seq: &[u8],
     hasher: &KmerHasher,
     kmer_length: u8,
     window_size: u8,
-    entropy_threshold: f32,
+    complexity_threshold: f32,
+    complexity_measure: ComplexityMeasure,
     buffers: &mut Buffers,
 ) {
     let Buffers {
@@ -149,12 +196,12 @@ pub(crate) fn fill_minimizers(
                         let pos_usize = pos as usize;
                         let kmer = &seq[pos_usize..pos_usize + kmer_length as usize];
 
-                        // Check scaled entropy constraint if threshold specified
-                        if entropy_threshold == 0.0 {
+                        // Check complexity constraint if threshold specified
+                        if complexity_threshold == 0.0 {
                             true
                         } else {
-                            let entropy = calculate_scaled_entropy(kmer, kmer_length);
-                            entropy >= entropy_threshold
+                            let complexity = complexity_measure.calculate(kmer, kmer_length);
+                            complexity >= complexity_threshold
                         }
                     })
                     .map(|(_pos, val)| val),
@@ -167,12 +214,12 @@ pub(crate) fn fill_minimizers(
                         let pos_usize = pos as usize;
                         let kmer = &seq[pos_usize..pos_usize + kmer_length as usize];
 
-                        // Check scaled entropy constraint if threshold specified
-                        if entropy_threshold == 0.0 {
+                        // Check complexity constraint if threshold specified
+                        if complexity_threshold == 0.0 {
                             true
                         } else {
-                            let entropy = calculate_scaled_entropy(kmer, kmer_length);
-                            entropy >= entropy_threshold
+                            let complexity = complexity_measure.calculate(kmer, kmer_length);
+                            complexity >= complexity_threshold
                         }
                     })
                     .map(|(_pos, val)| val),
@@ -207,17 +254,17 @@ mod tests {
     fn test_calculate_scaled_entropy() {
         // Test short k-mers (should return 1.0 for k < 10)
         let short_kmer = b"ACGT";
-        let entropy = calculate_scaled_entropy(short_kmer, 8);
+        let entropy = calculate_scaled_shannon_entropy(short_kmer, 8);
         assert_eq!(entropy, 1.0, "Expected 1.0 for k-mer length < 10");
 
         // Test minimum entropy (homopolymer, 10bp)
         let min_entropy_kmer = b"AAAAAAAAAA";
-        let entropy = calculate_scaled_entropy(min_entropy_kmer, 10);
+        let entropy = calculate_scaled_shannon_entropy(min_entropy_kmer, 10);
         assert!(entropy < 0.1, "Expected very low entropy, got {}", entropy);
 
         // Test moderate entropy (alternating pattern, 10bp)
         let alt_entropy_kmer = b"ATATATATAT";
-        let entropy = calculate_scaled_entropy(alt_entropy_kmer, 10);
+        let entropy = calculate_scaled_shannon_entropy(alt_entropy_kmer, 10);
         assert!(
             (0.5..1.0).contains(&entropy),
             "Expected moderate entropy, got {}",
@@ -226,7 +273,7 @@ mod tests {
 
         // Test maximum entropy (diverse 10bp)
         let max_entropy_kmer = b"ACGTACGTAC";
-        let entropy = calculate_scaled_entropy(max_entropy_kmer, 10);
+        let entropy = calculate_scaled_shannon_entropy(max_entropy_kmer, 10);
         assert!(
             entropy > 0.9,
             "Expected high entropy for diverse 10-mer, got {}",
@@ -235,7 +282,7 @@ mod tests {
 
         // Test realistic k-mer (31bp, default k)
         let realistic_kmer = b"ACGTACGTACGTACGTACGTACGTACGTACG";
-        let entropy = calculate_scaled_entropy(realistic_kmer, 31);
+        let entropy = calculate_scaled_shannon_entropy(realistic_kmer, 31);
         assert!(
             entropy > 0.9,
             "Expected high entropy for diverse 31-mer, got {}",
@@ -249,12 +296,12 @@ mod tests {
 
         // Homopolymer - lowest entropy (31 A's)
         let homopolymer = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        let entropy = calculate_scaled_entropy(homopolymer, 31);
+        let entropy = calculate_scaled_shannon_entropy(homopolymer, 31);
         assert!(entropy < 0.01, "Homopolymer entropy = {}", entropy);
 
         // Mostly one base with minimal variation - low entropy
         let mostly_a = b"AAAAAAAAAAACAAAAAGAAAAATAAAAAAA";
-        let entropy = calculate_scaled_entropy(mostly_a, 31);
+        let entropy = calculate_scaled_shannon_entropy(mostly_a, 31);
         assert!(
             (0.25..=0.35).contains(&entropy),
             "Mostly A entropy = {}",
@@ -263,7 +310,7 @@ mod tests {
 
         // GC alternating - moderate entropy (2 bases, equal distribution)
         let gc_alternating = b"GCGCGCGCGCGCGCGCGCGCGCGCGCGCGCG";
-        let entropy = calculate_scaled_entropy(gc_alternating, 31);
+        let entropy = calculate_scaled_shannon_entropy(gc_alternating, 31);
         assert!(
             (0.45..=0.55).contains(&entropy),
             "GC alternating entropy = {}",
@@ -272,7 +319,7 @@ mod tests {
 
         // AT with G ending - moderate entropy (mostly 2 bases)
         let dinuc_repeat = b"ATATATATATATATATATATATATATATATG";
-        let entropy = calculate_scaled_entropy(dinuc_repeat, 31);
+        let entropy = calculate_scaled_shannon_entropy(dinuc_repeat, 31);
         assert!(
             (0.55..=0.65).contains(&entropy),
             "AT+G repeat entropy = {}",
@@ -281,7 +328,7 @@ mod tests {
 
         // Trinucleotide repeat - high entropy (ACG repeated)
         let trinuc_repeat = b"ACGACGACGACGACGACGACGACGACGACGA";
-        let entropy = calculate_scaled_entropy(trinuc_repeat, 31);
+        let entropy = calculate_scaled_shannon_entropy(trinuc_repeat, 31);
         assert!(
             (0.75..=0.85).contains(&entropy),
             "ACG repeat entropy = {}",
@@ -290,7 +337,7 @@ mod tests {
 
         // Four bases uneven distribution - high entropy
         let four_uneven = b"ACGTACGTACGTAAAACCCGGGTTTACGTAC";
-        let entropy = calculate_scaled_entropy(four_uneven, 31);
+        let entropy = calculate_scaled_shannon_entropy(four_uneven, 31);
         assert!(
             (0.8..=1.0).contains(&entropy),
             "Four bases uneven entropy = {}",
@@ -299,19 +346,20 @@ mod tests {
 
         // Complex pattern with all 4 bases - very high entropy
         let complex_repeat = b"AACCGGTTAACCGGTTAACCGGTTAACCGGT";
-        let entropy = calculate_scaled_entropy(complex_repeat, 31);
+        let entropy = calculate_scaled_shannon_entropy(complex_repeat, 31);
         assert!(entropy >= 0.95, "Complex pattern entropy = {}", entropy);
 
         // Four bases perfectly balanced - maximum entropy
         let four_balanced = b"ACGTACGTACGTACGTACGTACGTACGTACG";
-        let entropy = calculate_scaled_entropy(four_balanced, 31);
+        let entropy = calculate_scaled_shannon_entropy(four_balanced, 31);
         assert!(entropy >= 0.95, "Four bases balanced entropy = {}", entropy);
 
         // Verify entropy ordering makes sense
-        let one_base = calculate_scaled_entropy(b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 31);
-        let two_bases_even = calculate_scaled_entropy(b"GCGCGCGCGCGCGCGCGCGCGCGCGCGCGCG", 31);
-        let three_bases = calculate_scaled_entropy(b"ACGACGACGACGACGACGACGACGACGACGA", 31);
-        let four_bases = calculate_scaled_entropy(b"ACGTACGTACGTACGTACGTACGTACGTACG", 31);
+        let one_base = calculate_scaled_shannon_entropy(b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 31);
+        let two_bases_even =
+            calculate_scaled_shannon_entropy(b"GCGCGCGCGCGCGCGCGCGCGCGCGCGCGCG", 31);
+        let three_bases = calculate_scaled_shannon_entropy(b"ACGACGACGACGACGACGACGACGACGACGA", 31);
+        let four_bases = calculate_scaled_shannon_entropy(b"ACGTACGTACGTACGTACGTACGTACGTACG", 31);
 
         // Entropy should increase with base diversity
         assert!(
@@ -349,7 +397,7 @@ mod tests {
     fn test_near_homopolymer_entropy() {
         // 30 A's + 1 T, entropy ~0.1028
         let near_homopolymer = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAT";
-        let entropy = calculate_scaled_entropy(near_homopolymer, 31);
+        let entropy = calculate_scaled_shannon_entropy(near_homopolymer, 31);
         assert!(entropy < 0.5, "Entropy {:.4} should be < 0.5", entropy);
         assert!(entropy < 0.15, "Entropy {:.4} should be < 0.15", entropy);
     }

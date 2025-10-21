@@ -18,7 +18,9 @@ pub use index::{
     IndexHeader, build as build_index, diff as diff_index, dump as dump_index, dump_minimizers,
     info as index_info, intersect as intersect_index, load_minimizers, union as union_index,
 };
-pub use minimizers::{DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, decode_u64, decode_u128};
+pub use minimizers::{
+    ComplexityMeasure, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, decode_u64, decode_u128,
+};
 
 use anyhow::Result;
 use std::collections::HashSet;
@@ -295,8 +297,11 @@ pub struct IndexConfig {
     /// Suppress per-sequence progress output
     pub quiet: bool,
 
-    /// Minimum scaled entropy threshold for k-mer filtering (0.0-1.0)
-    pub entropy_threshold: f32,
+    /// Minimum complexity threshold for k-mer filtering (0.0-1.0)
+    pub complexity_threshold: f32,
+
+    /// Complexity measure to use for k-mer filtering
+    pub complexity_measure: ComplexityMeasure,
 }
 
 impl IndexConfig {
@@ -309,7 +314,8 @@ impl IndexConfig {
             output_path: None,
             threads: 8,
             quiet: false,
-            entropy_threshold: 0.0,
+            complexity_threshold: 0.0,
+            complexity_measure: ComplexityMeasure::default(),
         }
     }
 
@@ -361,9 +367,15 @@ impl IndexConfig {
         self
     }
 
-    /// Set threshold for scaled entropy filtering at indexing time
-    pub fn with_entropy_threshold(mut self, threshold: f32) -> Self {
-        self.entropy_threshold = threshold;
+    /// Set threshold for complexity filtering at indexing time
+    pub fn with_complexity_threshold(mut self, threshold: f32) -> Self {
+        self.complexity_threshold = threshold;
+        self
+    }
+
+    /// Set complexity measure for k-mer filtering
+    pub fn with_complexity_measure(mut self, measure: ComplexityMeasure) -> Self {
+        self.complexity_measure = measure;
         self
     }
 

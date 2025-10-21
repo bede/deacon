@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use deacon::{
-    DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig, diff_index, dump_index,
-    index_info, intersect_index, union_index,
+    ComplexityMeasure, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig,
+    diff_index, dump_index, index_info, intersect_index, union_index,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -134,9 +134,17 @@ enum IndexCommands {
         #[arg(short = 'q', long = "quiet")]
         quiet: bool,
 
-        /// Minimum scaled entropy threshold for k-mer filtering (0.0-1.0)
-        #[arg(short = 'e', long = "entropy-threshold", default_value = "0.0")]
-        entropy_threshold: f32,
+        /// Minimum complexity threshold for k-mer filtering (0.0-1.0)
+        #[arg(short = 'c', long = "complexity-threshold", default_value = "0.0")]
+        complexity_threshold: f32,
+
+        /// Complexity measure for k-mer filtering (scaled-shannon)
+        #[arg(
+            short = 'C',
+            long = "complexity-measure",
+            default_value = "scaled-shannon"
+        )]
+        complexity_measure: String,
     },
     /// Combine multiple minimizer indexes (A ∪ B…)
     Union {
@@ -317,8 +325,12 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 output,
                 threads,
                 quiet,
-                entropy_threshold,
+                complexity_threshold,
+                complexity_measure,
             } => {
+                let measure = ComplexityMeasure::from_str(complexity_measure)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+
                 let config = IndexConfig {
                     input_path: input.clone(),
                     kmer_length: *kmer_length,
@@ -326,7 +338,8 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                     output_path: output.clone(),
                     threads: *threads,
                     quiet: *quiet,
-                    entropy_threshold: *entropy_threshold,
+                    complexity_threshold: *complexity_threshold,
+                    complexity_measure: measure,
                 };
                 config
                     .execute()

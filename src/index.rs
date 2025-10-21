@@ -289,7 +289,8 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
             &self.hasher,
             self.config.kmer_length,
             self.config.window_size,
-            self.config.entropy_threshold,
+            self.config.complexity_threshold,
+            self.config.complexity_measure,
             &mut self.buffers,
         );
 
@@ -486,6 +487,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor {
             self.kmer_length,
             self.window_size,
             0.0,
+            crate::minimizers::ComplexityMeasure::default(),
             &mut self.buffers,
         );
 
@@ -573,7 +575,8 @@ fn stream_diff_fastx(
         output_path: None,
         threads: 0,
         quiet: false,
-        entropy_threshold: 0.0,
+        complexity_threshold: 0.0,
+        complexity_measure: crate::minimizers::ComplexityMeasure::default(),
     };
     temp_config.validate()?;
 
