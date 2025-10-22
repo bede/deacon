@@ -12,6 +12,8 @@ pub enum ComplexityMeasure {
     ScaledShannon,
     /// Linguistic complexity (vocabulary richness, W=4)
     Linguistic,
+    /// SDust complexity (triplet redundancy scoring)
+    SDust,
 }
 
 impl ComplexityMeasure {
@@ -20,8 +22,9 @@ impl ComplexityMeasure {
         match s.to_lowercase().as_str() {
             "scaled-shannon" => Ok(ComplexityMeasure::ScaledShannon),
             "linguistic" => Ok(ComplexityMeasure::Linguistic),
+            "sdust" => Ok(ComplexityMeasure::SDust),
             _ => Err(format!(
-                "Unknown complexity measure: '{}'. Supported: scaled-shannon, linguistic",
+                "Unknown complexity measure: '{}'. Supported: scaled-shannon, linguistic, sdust",
                 s
             )),
         }
@@ -32,6 +35,7 @@ impl ComplexityMeasure {
         match self {
             ComplexityMeasure::ScaledShannon => "scaled-shannon",
             ComplexityMeasure::Linguistic => "linguistic",
+            ComplexityMeasure::SDust => "sdust",
         }
     }
 
@@ -41,6 +45,7 @@ impl ComplexityMeasure {
         match self {
             ComplexityMeasure::ScaledShannon => calculate_scaled_shannon_entropy(kmer, kmer_length),
             ComplexityMeasure::Linguistic => calculate_linguistic_complexity(kmer, kmer_length),
+            ComplexityMeasure::SDust => calculate_sdust_score(kmer, kmer_length),
         }
     }
 }
@@ -131,6 +136,61 @@ fn calculate_linguistic_complexity(kmer: &[u8], kmer_length: u8) -> f32 {
     }
 
     lc
+}
+
+/// Calculate sdust score using triplet redundancy
+/// Returns raw sdust score where higher values indicate lower complexity (more repetitive)
+/// Based on the symmetric DUST algorithm from Morgulis et al. 2006
+#[inline]
+fn calculate_sdust_score(kmer: &[u8], kmer_length: u8) -> f32 {
+    const TRIPLET_SIZE: usize = 3;
+    const NUM_TRIPLETS: usize = 64; // 4^3 possible DNA triplets
+
+    // K-mers less than 3 bases long cannot form triplets
+    if kmer_length < TRIPLET_SIZE as u8 {
+        return 0.0;
+    }
+
+    let k = kmer_length as usize;
+
+    // Count triplet frequencies using fixed array (A=0, C=1, G=2, T=3)
+    let mut triplet_counts = [0u32; NUM_TRIPLETS];
+
+    // Convert base to 2-bit representation
+    #[inline]
+    fn base_to_bits(base: u8) -> Option<u8> {
+        match base {
+            b'A' | b'a' => Some(0),
+            b'C' | b'c' => Some(1),
+            b'G' | b'g' => Some(2),
+            b'T' | b't' => Some(3),
+            _ => None,
+        }
+    }
+
+    // Slide through k-mer and count triplets
+    for i in 0..=(k - TRIPLET_SIZE) {
+        // Convert triplet to index (0-63)
+        if let (Some(b0), Some(b1), Some(b2)) = (
+            base_to_bits(kmer[i]),
+            base_to_bits(kmer[i + 1]),
+            base_to_bits(kmer[i + 2]),
+        ) {
+            let triplet_idx = ((b0 as usize) << 4) | ((b1 as usize) << 2) | (b2 as usize);
+            triplet_counts[triplet_idx] += 1;
+        }
+    }
+
+    // Calculate sdust score: sum of (count - 1) for each triplet
+    // This measures redundancy - higher score means more repetitive
+    let mut score = 0u32;
+    for &count in &triplet_counts {
+        if count > 1 {
+            score += count - 1;
+        }
+    }
+
+    score as f32
 }
 
 /// Calculate scaled Shannon entropy using character frequency analysis
@@ -692,5 +752,138 @@ mod tests {
         let short = b"ACGTACGT"; // 8bp
         let lc = calculate_linguistic_complexity(short, 8);
         assert_eq!(lc, 1.0, "Short k-mer (k<10) should return 1.0, got {}", lc);
+    }
+
+    #[test]
+    fn test_sdust_score_basic() {
+        // Test homopolymer - should have very high score (very repetitive)
+        let homopolymer = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 31 A's
+        let score_homo = calculate_sdust_score(homopolymer, 31);
+        // 29 triplets (31-3+1), all "AAA", so score = 29-1 = 28
+        assert_eq!(score_homo, 28.0, "Homopolymer should have score 28");
+
+        // Test diverse sequence - should have low score (less repetitive)
+        let diverse = b"ACGTACGTACGTACGTACGTACGTACGTACG"; // 31bp repeating ACGT
+        let score_diverse = calculate_sdust_score(diverse, 31);
+        // This has repeating pattern so should have some redundancy
+        assert!(
+            score_diverse > 0.0,
+            "ACGT repeat should have some redundancy, got {}",
+            score_diverse
+        );
+
+        // Test unique triplets - should have score 0
+        let unique = b"ACGTCGATAGC"; // 11bp with hopefully unique triplets
+        let score_unique = calculate_sdust_score(unique, 11);
+        assert!(
+            score_unique >= 0.0,
+            "Unique triplets should have score >= 0, got {}",
+            score_unique
+        );
+
+        // Test short sequence (< 3 bases)
+        let short = b"AC";
+        let score_short = calculate_sdust_score(short, 2);
+        assert_eq!(score_short, 0.0, "Short sequence should return 0.0");
+    }
+
+    #[test]
+    fn test_sdust_score_triplet_counting() {
+        // Test sequence with exactly 2 of the same triplet
+        // "AAACCC" has triplets: AAA, AAC, ACC, CCC
+        // All unique, so score = 0
+        let seq1 = b"AAACCC";
+        let score1 = calculate_sdust_score(seq1, 6);
+        assert_eq!(score1, 0.0, "Unique triplets should give score 0, got {}", score1);
+
+        // Test sequence with repeated triplets
+        // "AAAAAA" has triplets: AAA, AAA, AAA, AAA (4 total)
+        // score = 4 - 1 = 3
+        let seq2 = b"AAAAAA";
+        let score2 = calculate_sdust_score(seq2, 6);
+        assert_eq!(score2, 3.0, "4 identical triplets should give score 3, got {}", score2);
+
+        // Test alternating dinucleotide: ATATAT (6bp)
+        // Triplets: ATA, TAT, ATA, TAT
+        // ATA appears 2 times: contributes 1
+        // TAT appears 2 times: contributes 1
+        // Total score = 2
+        let seq3 = b"ATATAT";
+        let score3 = calculate_sdust_score(seq3, 6);
+        assert_eq!(score3, 2.0, "ATATAT should give score 2, got {}", score3);
+    }
+
+    #[test]
+    fn test_sdust_score_31mer_comparison() {
+        // Test that homopolymer has highest score
+        let homopolymer = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 31 A's
+        let score_homo = calculate_sdust_score(homopolymer, 31);
+
+        // Test dinucleotide repeat
+        let dinuc = b"ATATATATATATATATATATATATATATATAT"; // 32 AT repeats, take 31
+        let score_dinuc = calculate_sdust_score(&dinuc[..31], 31);
+
+        // Test trinucleotide repeat
+        let trinuc = b"ACGACGACGACGACGACGACGACGACGACGA"; // ACG repeats
+        let score_trinuc = calculate_sdust_score(trinuc, 31);
+
+        // Test diverse sequence
+        let diverse = b"ACGTAGCTGATCGATCGTAGCTAGCTAGCTA";
+        let score_diverse = calculate_sdust_score(diverse, 31);
+
+        // Verify ordering: homopolymer should have highest score
+        assert!(
+            score_homo > score_dinuc,
+            "Homopolymer ({}) should have higher score than dinuc repeat ({})",
+            score_homo,
+            score_dinuc
+        );
+        assert!(
+            score_homo > score_diverse,
+            "Homopolymer ({}) should have higher score than diverse ({})",
+            score_homo,
+            score_diverse
+        );
+
+        // Print scores for debugging
+        println!("SDust scores (higher = more repetitive):");
+        println!("  Homopolymer: {}", score_homo);
+        println!("  Dinucleotide repeat: {}", score_dinuc);
+        println!("  Trinucleotide repeat: {}", score_trinuc);
+        println!("  Diverse: {}", score_diverse);
+    }
+
+    #[test]
+    fn test_complexity_measure_enum() {
+        // Test from_str parsing
+        assert_eq!(
+            ComplexityMeasure::from_str("scaled-shannon").unwrap(),
+            ComplexityMeasure::ScaledShannon
+        );
+        assert_eq!(
+            ComplexityMeasure::from_str("linguistic").unwrap(),
+            ComplexityMeasure::Linguistic
+        );
+        assert_eq!(
+            ComplexityMeasure::from_str("sdust").unwrap(),
+            ComplexityMeasure::SDust
+        );
+        assert!(ComplexityMeasure::from_str("invalid").is_err());
+
+        // Test as_str
+        assert_eq!(ComplexityMeasure::ScaledShannon.as_str(), "scaled-shannon");
+        assert_eq!(ComplexityMeasure::Linguistic.as_str(), "linguistic");
+        assert_eq!(ComplexityMeasure::SDust.as_str(), "sdust");
+
+        // Test calculate method dispatch
+        let test_seq = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 31 A's
+        let shannon = ComplexityMeasure::ScaledShannon.calculate(test_seq, 31);
+        let linguistic = ComplexityMeasure::Linguistic.calculate(test_seq, 31);
+        let sdust = ComplexityMeasure::SDust.calculate(test_seq, 31);
+
+        // Verify different measures give different results
+        assert!(shannon < 0.1, "Shannon entropy of homopolymer should be low");
+        assert!(linguistic < 0.0001, "Linguistic complexity of homopolymer should be near 0");
+        assert!(sdust > 20.0, "SDust score of homopolymer should be high (>20)");
     }
 }

@@ -138,7 +138,7 @@ enum IndexCommands {
         #[arg(short = 'c', long = "complexity-threshold", default_value = "0.0")]
         complexity_threshold: f32,
 
-        /// Complexity measure for k-mer filtering (scaled-shannon)
+        /// Complexity measure for k-mer filtering (scaled-shannon, linguistic, sdust)
         #[arg(
             short = 'C',
             long = "complexity-measure",
