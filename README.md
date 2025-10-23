@@ -22,7 +22,7 @@ Benchmarks for panhuman host depletion of complex microbial metagenomes are desc
 ### cargo [![Crates.io version](https://img.shields.io/crates/v/deacon?style=flat-square)](https://crates.io/crates/deacon)
 
 ```bash
-cargo install deacon
+RUSTFLAGS="-C target-cpu=native" cargo install deacon
 ```
 
 ### conda/mamba/pixi  [![Conda version](https://img.shields.io/conda/v/bioconda/deacon?style=flat-square&label=bioconda&color=blue)](https://anaconda.org/bioconda/deacon)
