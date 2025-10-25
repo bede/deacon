@@ -25,6 +25,9 @@ Benchmarks for panhuman host depletion of complex microbial metagenomes are desc
 RUSTFLAGS="-C target-cpu=native" cargo install deacon
 ```
 
+Note that a recent version of Rust is needed (>=1.88, June 2025).
+Update using `rustup update`.
+
 ### conda/mamba/pixi  [![Conda version](https://img.shields.io/conda/v/bioconda/deacon?style=flat-square&label=bioconda&color=blue)](https://anaconda.org/bioconda/deacon)
 
 ```bash
