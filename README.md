@@ -14,10 +14,13 @@ Default parameters are carefully chosen and easily changed. Classification sensi
 
 Benchmarks for panhuman host depletion of complex microbial metagenomes are described in a [preprint](https://www.biorxiv.org/content/10.1101/2025.06.09.658732v1). Among tested approaches, Deacon with the panhuman-1 (*k*=31, w=15) index exhibited the highest balanced accuracy for both long and short simulated reads. Deacon was however less specific than Hostile for short reads.
 
-> [!IMPORTANT]
-> Deacon is actively developed. Take note of software and index version(s) used in order to guarantee reproducibility of your results. Carefully review the CHANGELOG when updating. Versions 0.7.0 and 0.11.0 introduced backwards incompatible index formats. Please report any problems you encounter by creating an issue or using the email address in my profile.
-
 ## Install
+
+### conda/mamba/pixi  [![Conda version](https://img.shields.io/conda/v/bioconda/deacon?style=flat-square&label=bioconda&color=blue)](https://anaconda.org/bioconda/deacon)
+
+```bash
+conda install -c bioconda deacon
+```
 
 ### cargo [![Crates.io version](https://img.shields.io/crates/v/deacon?style=flat-square)](https://crates.io/crates/deacon)
 
@@ -25,14 +28,9 @@ Benchmarks for panhuman host depletion of complex microbial metagenomes are desc
 RUSTFLAGS="-C target-cpu=native" cargo install deacon
 ```
 
-Note that a recent version of Rust is needed (>=1.88, June 2025).
-Update using `rustup update`.
+> [!IMPORTANT]
+> Cargo installation requires Rust 1.88 or newer. Update using `rustup update`.
 
-### conda/mamba/pixi  [![Conda version](https://img.shields.io/conda/v/bioconda/deacon?style=flat-square&label=bioconda&color=blue)](https://anaconda.org/bioconda/deacon)
-
-```bash
-conda install -c bioconda deacon
-```
 
 ## Usage
 
@@ -42,9 +40,6 @@ Use `deacon index build` to index a search query. For panhuman host depletion, s
 
 ```shell
 deacon index build chm13v2.fa > human.k31w15.idx
-
-# Discard low complexity minimizers
-deacon index build -e 0.5 chm13v2.fa > human.k31w15e5.idx
 ```
 
 *N.B. Indexing a human genome takes <30s and uses 18GB of RAM. Filtering uses 5GB of RAM.*
@@ -58,12 +53,13 @@ deacon index build -e 0.5 chm13v2.fa > human.k31w15e5.idx
 
 #### Index compatibility
 
-Deacon `0.11.0` and above uses index format version 3. Using version 3 indexes with older Deacon versions and vice versa triggers an error. Prebuilt indexes in legacy formats are therefore archived in object storage for reproducibility. Should you wish to download indexes in legacy formats, replace the `/3/` in any prebuilt index download URL with either `/2/` or `/1/`  accordingly. Indexes are not however backported to Deacon versions predating their existence.
+Deacon `0.11.0` and above uses index format version 3. Using version 3 indexes with older Deacon versions and vice versa triggers an error. Prebuilt indexes in legacy formats are archived in object storage and Zenodo to ensure  reproducibility. To download indexes in legacy formats, replace the `/3/` in any prebuilt index download URL with either `/2/` or `/1/`  accordingly.
 
-- Deacon **`0.11.0`** and above uses index format version **`3`**
-- Deacon **`0.7.0`** through to **`0.10.0`** used index format version **`2`**
-
-- Deacon **`0.1.0`** through to **`0.6.0`** used index format version **`1`**
+> [!NOTE]
+>
+> - Deacon **`0.11.0`** and above uses index format version **`3`**
+> - Deacon **`0.7.0`** through to **`0.10.0`** used index format version **`2`**
+> - Deacon **`0.1.0`** through to **`0.6.0`** used index format version **`1`**
 
 ### Filtering
 
@@ -110,8 +106,6 @@ deacon filter -d -p 1000 panhuman-1.k31w15.idx reads.fq.gz > filt.fq
 # Debug mode: see sequences with minimizer hits in stderr
 deacon filter -d --debug panhuman-1.k31w15.idx reads.fq.gz > filt.fq
 ```
-
-
 
 ## Command line reference
 
