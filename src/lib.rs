@@ -179,6 +179,12 @@ pub struct FilterConfig<'a> {
 
     /// Suppress progress reporting
     pub quiet: bool,
+
+    /// Minimum complexity threshold for k-mer filtering (0.0-1.0)
+    pub complexity_threshold: f32,
+
+    /// Complexity measure to use for k-mer filtering
+    pub complexity_measure: ComplexityMeasure,
 }
 
 impl<'a> FilterConfig<'a> {
@@ -199,6 +205,8 @@ impl<'a> FilterConfig<'a> {
             compression_level: 2, // Default compression level
             debug: false,
             quiet: false,
+            complexity_threshold: 0.0,
+            complexity_measure: ComplexityMeasure::default(),
         }
     }
 
@@ -269,6 +277,16 @@ impl<'a> FilterConfig<'a> {
 
     pub fn with_quiet(mut self, quiet: bool) -> Self {
         self.quiet = quiet;
+        self
+    }
+
+    pub fn with_complexity_threshold(mut self, complexity_threshold: f32) -> Self {
+        self.complexity_threshold = complexity_threshold;
+        self
+    }
+
+    pub fn with_complexity_measure(mut self, complexity_measure: ComplexityMeasure) -> Self {
+        self.complexity_measure = complexity_measure;
         self
     }
 

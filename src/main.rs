@@ -85,6 +85,18 @@ enum Commands {
         /// Suppress progress reporting
         #[arg(short = 'q', long = "quiet", default_value_t = false)]
         quiet: bool,
+
+        /// Minimum complexity threshold for k-mer filtering (0.0-1.0)
+        #[arg(short = 'c', long = "complexity-threshold", default_value = "0.0")]
+        complexity_threshold: f32,
+
+        /// Complexity measure for k-mer filtering (scaled-shannon, linguistic, sdust)
+        #[arg(
+            short = 'C',
+            long = "complexity-measure",
+            default_value = "scaled-shannon"
+        )]
+        complexity_measure: String,
     },
     /// Start/stop a server process for reduced latency filtering
     Server {
@@ -394,6 +406,8 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             compression_level,
             debug,
             quiet,
+            complexity_threshold,
+            complexity_measure,
         } => {
             // Validate output2 usage
             if output2.is_some() && input2.is_none() {
@@ -401,6 +415,9 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                     "Warning: --output2 specified but no second input file provided. --output2 will be ignored."
                 );
             }
+
+            let measure =
+                ComplexityMeasure::from_str(complexity_measure).map_err(|e| anyhow::anyhow!(e))?;
 
             let config = FilterConfig {
                 minimizers_path: minimizers,
@@ -418,6 +435,8 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 compression_level: *compression_level,
                 debug: *debug,
                 quiet: *quiet,
+                complexity_threshold: *complexity_threshold,
+                complexity_measure: measure,
             };
             config.execute().context("Failed to run filter command")?;
         }
