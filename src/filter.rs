@@ -3,7 +3,7 @@ use crate::minimizers::{KmerHasher, decode_u64, decode_u128};
 use crate::{FilterConfig, MinimizerSet};
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use packed_seq::{PackedNSeqVec, u32x8};
+use packed_seq::{PackedNSeqVec, SeqVec, u32x8};
 use paraseq::Record;
 use paraseq::fastx::Reader;
 use paraseq::parallel::{PairedParallelProcessor, ParallelProcessor, ParallelReader};
@@ -27,8 +27,6 @@ struct FilterProcessorConfig {
     deplete: bool,
     rename: bool,
     debug: bool,
-    complexity_threshold: f32,
-    complexity_measure: crate::minimizers::ComplexityMeasure,
 }
 
 /// Check input file path(s) exist
@@ -235,8 +233,6 @@ struct FilterProcessor {
     deplete: bool,
     rename: bool,
     debug: bool,
-    complexity_threshold: f32,
-    complexity_measure: crate::minimizers::ComplexityMeasure,
 
     hasher: KmerHasher,
 
@@ -340,8 +336,6 @@ impl FilterProcessor {
             deplete: config.deplete,
             rename: config.rename,
             debug: config.debug,
-            complexity_threshold: config.complexity_threshold,
-            complexity_measure: config.complexity_measure,
             hasher: KmerHasher::new(kmer_length as usize),
             local_buffer: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
             local_buffer2: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
@@ -417,16 +411,37 @@ impl FilterProcessor {
         // Drop trailing newline if present.
         let seq = seq.strip_suffix(b"\n").unwrap_or(seq);
 
-        // Use fill_minimizers which applies complexity filtering
-        crate::minimizers::fill_minimizers(
-            seq,
-            &self.hasher,
-            self.kmer_length,
-            self.window_size,
-            self.complexity_threshold,
-            self.complexity_measure,
-            &mut self.buffers,
-        );
+        let Buffers {
+            packed_nseq,
+            positions,
+            minimizers,
+            cache,
+        } = &mut self.buffers;
+
+        packed_nseq.seq.clear();
+        packed_nseq.ambiguous.clear();
+        minimizers.clear();
+        positions.clear();
+
+        // Pack the sequence into 2-bit representation.
+        packed_nseq.seq.push_ascii(seq);
+        packed_nseq.ambiguous.push_ascii(seq);
+
+        let k = self.kmer_length as usize;
+        let w = self.window_size as usize;
+        let m = simd_minimizers::canonical_minimizers(k, w)
+            .hasher(&self.hasher)
+            .run_skip_ambiguous_windows_with_buf(packed_nseq.as_slice(), positions, cache);
+
+        // Store k-mer values directly based on variant
+        match minimizers {
+            crate::MinimizerVec::U64(vec) => {
+                vec.extend(m.pos_and_values_u64().map(|(_pos, val)| val));
+            }
+            crate::MinimizerVec::U128(vec) => {
+                vec.extend(m.pos_and_values_u128().map(|(_pos, val)| val));
+            }
+        }
 
         seq
     }
@@ -756,8 +771,12 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     // Check input files exist before making user wait for index loading
     check_input_paths(config)?;
 
-    // Load minimizers and parse header
-    let (minimizers, header) = load_minimizers_cached(&config.minimizers_path)?;
+    // Load minimizers and parse header (with optional complexity filtering)
+    let (minimizers, header) = load_minimizers_cached(
+        &config.minimizers_path,
+        config.complexity_threshold,
+        config.complexity_measure,
+    )?;
 
     let kmer_length = header.kmer_length();
     let window_size = header.window_size();
@@ -805,8 +824,6 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         deplete: config.deplete,
         rename: config.rename,
         debug: config.debug,
-        complexity_threshold: config.complexity_threshold,
-        complexity_measure: config.complexity_measure,
     };
     let mut processor = FilterProcessor::new(
         minimizers,

@@ -86,25 +86,58 @@ pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, u
     Ok((header, count))
 }
 
-static INDEX: OnceLock<(PathBuf, crate::MinimizerSet, IndexHeader)> = OnceLock::new();
+static INDEX: OnceLock<(
+    PathBuf,
+    crate::MinimizerSet,
+    IndexHeader,
+    f32,
+    crate::minimizers::ComplexityMeasure,
+)> = OnceLock::new();
 
 pub fn load_minimizers_cached(
     path: &Path,
+    complexity_threshold: f32,
+    complexity_measure: crate::minimizers::ComplexityMeasure,
 ) -> Result<(&'static crate::MinimizerSet, &'static IndexHeader)> {
-    let (p, minimizers, header) = INDEX.get_or_init(|| {
-        let (m, h) = load_minimizers(path).unwrap();
-        (path.to_owned(), m, h)
+    let (p, minimizers, header, cached_threshold, cached_measure) = INDEX.get_or_init(|| {
+        let (m, h) =
+            load_minimizers_with_complexity(path, complexity_threshold, complexity_measure)
+                .unwrap();
+        (
+            path.to_owned(),
+            m,
+            h,
+            complexity_threshold,
+            complexity_measure,
+        )
     });
     assert_eq!(
         p, path,
         "Currently, the server can only have one index loaded."
     );
+    assert_eq!(
+        *cached_threshold, complexity_threshold,
+        "Cached index has different complexity threshold. Server mode requires consistent complexity parameters."
+    );
+    assert_eq!(
+        *cached_measure, complexity_measure,
+        "Cached index has different complexity measure. Server mode requires consistent complexity parameters."
+    );
 
     Ok((minimizers, header))
 }
 
-/// Load minimizers from an index file
+/// Load minimizers from an index file with optional complexity filtering
 pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)> {
+    load_minimizers_with_complexity(path, 0.0, crate::minimizers::ComplexityMeasure::default())
+}
+
+/// Load minimizers from an index file with complexity filtering
+pub fn load_minimizers_with_complexity(
+    path: &Path,
+    complexity_threshold: f32,
+    complexity_measure: crate::minimizers::ComplexityMeasure,
+) -> Result<(crate::MinimizerSet, IndexHeader)> {
     let file = File::open(path).context(format!("Failed to open index file {:?}", path))?;
     let mut reader = BufReader::with_capacity(1 << 20, file);
     let config = bincode::config::standard().with_fixed_int_encoding();
@@ -119,7 +152,9 @@ pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)
         .context("Failed to deserialise minimizer count")?;
 
     let bytes_per_minimizer = (header.kmer_length as usize).div_ceil(4);
+    let apply_complexity_filter = complexity_threshold > 0.0;
 
+    // No need for manual loop hoisting? Branch prediction working well on arm64 MacOS
     let minimizers = if header.kmer_length <= 32 {
         // Read as u64 with packed byte-aligned format
         let mut set = RapidHashSet::<u64>::with_capacity_and_hasher(count, FixedRapidHasher);
@@ -137,7 +172,17 @@ pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)
                 let end = start + bytes_per_minimizer;
                 let mut minimizer_bytes = [0u8; 8];
                 minimizer_bytes[..bytes_per_minimizer].copy_from_slice(&batch[start..end]);
-                set.insert(u64::from_le_bytes(minimizer_bytes));
+                let minimizer = u64::from_le_bytes(minimizer_bytes);
+
+                if apply_complexity_filter {
+                    let kmer = crate::minimizers::decode_u64(minimizer, header.kmer_length);
+                    let complexity = complexity_measure.calculate(&kmer, header.kmer_length);
+                    if complexity >= complexity_threshold {
+                        set.insert(minimizer);
+                    }
+                } else {
+                    set.insert(minimizer);
+                }
             }
         }
         crate::MinimizerSet::U64(set)
@@ -158,7 +203,17 @@ pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)
                 let end = start + bytes_per_minimizer;
                 let mut minimizer_bytes = [0u8; 16];
                 minimizer_bytes[..bytes_per_minimizer].copy_from_slice(&batch[start..end]);
-                set.insert(u128::from_le_bytes(minimizer_bytes));
+                let minimizer = u128::from_le_bytes(minimizer_bytes);
+
+                if apply_complexity_filter {
+                    let kmer = crate::minimizers::decode_u128(minimizer, header.kmer_length);
+                    let complexity = complexity_measure.calculate(&kmer, header.kmer_length);
+                    if complexity >= complexity_threshold {
+                        set.insert(minimizer);
+                    }
+                } else {
+                    set.insert(minimizer);
+                }
             }
         }
         crate::MinimizerSet::U128(set)
