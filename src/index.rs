@@ -156,67 +156,117 @@ pub fn load_minimizers_with_complexity(
 
     // No need for manual loop hoisting? Branch prediction working well on arm64 MacOS
     let minimizers = if header.kmer_length <= 32 {
-        // Read as u64 with packed byte-aligned format
-        let mut set = RapidHashSet::<u64>::with_capacity_and_hasher(count, FixedRapidHasher);
         const B: usize = 16 * 1024;
         let mut buffer = vec![0u8; bytes_per_minimizer * B];
-        for i in (0..count).step_by(B) {
-            let batch_count = B.min(count - i);
-            let batch_bytes = bytes_per_minimizer * batch_count;
-            let batch = &mut buffer[..batch_bytes];
-            reader.read_exact(batch).unwrap();
 
-            // Extract minimizers from packed bytes
-            for j in 0..batch_count {
-                let start = j * bytes_per_minimizer;
-                let end = start + bytes_per_minimizer;
-                let mut minimizer_bytes = [0u8; 8];
-                minimizer_bytes[..bytes_per_minimizer].copy_from_slice(&batch[start..end]);
-                let minimizer = u64::from_le_bytes(minimizer_bytes);
+        if apply_complexity_filter {
+            // Read all minimizers into Vec, then filter in parallel
+            let mut all_minimizers = Vec::with_capacity(count);
+            for i in (0..count).step_by(B) {
+                let batch_count = B.min(count - i);
+                let batch_bytes = bytes_per_minimizer * batch_count;
+                let batch = &mut buffer[..batch_bytes];
+                reader.read_exact(batch).unwrap();
 
-                if apply_complexity_filter {
+                for j in 0..batch_count {
+                    let start = j * bytes_per_minimizer;
+                    let end = start + bytes_per_minimizer;
+                    let mut minimizer_bytes = [0u8; 8];
+                    minimizer_bytes[..bytes_per_minimizer].copy_from_slice(&batch[start..end]);
+                    all_minimizers.push(u64::from_le_bytes(minimizer_bytes));
+                }
+            }
+
+            // Parallel complexity filtering
+            use rayon::prelude::*;
+            let set: RapidHashSet<u64> = all_minimizers
+                .par_iter()
+                .filter_map(|&minimizer| {
                     let kmer = crate::minimizers::decode_u64(minimizer, header.kmer_length);
                     let complexity = complexity_measure.calculate(&kmer, header.kmer_length);
                     if complexity >= complexity_threshold {
-                        set.insert(minimizer);
+                        Some(minimizer)
+                    } else {
+                        None
                     }
-                } else {
-                    set.insert(minimizer);
+                })
+                .collect();
+            crate::MinimizerSet::U64(set)
+        } else {
+            // Fast path: direct insertion without Vec allocation
+            let mut set = RapidHashSet::<u64>::with_capacity_and_hasher(count, FixedRapidHasher);
+            for i in (0..count).step_by(B) {
+                let batch_count = B.min(count - i);
+                let batch_bytes = bytes_per_minimizer * batch_count;
+                let batch = &mut buffer[..batch_bytes];
+                reader.read_exact(batch).unwrap();
+
+                for j in 0..batch_count {
+                    let start = j * bytes_per_minimizer;
+                    let end = start + bytes_per_minimizer;
+                    let mut minimizer_bytes = [0u8; 8];
+                    minimizer_bytes[..bytes_per_minimizer].copy_from_slice(&batch[start..end]);
+                    set.insert(u64::from_le_bytes(minimizer_bytes));
                 }
             }
+            crate::MinimizerSet::U64(set)
         }
-        crate::MinimizerSet::U64(set)
     } else {
-        // Read as u128 with packed byte-aligned format
-        let mut set = RapidHashSet::<u128>::with_capacity_and_hasher(count, FixedRapidHasher);
         const B: usize = 16 * 1024;
         let mut buffer = vec![0u8; bytes_per_minimizer * B];
-        for i in (0..count).step_by(B) {
-            let batch_count = B.min(count - i);
-            let batch_bytes = bytes_per_minimizer * batch_count;
-            let batch = &mut buffer[..batch_bytes];
-            reader.read_exact(batch).unwrap();
 
-            // Extract minimizers from packed bytes
-            for j in 0..batch_count {
-                let start = j * bytes_per_minimizer;
-                let end = start + bytes_per_minimizer;
-                let mut minimizer_bytes = [0u8; 16];
-                minimizer_bytes[..bytes_per_minimizer].copy_from_slice(&batch[start..end]);
-                let minimizer = u128::from_le_bytes(minimizer_bytes);
+        if apply_complexity_filter {
+            // Read all minimizers into Vec, then filter in parallel
+            let mut all_minimizers = Vec::with_capacity(count);
+            for i in (0..count).step_by(B) {
+                let batch_count = B.min(count - i);
+                let batch_bytes = bytes_per_minimizer * batch_count;
+                let batch = &mut buffer[..batch_bytes];
+                reader.read_exact(batch).unwrap();
 
-                if apply_complexity_filter {
+                for j in 0..batch_count {
+                    let start = j * bytes_per_minimizer;
+                    let end = start + bytes_per_minimizer;
+                    let mut minimizer_bytes = [0u8; 16];
+                    minimizer_bytes[..bytes_per_minimizer].copy_from_slice(&batch[start..end]);
+                    all_minimizers.push(u128::from_le_bytes(minimizer_bytes));
+                }
+            }
+
+            // Parallel complexity filtering
+            use rayon::prelude::*;
+            let set: RapidHashSet<u128> = all_minimizers
+                .par_iter()
+                .filter_map(|&minimizer| {
                     let kmer = crate::minimizers::decode_u128(minimizer, header.kmer_length);
                     let complexity = complexity_measure.calculate(&kmer, header.kmer_length);
                     if complexity >= complexity_threshold {
-                        set.insert(minimizer);
+                        Some(minimizer)
+                    } else {
+                        None
                     }
-                } else {
-                    set.insert(minimizer);
+                })
+                .collect();
+            crate::MinimizerSet::U128(set)
+        } else {
+            // Fast path: direct insertion without Vec allocation
+            let mut set = RapidHashSet::<u128>::with_capacity_and_hasher(count, FixedRapidHasher);
+            for i in (0..count).step_by(B) {
+                let batch_count = B.min(count - i);
+                let batch_bytes = bytes_per_minimizer * batch_count;
+                let batch = &mut buffer[..batch_bytes];
+                reader.read_exact(batch).unwrap();
+
+                for j in 0..batch_count {
+                    let start = j * bytes_per_minimizer;
+                    let end = start + bytes_per_minimizer;
+                    let mut minimizer_bytes = [0u8; 16];
+                    minimizer_bytes[..bytes_per_minimizer].copy_from_slice(&batch[start..end]);
+                    set.insert(u128::from_le_bytes(minimizer_bytes));
                 }
             }
+            crate::MinimizerSet::U128(set)
         }
-        crate::MinimizerSet::U128(set)
     };
 
     Ok((minimizers, header))
