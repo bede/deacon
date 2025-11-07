@@ -161,6 +161,7 @@ pub fn load_minimizers_with_complexity(
 
         if apply_complexity_filter {
             // Read all minimizers into Vec, then filter in parallel
+            eprintln!("Applying complexity threshold…");
             let mut all_minimizers = Vec::with_capacity(count);
             for i in (0..count).step_by(B) {
                 let batch_count = B.min(count - i);

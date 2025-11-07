@@ -757,6 +757,18 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     if config.threads > 0 {
         options.push(format!("threads={}", config.threads));
     }
+    if config.complexity_threshold > 0.0 {
+        options.push(format!(
+            "complexity_threshold={}",
+            config.complexity_threshold
+        ));
+    }
+    if config.complexity_threshold > 0.0 {
+        options.push(format!(
+            "complexity_measure={:?}",
+            config.complexity_measure
+        ));
+    }
 
     if !quiet {
         eprintln!(
