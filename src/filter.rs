@@ -163,10 +163,12 @@ fn get_writer(output_path: Option<&std::path::Path>, compression_level: u8) -> R
         #[cfg(feature = "compression")]
         p if p.ends_with(".gz") => {
             validate_compression_level(compression_level, 1, 9, "gzip")?;
-            Ok(Box::new(flate2::write::GzEncoder::new(
-                buffered_file,
-                flate2::Compression::new(compression_level as u32),
-            )))
+            use gzp::deflate::Gzip;
+            use gzp::par::compress::{ParCompress, ParCompressBuilder};
+            let writer: ParCompress<Gzip> = ParCompressBuilder::new()
+                .compression_level(gzp::Compression::new(compression_level as u32))
+                .from_writer(buffered_file);
+            Ok(Box::new(writer))
         }
         #[cfg(feature = "compression")]
         p if p.ends_with(".zst") => {

@@ -37,6 +37,7 @@ paraseq = { version = "0.4.3", default-features = false, features = ["anyhow", "
 liblzma = { version = "0.3", optional = true }
 flate2 = { version = "1.1", features = ["zlib-rs"], optional = true }
 zstd = { version = "0.13", optional = true }
+gzp = { version = "0.11.3", default-features = false, features = ["deflate_rust"], optional = true }
 
 [lints.clippy]
 too_many_arguments = "allow"
@@ -49,7 +50,7 @@ rstest = "0.26"
 
 [features]
 # Disable for faster builds.
-compression = ["zstd", "liblzma", "flate2", "needletail/compression", "paraseq/default"]
+compression = ["zstd", "liblzma", "flate2", "gzp", "needletail/compression", "paraseq/default"]
 # Use to still handle .gz files when "compression" is not enabled.
 gz = ["niffler/gz", "flate2", "flate2/default"]
 default = ["compression"]
