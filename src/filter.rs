@@ -14,8 +14,8 @@ use std::io::{self, BufWriter, Write};
 use std::sync::Arc;
 use std::time::Instant;
 
-const OUTPUT_BUFFER_SIZE: usize = 8 * 1024 * 1024; // Opt: 8MB output buffer
-const DEFAULT_BUFFER_SIZE: usize = 64 * 1024;
+const OUTPUT_BUFFER_SIZE: usize = 8 * 1024 * 1024; // 8MB output buffer
+const LOCAL_BUFFER_SIZE: usize = 512 * 1024; // 512KB per-thread buffer
 
 type BoxedWriter = Box<dyn Write + Send>;
 
@@ -165,8 +165,16 @@ fn get_writer(output_path: Option<&std::path::Path>, compression_level: u8) -> R
             validate_compression_level(compression_level, 1, 9, "gzip")?;
             use gzp::deflate::Gzip;
             use gzp::par::compress::{ParCompress, ParCompressBuilder};
+
+            // gzp manages its own writer thread, so use all available threads
+            let num_threads = rayon::current_num_threads();
+
             let writer: ParCompress<Gzip> = ParCompressBuilder::new()
                 .compression_level(gzp::Compression::new(compression_level as u32))
+                .buffer_size(1024 * 1024) // 1MB gzp internal buffer
+                .unwrap()
+                .num_threads(num_threads)
+                .unwrap()
                 .from_writer(buffered_file);
             Ok(Box::new(writer))
         }
@@ -339,8 +347,8 @@ impl FilterProcessor {
             rename: config.rename,
             debug: config.debug,
             hasher: KmerHasher::new(kmer_length as usize),
-            local_buffer: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
-            local_buffer2: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
+            local_buffer: Vec::with_capacity(LOCAL_BUFFER_SIZE),
+            local_buffer2: Vec::with_capacity(LOCAL_BUFFER_SIZE),
             local_stats: ProcessingStats::default(),
             buffers: if kmer_length <= 32 {
                 Buffers::new_u64()
@@ -598,7 +606,6 @@ impl<Rf: Record> ParallelProcessor<Rf> for FilterProcessor {
         if !self.local_buffer.is_empty() {
             let mut global_writer = self.global_writer.lock();
             global_writer.write_all(&self.local_buffer)?;
-            global_writer.flush()?;
         }
 
         // Clear buffer after releasing the lock
@@ -678,16 +685,13 @@ impl<Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor {
                 let mut writer2 = writer2.lock();
 
                 writer1.write_all(&self.local_buffer)?;
-                writer1.flush()?;
                 writer2.write_all(&self.local_buffer2)?;
-                writer2.flush()?;
             }
         } else {
             // Interleaved output
             if !self.local_buffer.is_empty() {
                 let mut writer = self.global_writer.lock();
                 writer.write_all(&self.local_buffer)?;
-                writer.flush()?;
             }
         }
 
@@ -923,11 +927,19 @@ pub fn run(config: &FilterConfig) -> Result<()> {
 
     drop(final_stats); // Release lock
 
-    // Flush writers - they should auto-flush on drop
-    drop(processor.global_writer);
-    if let Some(w2) = processor.global_writer2 {
-        drop(w2);
+    // Explicitly flush and drop writers to ensure compression finalization
+    {
+        let mut writer = processor.global_writer.lock();
+        writer.flush()?;
     }
+    drop(processor.global_writer);
+
+    if let Some(ref w2) = processor.global_writer2 {
+        let mut writer2 = w2.lock();
+        writer2.flush()?;
+        drop(writer2);
+    }
+    drop(processor.global_writer2);
 
     let total_time = start_time.elapsed();
     let filtering_time = filtering_start_time.elapsed();
