@@ -78,6 +78,10 @@ enum Commands {
         #[arg(long = "compression-level", default_value_t = 2)]
         compression_level: u8,
 
+        /// Number of threads for compression (0 = auto: ceil(total/2))
+        #[arg(long = "compression-threads", default_value_t = 0)]
+        compression_threads: usize,
+
         /// Output sequences with minimizer hits to stderr
         #[arg(long = "debug", default_value_t = false)]
         debug: bool,
@@ -379,6 +383,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             rename,
             threads,
             compression_level,
+            compression_threads,
             debug,
             quiet,
         } => {
@@ -403,6 +408,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 rename: *rename,
                 threads: *threads,
                 compression_level: *compression_level,
+                compression_threads: *compression_threads,
                 debug: *debug,
                 quiet: *quiet,
             };

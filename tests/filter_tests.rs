@@ -1,5 +1,6 @@
 #![cfg_attr(not(feature = "compression"), allow(unused))]
 use assert_cmd::Command;
+use predicates::prelude::*;
 use std::fs;
 use std::fs::File;
 use std::path::Path;
@@ -1793,4 +1794,159 @@ fn test_fastq_parsing_no_trailing_newline() {
     let output_content = fs::read_to_string(&output_path).unwrap();
     let record_count = output_content.matches("@id").count();
     assert_eq!(record_count, 2, "Output should contaimn 2 records");
+}
+
+#[test]
+#[cfg(feature = "compression")]
+fn test_thread_allocation_auto_single_gz() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output_path = temp_dir.path().join("filtered.fastq.gz");
+
+    create_test_fasta(&fasta_path);
+    create_test_fastq(&fastq_path);
+    build_index(&fasta_path, &bin_path);
+
+    // Run with default auto thread allocation (8 threads)
+    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    cmd.arg("filter")
+        .arg(&bin_path)
+        .arg(&fastq_path)
+        .arg("--output")
+        .arg(&output_path)
+        .arg("--threads")
+        .arg("8")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("threads=8(4+4)"));
+}
+
+#[test]
+#[cfg(feature = "compression")]
+fn test_thread_allocation_auto_paired_gz() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq1_path = temp_dir.path().join("reads1.fastq");
+    let fastq2_path = temp_dir.path().join("reads2.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output1_path = temp_dir.path().join("filtered1.fastq.gz");
+    let output2_path = temp_dir.path().join("filtered2.fastq.gz");
+
+    create_test_fasta(&fasta_path);
+    create_test_paired_fastq(&fastq1_path, &fastq2_path);
+    build_index(&fasta_path, &bin_path);
+
+    // Run with default auto thread allocation (8 threads, 2 outputs)
+    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    cmd.arg("filter")
+        .arg(&bin_path)
+        .arg(&fastq1_path)
+        .arg(&fastq2_path)
+        .arg("--output")
+        .arg(&output1_path)
+        .arg("--output2")
+        .arg(&output2_path)
+        .arg("--threads")
+        .arg("8")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("threads=8(4+4)"));
+}
+
+#[test]
+#[cfg(feature = "compression")]
+fn test_thread_allocation_manual_override() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq1_path = temp_dir.path().join("reads1.fastq");
+    let fastq2_path = temp_dir.path().join("reads2.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output1_path = temp_dir.path().join("filtered1.fastq.gz");
+    let output2_path = temp_dir.path().join("filtered2.fastq.gz");
+
+    create_test_fasta(&fasta_path);
+    create_test_paired_fastq(&fastq1_path, &fastq2_path);
+    build_index(&fasta_path, &bin_path);
+
+    // Run with manual compression-threads override
+    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    cmd.arg("filter")
+        .arg(&bin_path)
+        .arg(&fastq1_path)
+        .arg(&fastq2_path)
+        .arg("--output")
+        .arg(&output1_path)
+        .arg("--output2")
+        .arg(&output2_path)
+        .arg("--threads")
+        .arg("8")
+        .arg("--compression-threads")
+        .arg("6")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("threads=8(2+6)"));
+}
+
+#[test]
+#[cfg(feature = "compression")]
+fn test_thread_allocation_ceiling_division() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq1_path = temp_dir.path().join("reads1.fastq");
+    let fastq2_path = temp_dir.path().join("reads2.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output1_path = temp_dir.path().join("filtered1.fastq.gz");
+    let output2_path = temp_dir.path().join("filtered2.fastq.gz");
+
+    create_test_fasta(&fasta_path);
+    create_test_paired_fastq(&fastq1_path, &fastq2_path);
+    build_index(&fasta_path, &bin_path);
+
+    // Test ceiling division: 5 compression threads / 2 outputs = ceil(2.5) = 3 threads per output
+    // So total compression = 2*3 = 6 threads
+    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    cmd.arg("filter")
+        .arg(&bin_path)
+        .arg(&fastq1_path)
+        .arg(&fastq2_path)
+        .arg("--output")
+        .arg(&output1_path)
+        .arg("--output2")
+        .arg(&output2_path)
+        .arg("--threads")
+        .arg("10")
+        .arg("--compression-threads")
+        .arg("5")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("threads=10(5+6)"));
+}
+
+#[test]
+fn test_thread_allocation_no_compression() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output_path = temp_dir.path().join("filtered.fastq");
+
+    create_test_fasta(&fasta_path);
+    create_test_fastq(&fastq_path);
+    build_index(&fasta_path, &bin_path);
+
+    // Run with uncompressed output - should show threads=8 without allocation suffix
+    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    cmd.arg("filter")
+        .arg(&bin_path)
+        .arg(&fastq_path)
+        .arg("--output")
+        .arg(&output_path)
+        .arg("--threads")
+        .arg("8")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("threads=8"))
+        .stderr(predicates::str::contains("threads=8(").not());
 }

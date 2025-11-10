@@ -141,19 +141,19 @@ fn validate_compression_level(level: u8, min: u8, max: u8, format: &str) -> Resu
 }
 
 /// Detect if a path requires gzip compression
-fn is_gzip_output(path: Option<&std::path::Path>) -> bool {
+fn is_compressed_output(path: Option<&std::path::Path>) -> bool {
     path.map(|p| p.to_string_lossy().ends_with(".gz"))
         .unwrap_or(false)
 }
 
 /// Count number of gzip outputs from config
-fn count_gzip_outputs(config: &FilterConfig) -> usize {
+fn count_compressed_outputs(config: &FilterConfig) -> usize {
     let mut count = 0;
-    if is_gzip_output(config.output_path) {
+    if is_compressed_output(config.output_path) {
         count += 1;
     }
     if let Some(output2) = config.output2_path {
-        if is_gzip_output(Some(std::path::Path::new(output2))) {
+        if is_compressed_output(Some(std::path::Path::new(output2))) {
             count += 1;
         }
     }
@@ -165,7 +165,7 @@ fn count_gzip_outputs(config: &FilterConfig) -> usize {
 fn get_writer(
     output_path: Option<&std::path::Path>,
     compression_level: u8,
-    gzip_threads: usize,
+    compression_threads: usize,
 ) -> Result<BoxedWriter> {
     let Some(path) = output_path else {
         return Ok(Box::new(BufWriter::with_capacity(
@@ -195,7 +195,7 @@ fn get_writer(
                 .compression_level(gzp::Compression::new(compression_level as u32))
                 .buffer_size(1024 * 1024) // 1MB gzp internal buffer
                 .unwrap()
-                .num_threads(gzip_threads)
+                .num_threads(compression_threads)
                 .unwrap()
                 .from_writer(buffered_file);
             Ok(Box::new(writer))
@@ -763,16 +763,25 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         config.threads
     };
 
-    let gzip_output_count = count_gzip_outputs(config);
-    let (filtering_threads, gzip_threads_per_output) = if gzip_output_count > 0 {
-        // Split threads: half for filtering, half divided among gzip outputs
-        // Ensure at least 1 thread for each task
-        let compression_pool = total_threads / 2;
-        let filtering_pool = total_threads - compression_pool;
-        let gzip_threads = (compression_pool / gzip_output_count).max(1);
-        (filtering_pool.max(1), gzip_threads)
+    let compressed_output_count = count_compressed_outputs(config);
+
+    // Calculate compression threads based on config or auto-calculate
+    let compression_threads_total = if config.compression_threads > 0 {
+        config.compression_threads // User override
+    } else if compressed_output_count > 0 {
+        // Auto: ceil(total_threads / 2)
+        (total_threads + 1) / 2
     } else {
-        // No gzip outputs: use all threads for filtering
+        0 // No compressed outputs
+    };
+
+    let (filtering_threads, compression_threads_per_output) = if compressed_output_count > 0 {
+        let filtering_threads = total_threads - compression_threads_total;
+        // Distribute compression threads using ceiling division
+        let threads_per_output =
+            (compression_threads_total + compressed_output_count - 1) / compressed_output_count;
+        (filtering_threads.max(1), threads_per_output.max(1))
+    } else {
         (total_threads, 0)
     };
 
@@ -810,7 +819,16 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         options.push("rename".to_string());
     }
     if config.threads > 0 {
-        options.push(format!("threads={}", config.threads));
+        let threads_str = if compressed_output_count > 0 {
+            let compression_total = compressed_output_count * compression_threads_per_output;
+            format!(
+                "threads={}({}+{})",
+                config.threads, filtering_threads, compression_total
+            )
+        } else {
+            format!("threads={}", config.threads)
+        };
+        options.push(threads_str);
     }
 
     if !quiet {
@@ -821,12 +839,6 @@ pub fn run(config: &FilterConfig) -> Result<()> {
             input_type,
             options.join(", ")
         );
-        if gzip_output_count > 0 {
-            eprintln!(
-                "Thread allocation: {} filtering, {}x{} compression",
-                filtering_threads, gzip_output_count, gzip_threads_per_output
-            );
-        }
     }
 
     // Check input files exist before making user wait for index loading
@@ -850,13 +862,13 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     let writer = get_writer(
         config.output_path,
         config.compression_level,
-        gzip_threads_per_output,
+        compression_threads_per_output,
     )?;
     let writer2 = if let (Some(output2), Some(_)) = (config.output2_path, config.input2_path) {
         Some(get_writer(
             Some(std::path::Path::new(output2)),
             config.compression_level,
-            gzip_threads_per_output,
+            compression_threads_per_output,
         )?)
     } else {
         None

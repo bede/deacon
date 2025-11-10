@@ -172,6 +172,9 @@ pub struct FilterConfig<'a> {
     /// Compression level for output files (1-22 for zst, 1-9 for gz)
     pub compression_level: u8,
 
+    /// Number of threads for compression (0 = auto-calculate as ceil(total/2))
+    pub compression_threads: usize,
+
     /// Debug mode: output sequences with minimizer hits to stderr
     pub debug: bool,
 
@@ -193,8 +196,9 @@ impl<'a> FilterConfig<'a> {
             summary_path: None,
             deplete: false,
             rename: false,
-            threads: 0,           // Use all available threads by default
-            compression_level: 2, // Default compression level
+            threads: 0,             // Use all available threads by default
+            compression_level: 2,   // Default compression level
+            compression_threads: 0, // Auto-calculate as ceil(total/2)
             debug: false,
             quiet: false,
         }
@@ -257,6 +261,11 @@ impl<'a> FilterConfig<'a> {
 
     pub fn with_compression_level(mut self, compression_level: u8) -> Self {
         self.compression_level = compression_level;
+        self
+    }
+
+    pub fn with_compression_threads(mut self, compression_threads: usize) -> Self {
+        self.compression_threads = compression_threads;
         self
     }
 
