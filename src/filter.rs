@@ -818,7 +818,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
             let compression_total =
                 compressed_output_count as usize * compression_threads_per_output;
             format!(
-                "threads={}({}+{})",
+                "threads={}({}f+{}c)",
                 config.threads, filtering_threads, compression_total
             )
         } else {

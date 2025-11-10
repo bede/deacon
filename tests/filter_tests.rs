@@ -1820,7 +1820,7 @@ fn test_thread_allocation_auto_single_gz() {
         .arg("8")
         .assert()
         .success()
-        .stderr(predicates::str::contains("threads=8(4+4)"));
+        .stderr(predicates::str::contains("threads=8(4f+4c)"));
 }
 
 #[test]
@@ -1852,7 +1852,7 @@ fn test_thread_allocation_auto_paired_gz() {
         .arg("8")
         .assert()
         .success()
-        .stderr(predicates::str::contains("threads=8(4+4)"));
+        .stderr(predicates::str::contains("threads=8(4f+4c)"));
 }
 
 #[test]
@@ -1886,7 +1886,7 @@ fn test_thread_allocation_manual_override() {
         .arg("6")
         .assert()
         .success()
-        .stderr(predicates::str::contains("threads=8(2+6)"));
+        .stderr(predicates::str::contains("threads=8(2f+6c)"));
 }
 
 #[test]
@@ -1921,7 +1921,7 @@ fn test_thread_allocation_ceiling_division() {
         .arg("5")
         .assert()
         .success()
-        .stderr(predicates::str::contains("threads=10(5+6)"));
+        .stderr(predicates::str::contains("threads=10(5f+6c)"));
 }
 
 #[test]
