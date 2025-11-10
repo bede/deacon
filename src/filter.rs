@@ -140,14 +140,14 @@ fn validate_compression_level(level: u8, min: u8, max: u8, format: &str) -> Resu
     }
 }
 
-/// Detect if a path requires gzip compression
+/// Check if a path requires gzip compression
 fn is_compressed_output(path: Option<&std::path::Path>) -> bool {
     path.map(|p| p.to_string_lossy().ends_with(".gz"))
         .unwrap_or(false)
 }
 
-/// Count number of gzip outputs from config
-fn count_compressed_outputs(config: &FilterConfig) -> usize {
+/// Number of compressed outputs from config (0, 1, or 2)
+fn count_compressed_outputs(config: &FilterConfig) -> u8 {
     let mut count = 0;
     if is_compressed_output(config.output_path) {
         count += 1;
@@ -190,10 +190,10 @@ fn get_writer(
             use gzp::deflate::Gzip;
             use gzp::par::compress::ParCompressBuilder;
 
-            // Use explicitly allocated thread count for gzip compression
+            // Use the calculated number of threads for gzip compression
             let writer = ParCompressBuilder::<Gzip>::new()
                 .compression_level(gzp::Compression::new(compression_level as u32))
-                .buffer_size(1024 * 1024) // 1MB gzp internal buffer
+                .buffer_size(1024 * 1024) // 1MB buf
                 .unwrap()
                 .num_threads(compression_threads)
                 .unwrap()
@@ -754,38 +754,33 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     // Enable quiet mode when debug enabled
     let quiet = config.quiet || config.debug;
 
-    // Detect gzip outputs and calculate thread allocation BEFORE initializing rayon pool
     let total_threads = if config.threads == 0 {
         std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1)
     } else {
-        config.threads
+        config.threads as usize
     };
 
     let compressed_output_count = count_compressed_outputs(config);
 
-    // Calculate compression threads based on config or auto-calculate
-    let compression_threads_total = if config.compression_threads > 0 {
-        config.compression_threads // User override
-    } else if compressed_output_count > 0 {
-        // Auto: ceil(total_threads / 2)
-        (total_threads + 1) / 2
-    } else {
-        0 // No compressed outputs
-    };
-
+    // Allocate threads between filtering (rayon) and compression (gzp).
+    // Rayon pool can only be initialized once, so calculate before build_global().
     let (filtering_threads, compression_threads_per_output) = if compressed_output_count > 0 {
-        let filtering_threads = total_threads - compression_threads_total;
-        // Distribute compression threads using ceiling division
+        let compression_threads_total = if config.compression_threads > 0 {
+            config.compression_threads as usize
+        } else {
+            (total_threads + 1) / 2 // Auto: ceil(total_threads / 2)
+        };
+        let filtering_threads = (total_threads - compression_threads_total).max(1);
+        let output_count = compressed_output_count as usize;
         let threads_per_output =
-            (compression_threads_total + compressed_output_count - 1) / compressed_output_count;
-        (filtering_threads.max(1), threads_per_output.max(1))
+            ((compression_threads_total + output_count - 1) / output_count).max(1);
+        (filtering_threads, threads_per_output)
     } else {
         (total_threads, 0)
     };
 
-    // Configure thread pool with adjusted thread count for filtering
     if filtering_threads > 0 {
         // error is OK here when we initialize a 2nd time in server mode.
         let _ = rayon::ThreadPoolBuilder::new()
@@ -820,7 +815,8 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     }
     if config.threads > 0 {
         let threads_str = if compressed_output_count > 0 {
-            let compression_total = compressed_output_count * compression_threads_per_output;
+            let compression_total =
+                compressed_output_count as usize * compression_threads_per_output;
             format!(
                 "threads={}({}+{})",
                 config.threads, filtering_threads, compression_total

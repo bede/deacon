@@ -72,15 +72,15 @@ enum Commands {
 
         /// Number of execution threads (0 = auto)
         #[arg(short = 't', long = "threads", default_value_t = 8)]
-        threads: usize,
+        threads: u16,
 
         /// Output compression level (1-9 for gz & xz; 1-22 for zstd)
         #[arg(long = "compression-level", default_value_t = 2)]
         compression_level: u8,
 
-        /// Number of threads for compression (0 = auto: ceil(total/2))
+        /// Number of threads for compression (0 = auto)
         #[arg(long = "compression-threads", default_value_t = 0)]
-        compression_threads: usize,
+        compression_threads: u16,
 
         /// Output sequences with minimizer hits to stderr
         #[arg(long = "debug", default_value_t = false)]
@@ -105,7 +105,7 @@ enum ServerCommands {
     Start {
         /// Number of execution threads (0 = auto)
         #[arg(short = 't', long = "threads", default_value_t = 8)]
-        threads: usize,
+        threads: u16,
     },
     /// Stop the running server
     Stop,
@@ -132,7 +132,7 @@ enum IndexCommands {
 
         /// Number of execution threads (0 = auto)
         #[arg(short = 't', long = "threads", default_value_t = 8)]
-        threads: usize,
+        threads: u16,
 
         /// Suppress sequence header output
         #[arg(short = 'q', long = "quiet")]
@@ -182,7 +182,7 @@ enum IndexCommands {
 
         /// Number of execution threads (0 = auto)
         #[arg(short = 't', long = "threads", default_value_t = 8)]
-        threads: usize,
+        threads: u16,
 
         /// Path to output file (stdout if not specified)
         #[arg(short = 'o', long = "output")]
@@ -236,7 +236,7 @@ fn main() -> Result<()> {
             match command {
                 ServerCommands::Start { threads } => {
                     rayon::ThreadPoolBuilder::new()
-                        .num_threads(*threads)
+                        .num_threads(*threads as usize)
                         .build_global()
                         .context("Failed to initialize thread pool")?;
 

@@ -167,13 +167,13 @@ pub struct FilterConfig<'a> {
     pub rename: bool,
 
     /// Number of execution threads (0 = auto)
-    pub threads: usize,
+    pub threads: u16,
 
     /// Compression level for output files (1-22 for zst, 1-9 for gz)
     pub compression_level: u8,
 
     /// Number of threads for compression (0 = auto-calculate as ceil(total/2))
-    pub compression_threads: usize,
+    pub compression_threads: u16,
 
     /// Debug mode: output sequences with minimizer hits to stderr
     pub debug: bool,
@@ -254,7 +254,7 @@ impl<'a> FilterConfig<'a> {
         self
     }
 
-    pub fn with_threads(mut self, threads: usize) -> Self {
+    pub fn with_threads(mut self, threads: u16) -> Self {
         self.threads = threads;
         self
     }
@@ -264,7 +264,7 @@ impl<'a> FilterConfig<'a> {
         self
     }
 
-    pub fn with_compression_threads(mut self, compression_threads: usize) -> Self {
+    pub fn with_compression_threads(mut self, compression_threads: u16) -> Self {
         self.compression_threads = compression_threads;
         self
     }
@@ -299,7 +299,7 @@ pub struct IndexConfig {
     pub output_path: Option<PathBuf>,
 
     /// Number of execution threads (0 = auto)
-    pub threads: usize,
+    pub threads: u16,
 
     /// Suppress per-sequence progress output
     pub quiet: bool,
@@ -359,7 +359,7 @@ impl IndexConfig {
     }
 
     /// Set threads
-    pub fn with_threads(mut self, threads: usize) -> Self {
+    pub fn with_threads(mut self, threads: u16) -> Self {
         self.threads = threads;
         self
     }

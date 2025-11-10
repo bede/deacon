@@ -420,7 +420,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
             global_minimizers_u128: Arc::new(Mutex::new(Some(RapidHashSet::default()))),
         }
     };
-    reader.process_parallel(&mut processor, config.threads)?;
+    reader.process_parallel(&mut processor, config.threads as usize)?;
 
     let all_minimizers = if config.kmer_length <= 32 {
         let set = Arc::try_unwrap(processor.global_minimizers_u64)
@@ -560,7 +560,7 @@ fn stream_diff_fastx(
     kmer_length: u8,
     window_size: u8,
     first_header: &IndexHeader,
-    threads: usize,
+    threads: u16,
     first_minimizers: &mut crate::MinimizerSet,
 ) -> Result<(usize, usize)> {
     let path = fastx_path;
@@ -655,7 +655,7 @@ fn stream_diff_fastx(
         }
     };
 
-    reader.process_parallel(&mut processor, threads)?;
+    reader.process_parallel(&mut processor, threads as usize)?;
 
     // Extract results from Arc<Mutex<>> after processing completes
     let stats = processor.global_stats.lock().clone();
@@ -681,7 +681,7 @@ pub fn diff(
     second: &Path,
     kmer_length: Option<u8>,
     window_size: Option<u8>,
-    threads: usize,
+    threads: u16,
     output: Option<&Path>,
 ) -> Result<()> {
     let start_time = Instant::now();
