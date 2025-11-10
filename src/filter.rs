@@ -140,9 +140,29 @@ fn validate_compression_level(level: u8, min: u8, max: u8, format: &str) -> Resu
     }
 }
 
+/// Detect if a path requires gzip compression
+fn is_gzip_output(path: Option<&std::path::Path>) -> bool {
+    path.map(|p| p.to_string_lossy().ends_with(".gz"))
+        .unwrap_or(false)
+}
+
+/// Count number of gzip outputs from config
+fn count_gzip_outputs(config: &FilterConfig) -> usize {
+    let mut count = 0;
+    if is_gzip_output(config.output_path) {
+        count += 1;
+    }
+    if let Some(output2) = config.output2_path {
+        if is_gzip_output(Some(std::path::Path::new(output2))) {
+            count += 1;
+        }
+    }
+    count
+}
+
 // Return a suitable writer for the output path extension
 #[cfg_attr(not(feature = "compression"), allow(unused_variables))]
-fn get_writer(output_path: Option<&std::path::Path>, compression_level: u8) -> Result<BoxedWriter> {
+fn get_writer(output_path: Option<&std::path::Path>, compression_level: u8, gzip_threads: usize) -> Result<BoxedWriter> {
     let Some(path) = output_path else {
         return Ok(Box::new(BufWriter::with_capacity(
             OUTPUT_BUFFER_SIZE,
@@ -166,14 +186,12 @@ fn get_writer(output_path: Option<&std::path::Path>, compression_level: u8) -> R
             use gzp::deflate::Gzip;
             use gzp::par::compress::{ParCompress, ParCompressBuilder};
 
-            // gzp manages its own writer thread, so use all available threads
-            let num_threads = rayon::current_num_threads();
-
+            // Use explicitly allocated thread count for gzip compression
             let writer: ParCompress<Gzip> = ParCompressBuilder::new()
                 .compression_level(gzp::Compression::new(compression_level as u32))
                 .buffer_size(1024 * 1024) // 1MB gzp internal buffer
                 .unwrap()
-                .num_threads(num_threads)
+                .num_threads(gzip_threads)
                 .unwrap()
                 .from_writer(buffered_file);
             Ok(Box::new(writer))
@@ -728,11 +746,33 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     // Enable quiet mode when debug enabled
     let quiet = config.quiet || config.debug;
 
-    // Configure thread pool if nonzero
-    if config.threads > 0 {
+    // Detect gzip outputs and calculate thread allocation BEFORE initializing rayon pool
+    let total_threads = if config.threads == 0 {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    } else {
+        config.threads
+    };
+
+    let gzip_output_count = count_gzip_outputs(config);
+    let (filtering_threads, gzip_threads_per_output) = if gzip_output_count > 0 {
+        // Split threads: half for filtering, half divided among gzip outputs
+        // Ensure at least 1 thread for each task
+        let compression_pool = total_threads / 2;
+        let filtering_pool = total_threads - compression_pool;
+        let gzip_threads = (compression_pool / gzip_output_count).max(1);
+        (filtering_pool.max(1), gzip_threads)
+    } else {
+        // No gzip outputs: use all threads for filtering
+        (total_threads, 0)
+    };
+
+    // Configure thread pool with adjusted thread count for filtering
+    if filtering_threads > 0 {
         // error is OK here when we initialize a 2nd time in server mode.
         let _ = rayon::ThreadPoolBuilder::new()
-            .num_threads(config.threads)
+            .num_threads(filtering_threads)
             .build_global()
             .context("Failed to initialize thread pool");
     }
@@ -773,6 +813,14 @@ pub fn run(config: &FilterConfig) -> Result<()> {
             input_type,
             options.join(", ")
         );
+        if gzip_output_count > 0 {
+            eprintln!(
+                "Thread allocation: {} filtering, {}x{} compression",
+                filtering_threads,
+                gzip_output_count,
+                gzip_threads_per_output
+            );
+        }
     }
 
     // Check input files exist before making user wait for index loading
@@ -793,11 +841,12 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     }
 
     // Create appropriate writer(s) based on output path(s)
-    let writer = get_writer(config.output_path, config.compression_level)?;
+    let writer = get_writer(config.output_path, config.compression_level, gzip_threads_per_output)?;
     let writer2 = if let (Some(output2), Some(_)) = (config.output2_path, config.input2_path) {
         Some(get_writer(
             Some(std::path::Path::new(output2)),
             config.compression_level,
+            gzip_threads_per_output,
         )?)
     } else {
         None
@@ -847,12 +896,8 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         .transpose()?
         .unwrap_or(false);
 
-    // Process based on input type
-    let num_threads = if config.threads == 0 {
-        rayon::current_num_threads()
-    } else {
-        config.threads
-    };
+    // Process based on input type - use filtering threads (already calculated above)
+    let num_threads = filtering_threads;
 
     if paired_stdin {
         // Interleaved paired stdin - use interleaved processor
