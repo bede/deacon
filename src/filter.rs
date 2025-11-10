@@ -14,8 +14,8 @@ use std::io::{self, BufWriter, Write};
 use std::sync::Arc;
 use std::time::Instant;
 
-const OUTPUT_BUFFER_SIZE: usize = 8 * 1024 * 1024; // 8MB output buffer
-const LOCAL_BUFFER_SIZE: usize = 512 * 1024; // 512KB per-thread buffer
+const OUTPUT_BUFFER_SIZE: usize = 8 * 1024 * 1024; // Opt: 8MB output buffer
+const DEFAULT_BUFFER_SIZE: usize = 64 * 1024;
 
 type BoxedWriter = Box<dyn Write + Send>;
 
@@ -162,7 +162,11 @@ fn count_gzip_outputs(config: &FilterConfig) -> usize {
 
 // Return a suitable writer for the output path extension
 #[cfg_attr(not(feature = "compression"), allow(unused_variables))]
-fn get_writer(output_path: Option<&std::path::Path>, compression_level: u8, gzip_threads: usize) -> Result<BoxedWriter> {
+fn get_writer(
+    output_path: Option<&std::path::Path>,
+    compression_level: u8,
+    gzip_threads: usize,
+) -> Result<BoxedWriter> {
     let Some(path) = output_path else {
         return Ok(Box::new(BufWriter::with_capacity(
             OUTPUT_BUFFER_SIZE,
@@ -365,8 +369,8 @@ impl FilterProcessor {
             rename: config.rename,
             debug: config.debug,
             hasher: KmerHasher::new(kmer_length as usize),
-            local_buffer: Vec::with_capacity(LOCAL_BUFFER_SIZE),
-            local_buffer2: Vec::with_capacity(LOCAL_BUFFER_SIZE),
+            local_buffer: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
+            local_buffer2: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
             local_stats: ProcessingStats::default(),
             buffers: if kmer_length <= 32 {
                 Buffers::new_u64()
@@ -624,6 +628,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for FilterProcessor {
         if !self.local_buffer.is_empty() {
             let mut global_writer = self.global_writer.lock();
             global_writer.write_all(&self.local_buffer)?;
+            global_writer.flush()?;
         }
 
         // Clear buffer after releasing the lock
@@ -703,13 +708,16 @@ impl<Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor {
                 let mut writer2 = writer2.lock();
 
                 writer1.write_all(&self.local_buffer)?;
+                writer1.flush()?;
                 writer2.write_all(&self.local_buffer2)?;
+                writer2.flush()?;
             }
         } else {
             // Interleaved output
             if !self.local_buffer.is_empty() {
                 let mut writer = self.global_writer.lock();
                 writer.write_all(&self.local_buffer)?;
+                writer.flush()?;
             }
         }
 
@@ -816,9 +824,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         if gzip_output_count > 0 {
             eprintln!(
                 "Thread allocation: {} filtering, {}x{} compression",
-                filtering_threads,
-                gzip_output_count,
-                gzip_threads_per_output
+                filtering_threads, gzip_output_count, gzip_threads_per_output
             );
         }
     }
@@ -841,7 +847,11 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     }
 
     // Create appropriate writer(s) based on output path(s)
-    let writer = get_writer(config.output_path, config.compression_level, gzip_threads_per_output)?;
+    let writer = get_writer(
+        config.output_path,
+        config.compression_level,
+        gzip_threads_per_output,
+    )?;
     let writer2 = if let (Some(output2), Some(_)) = (config.output2_path, config.input2_path) {
         Some(get_writer(
             Some(std::path::Path::new(output2)),
@@ -972,19 +982,11 @@ pub fn run(config: &FilterConfig) -> Result<()> {
 
     drop(final_stats); // Release lock
 
-    // Explicitly flush and drop writers to ensure compression finalization
-    {
-        let mut writer = processor.global_writer.lock();
-        writer.flush()?;
-    }
+    // Flush writers - they should auto-flush on drop
     drop(processor.global_writer);
-
-    if let Some(ref w2) = processor.global_writer2 {
-        let mut writer2 = w2.lock();
-        writer2.flush()?;
-        drop(writer2);
+    if let Some(w2) = processor.global_writer2 {
+        drop(w2);
     }
-    drop(processor.global_writer2);
 
     let total_time = start_time.elapsed();
     let filtering_time = filtering_start_time.elapsed();
