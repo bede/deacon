@@ -74,3 +74,6 @@ codegen-units = 1
 panic = "abort"
 strip = false
 debug = false
+
+[patch.crates-io]
+gzp = {git = 'https://github.com/sstadick/gzp.git', branch='fix/gate_deflate_zlib_ng'}
