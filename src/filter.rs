@@ -188,10 +188,10 @@ fn get_writer(
         p if p.ends_with(".gz") => {
             validate_compression_level(compression_level, 1, 9, "gzip")?;
             use gzp::deflate::Gzip;
-            use gzp::par::compress::{ParCompress, ParCompressBuilder};
+            use gzp::par::compress::ParCompressBuilder;
 
             // Use explicitly allocated thread count for gzip compression
-            let writer: ParCompress<Gzip> = ParCompressBuilder::new()
+            let writer = ParCompressBuilder::<Gzip>::new()
                 .compression_level(gzp::Compression::new(compression_level as u32))
                 .buffer_size(1024 * 1024) // 1MB gzp internal buffer
                 .unwrap()
