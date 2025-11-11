@@ -1,16 +1,15 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+#[cfg(feature = "fetch")]
+use deacon::index_fetch;
 use deacon::{
-    DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig, diff_index, dump_index,
-    index_info, intersect_index, union_index,
+    DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig, index_diff, index_dump,
+    index_info, index_intersect, index_union,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-
-#[cfg(feature = "fetch")]
-use indicatif::ProgressBar;
 
 #[derive(Parser, Serialize, Deserialize)]
 #[command(author, version, about, long_about = None)]
@@ -24,7 +23,7 @@ struct Cli {
 
 #[derive(Subcommand, Serialize, Deserialize)]
 enum Commands {
-    /// Build, compose and inspect minimizer indexes
+    /// Build, inspect, compose and fetch minimizer indexes
     Index {
         #[command(subcommand)]
         command: IndexCommands,
@@ -208,9 +207,9 @@ enum IndexCommands {
     /// Fetch a pre-built index from remote storage
     #[cfg(feature = "fetch")]
     Fetch {
-        /// Index identifier (e.g., panhuman-1)
+        /// Index name (e.g., panhuman-1)
         #[arg(default_value = "panhuman-1")]
-        index_id: String,
+        index_name: String,
 
         /// K-mer length
         #[arg(short = 'k', default_value_t = DEFAULT_KMER_LENGTH)]
@@ -239,56 +238,6 @@ fn print_citation() {
     println!("\"Deacon: fast sequence filtering and contaminant depletion\"");
     println!("bioRxiv 2025.06.09.658732");
     println!("https://doi.org/10.1101/2025.06.09.658732");
-}
-
-#[cfg(feature = "fetch")]
-fn fetch_index(
-    index_id: &str,
-    kmer_length: u8,
-    window_size: u8,
-    output: Option<&std::path::Path>,
-) -> Result<()> {
-    const BASE_URL: &str =
-        "https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o";
-
-    let filename = format!("{}.k{}w{}.idx", index_id, kmer_length, window_size);
-    let url = format!("{}/deacon/{}", BASE_URL, filename);
-
-    eprintln!("Fetching {}", url);
-
-    let response = ureq::get(&url).call().context("Failed to download index")?;
-
-    if response.status() != 200 {
-        anyhow::bail!("Failed to fetch index: HTTP {}", response.status());
-    }
-
-    let content_length = response
-        .headers()
-        .get("Content-Length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<u64>().ok());
-
-    let pb = ProgressBar::new(content_length.unwrap_or(0));
-
-    let mut body = response.into_body();
-    let output_path = output
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(&filename));
-
-    let mut temp_path = output_path.clone();
-    temp_path.as_mut_os_string().push(".tmp");
-
-    let mut file = std::fs::File::create(&temp_path).context("Failed to create temporary file")?;
-    std::io::copy(&mut pb.wrap_read(body.as_reader()), &mut file)
-        .context("Failed to write index to file")?;
-
-    std::fs::rename(&temp_path, &output_path)
-        .context("Failed to move downloaded file to final location")?;
-
-    pb.finish_and_clear();
-    eprintln!("Index saved to: {}", output_path.display());
-
-    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -413,20 +362,20 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             }
             #[cfg(feature = "fetch")]
             IndexCommands::Fetch {
-                index_id,
+                index_name,
                 kmer_length,
                 window_size,
                 output,
             } => {
-                fetch_index(index_id, *kmer_length, *window_size, output.as_deref())
+                index_fetch(index_name, *kmer_length, *window_size, output.as_deref())
                     .context("Failed to run index fetch command")?;
             }
             IndexCommands::Union { inputs, output } => {
-                union_index(inputs, output.as_deref())
+                index_union(inputs, output.as_deref())
                     .context("Failed to run index union command")?;
             }
             IndexCommands::Intersect { inputs, output } => {
-                intersect_index(inputs, output.as_deref())
+                index_intersect(inputs, output.as_deref())
                     .context("Failed to run index intersect command")?;
             }
             IndexCommands::Diff {
@@ -437,7 +386,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 output,
                 threads,
             } => {
-                diff_index(
+                index_diff(
                     first,
                     second,
                     *kmer_length,
@@ -448,7 +397,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 .context("Failed to run index diff command")?;
             }
             IndexCommands::Dump { index, output } => {
-                dump_index(index, output.as_deref()).context("Failed to run index dump command")?;
+                index_dump(index, output.as_deref()).context("Failed to run index dump command")?;
             }
         },
         Commands::Filter {

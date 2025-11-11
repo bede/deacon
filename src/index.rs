@@ -13,6 +13,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
+#[cfg(feature = "fetch")]
+use indicatif::ProgressBar;
+#[cfg(feature = "fetch")]
+use std::time::Duration;
+
+/// Index format version
+pub const INDEX_FORMAT_VERSION: u8 = 3;
+
 /// Serialisable header for the index file
 #[derive(Serialize, Deserialize, Debug)]
 pub struct IndexHeader {
@@ -24,7 +32,7 @@ pub struct IndexHeader {
 impl IndexHeader {
     pub fn new(kmer_length: u8, window_size: u8) -> Self {
         IndexHeader {
-            format_version: 3,
+            format_version: INDEX_FORMAT_VERSION,
             kmer_length,
             window_size,
         }
@@ -32,7 +40,7 @@ impl IndexHeader {
 
     /// Validate header
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.format_version != 3 {
+        if self.format_version != INDEX_FORMAT_VERSION {
             return Err(anyhow::anyhow!(
                 "Unsupported index format version: {}",
                 self.format_version
@@ -1040,4 +1048,63 @@ mod tests {
         };
         assert!(invalid_even.validate().is_err()); // k=30 is even
     }
+}
+
+/// Fetch a pre-built index from remote storage
+#[cfg(feature = "fetch")]
+pub fn fetch(
+    index_name: &str,
+    kmer_length: u8,
+    window_size: u8,
+    output: Option<&Path>,
+) -> Result<()> {
+    const DEFAULT_REPOSITORY_URL: &str =
+        "https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o";
+
+    let base_url = std::env::var("DEACON_REPOSITORY_URL")
+        .unwrap_or_else(|_| DEFAULT_REPOSITORY_URL.to_string());
+
+    let filename = format!("{}.k{}w{}.idx", index_name, kmer_length, window_size);
+    let url = format!("{}/deacon/{}/{}", base_url, INDEX_FORMAT_VERSION, filename);
+
+    eprintln!("Fetching {}", url);
+
+    let agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(15)))
+        .build()
+        .new_agent();
+
+    let response = agent.get(&url).call().context("Failed to download index")?;
+
+    if response.status() != 200 {
+        anyhow::bail!("Failed to fetch index: HTTP {}", response.status());
+    }
+
+    let content_length = response
+        .headers()
+        .get("Content-Length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok());
+
+    let pb = ProgressBar::new(content_length.unwrap_or(0));
+
+    let mut body = response.into_body();
+    let output_path = output
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(&filename));
+
+    let mut temp_path = output_path.clone();
+    temp_path.as_mut_os_string().push(".tmp");
+
+    let mut file = File::create(&temp_path).context("Failed to create temporary file")?;
+    std::io::copy(&mut pb.wrap_read(body.as_reader()), &mut file)
+        .context("Failed to write index to file")?;
+
+    std::fs::rename(&temp_path, &output_path)
+        .context("Failed to finalise index")?;
+
+    pb.finish_and_clear();
+    eprintln!("Index saved to: {}", output_path.display());
+
+    Ok(())
 }

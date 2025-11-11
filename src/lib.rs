@@ -14,9 +14,12 @@ pub mod minimizers;
 
 // Re-export the important structures and functions for library users
 pub use filter::{FilterSummary, run as run_filter};
+#[cfg(feature = "fetch")]
+pub use index::fetch as index_fetch;
 pub use index::{
-    IndexHeader, build as build_index, diff as diff_index, dump as dump_index, dump_minimizers,
-    info as index_info, intersect as intersect_index, load_minimizers, union as union_index,
+    INDEX_FORMAT_VERSION, IndexHeader, build as index_build, diff as index_diff,
+    dump as index_dump, dump_minimizers, info as index_info, intersect as index_intersect,
+    load_minimizers, union as index_union,
 };
 pub use minimizers::{DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, decode_u64, decode_u128};
 
