@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2025-11-11
+
+### Added
+
+- Command `deacon index fetch` for downloading prebuilt indexes by name. If no index name is specified, the `panhuman-1` index is downloaded.
+- Parallel gzip compression of output files with automatic ~1:1 thread allocation between filtering and compression tasks if .gz extensions for `--output` (`-o`) and `--output2` (`-O`) arguments are detected.
+  - Automatic thread allocation can be overriden using new `--compression-threads` argument.
+  - ~3x faster filtering when reading and writing gzip-compressed Illumina FASTQs.
+
 ## [0.12.0] - 2025-10-16
 
 ### Added
@@ -20,8 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixes bug where `--debug` incorrectly showed the complement of the hitting minimizer.
 - Uses paraseq 0.4.3, addressing a bug identified in paraseq 0.4.2 causing FASTQ records without a trailing newline byte to be ignored.
 - 2x increase in filtering throughput on arm64 / MacOS systems enabled by a series of optimisations in latest versions of libraries packed-seq, seq-hash and simd-minimizers.
-
-
 
 
 ## [0.11.0] - 2025-10-07

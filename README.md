@@ -63,7 +63,7 @@ deacon filter amr-genes.idx AllTheBacteria.fa.zst > hits.fa
 
 ## Prebuilt Indexes
 
-For human and mouse hosts, using the prebuilt pangenome indexes is recommended.
+For human or mouse host depletion, prebuilt pangenome indexes are provided.
 
 |                          Name & URL                          |                         Composition                          | Minimizers  | Subtracted minimizers | Size  | Date    |
 | :----------------------------------------------------------: | :----------------------------------------------------------: | ----------- | --------------------- | ----- | ------- |
