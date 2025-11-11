@@ -9,6 +9,9 @@ use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
+#[cfg(feature = "fetch")]
+use indicatif::ProgressBar;
+
 #[derive(Parser, Serialize, Deserialize)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -202,6 +205,25 @@ enum IndexCommands {
         /// Path to index file
         index: PathBuf,
     },
+    /// Fetch a pre-built index from remote storage
+    #[cfg(feature = "fetch")]
+    Fetch {
+        /// Index identifier (e.g., panhuman-1)
+        #[arg(default_value = "panhuman-1")]
+        index_id: String,
+
+        /// K-mer length
+        #[arg(short = 'k', default_value_t = DEFAULT_KMER_LENGTH)]
+        kmer_length: u8,
+
+        /// Minimizer window size
+        #[arg(short = 'w', default_value_t = DEFAULT_WINDOW_SIZE)]
+        window_size: u8,
+
+        /// Path to output file (default: ./)
+        #[arg(short = 'o', long = "output")]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -217,6 +239,56 @@ fn print_citation() {
     println!("\"Deacon: fast sequence filtering and contaminant depletion\"");
     println!("bioRxiv 2025.06.09.658732");
     println!("https://doi.org/10.1101/2025.06.09.658732");
+}
+
+#[cfg(feature = "fetch")]
+fn fetch_index(
+    index_id: &str,
+    kmer_length: u8,
+    window_size: u8,
+    output: Option<&std::path::Path>,
+) -> Result<()> {
+    const BASE_URL: &str =
+        "https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o";
+
+    let filename = format!("{}.k{}w{}.idx", index_id, kmer_length, window_size);
+    let url = format!("{}/deacon/{}", BASE_URL, filename);
+
+    eprintln!("Fetching {}", url);
+
+    let response = ureq::get(&url).call().context("Failed to download index")?;
+
+    if response.status() != 200 {
+        anyhow::bail!("Failed to fetch index: HTTP {}", response.status());
+    }
+
+    let content_length = response
+        .headers()
+        .get("Content-Length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok());
+
+    let pb = ProgressBar::new(content_length.unwrap_or(0));
+
+    let mut body = response.into_body();
+    let output_path = output
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(&filename));
+
+    let mut temp_path = output_path.clone();
+    temp_path.as_mut_os_string().push(".tmp");
+
+    let mut file = std::fs::File::create(&temp_path).context("Failed to create temporary file")?;
+    std::io::copy(&mut pb.wrap_read(body.as_reader()), &mut file)
+        .context("Failed to write index to file")?;
+
+    std::fs::rename(&temp_path, &output_path)
+        .context("Failed to move downloaded file to final location")?;
+
+    pb.finish_and_clear();
+    eprintln!("Index saved to: {}", output_path.display());
+
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -338,6 +410,16 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             }
             IndexCommands::Info { index } => {
                 index_info(index).context("Failed to run index info command")?;
+            }
+            #[cfg(feature = "fetch")]
+            IndexCommands::Fetch {
+                index_id,
+                kmer_length,
+                window_size,
+                output,
+            } => {
+                fetch_index(index_id, *kmer_length, *window_size, output.as_deref())
+                    .context("Failed to run index fetch command")?;
             }
             IndexCommands::Union { inputs, output } => {
                 union_index(inputs, output.as_deref())
