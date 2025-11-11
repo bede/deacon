@@ -1,4 +1,4 @@
-use assert_cmd::Command;
+use assert_cmd::cargo;
 use predicates::str;
 use std::fs;
 use std::process::{Child, Command as StdCommand};
@@ -8,7 +8,7 @@ use tempfile::tempdir;
 
 #[test]
 fn test_version() {
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("--version")
         .assert()
         .success()
@@ -17,7 +17,7 @@ fn test_version() {
 
 #[test]
 fn test_no_args() {
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.assert().failure().stderr(str::contains("Usage"));
 }
 
@@ -35,7 +35,7 @@ fn test_server_mode() {
         ">ref\nATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT\n",
     )
     .unwrap();
-    let index_output = StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"))
+    let index_output = StdCommand::new(cargo::cargo_bin!("deacon"))
         .arg("index")
         .arg("build")
         .arg(&ref_fasta)
@@ -51,7 +51,7 @@ fn test_server_mode() {
     .unwrap();
 
     // Start server
-    let mut server: Child = StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"))
+    let mut server: Child = StdCommand::new(cargo::cargo_bin!("deacon"))
         .arg("server")
         .arg("start")
         .spawn()
@@ -60,7 +60,7 @@ fn test_server_mode() {
     thread::sleep(Duration::from_millis(500));
 
     // Filter via server
-    StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"))
+    StdCommand::new(cargo::cargo_bin!("deacon"))
         .arg("--use-server")
         .arg("filter")
         .arg(&index_path)
@@ -77,7 +77,7 @@ fn test_server_mode() {
     assert!(output_path.exists());
 
     // Stop server
-    StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"))
+    StdCommand::new(cargo::cargo_bin!("deacon"))
         .arg("--use-server")
         .arg("server")
         .arg("stop")

@@ -1,4 +1,4 @@
-use assert_cmd::Command;
+use assert_cmd::cargo;
 use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
@@ -21,7 +21,7 @@ fn create_test_fasta(path: &Path, variant: usize) {
 
 // Index builder helper
 fn build_index(fasta_path: &Path, bin_path: &Path) {
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("index")
         .arg("build")
         .arg(fasta_path)
@@ -63,7 +63,7 @@ fn test_index_build_with_custom_kmer_window() {
     create_test_fasta(&fasta_path, 1);
 
     // Build index with custom k-mer length and window size using -o
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("index")
         .arg("build")
         .arg(fasta_path)
@@ -99,7 +99,7 @@ fn test_index_union() {
     build_index(&fasta2_path, &bin2_path);
 
     // Combine indexes
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("index")
         .arg("union")
         .arg("-o")
@@ -144,7 +144,7 @@ fn test_index_diff() {
     build_index(&fasta2_path, &bin2_path);
 
     // Diff second index from first
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("index")
         .arg("diff")
         .arg("-o")
@@ -189,8 +189,7 @@ fn test_index_diff_three_methods() {
     build_index(&fasta2_path, &bin2_path);
 
     // Method 1: Index + Index diff
-    let output1 = Command::cargo_bin("deacon")
-        .unwrap()
+    let output1 = cargo::cargo_bin_cmd!("deacon")
         .arg("index")
         .arg("diff")
         .arg("-o")
@@ -202,8 +201,7 @@ fn test_index_diff_three_methods() {
     assert!(output1.status.success());
 
     // Method 2: Index + FASTX file diff (with explicit k,w)
-    let output2 = Command::cargo_bin("deacon")
-        .unwrap()
+    let output2 = cargo::cargo_bin_cmd!("deacon")
         .arg("index")
         .arg("diff")
         .arg("-k")
@@ -220,8 +218,7 @@ fn test_index_diff_three_methods() {
 
     // Method 3: Index + FASTX stdin diff (auto-detect k,w)
     let fasta2_content = fs::read(&fasta2_path).unwrap();
-    let output3 = Command::cargo_bin("deacon")
-        .unwrap()
+    let output3 = cargo::cargo_bin_cmd!("deacon")
         .arg("index")
         .arg("diff")
         .arg("-o")
@@ -311,8 +308,7 @@ fn test_index_diff_auto_detect_parameters() {
     build_index(&fasta1_path, &bin1_path);
 
     // Method 1: Auto-detect k,w from first index
-    let output_auto = Command::cargo_bin("deacon")
-        .unwrap()
+    let output_auto = cargo::cargo_bin_cmd!("deacon")
         .arg("index")
         .arg("diff")
         .arg("-o")
@@ -324,8 +320,7 @@ fn test_index_diff_auto_detect_parameters() {
     assert!(output_auto.status.success());
 
     // Method 2: Explicitly specify k,w (should match index defaults)
-    let output_explicit = Command::cargo_bin("deacon")
-        .unwrap()
+    let output_explicit = cargo::cargo_bin_cmd!("deacon")
         .arg("index")
         .arg("diff")
         .arg("-k")
@@ -361,7 +356,7 @@ fn test_index_dump() {
     let test_sequence = ">test\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n";
     fs::write(&fasta_path, test_sequence).unwrap();
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("index")
         .arg("build")
         .arg(&fasta_path)
@@ -370,7 +365,7 @@ fn test_index_dump() {
         .assert()
         .success();
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("index")
         .arg("dump")
         .arg(&bin_path)
@@ -403,7 +398,7 @@ fn test_index_intersect() {
     build_index(&fasta1_path, &bin1_path);
     build_index(&fasta2_path, &bin2_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("index")
         .arg("intersect")
         .arg("-o")

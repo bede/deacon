@@ -532,7 +532,8 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 [[package]]
 name = "gzp"
 version = "2.0.1"
-source = "git+https://github.com/sstadick/gzp.git?branch=fix%2Fgate_deflate_zlib_ng#ca9c0ffcb80bbff1b0a65aa897e957eb456db468"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "355c63cde38919e6dfe222039e90ed032677bf47756e5ba02d0694044fb3bd09"
 dependencies = [
  "byteorder",
  "bytes",
@@ -574,9 +575,9 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.18.2"
+version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ade6dfcba0dfb62ad59e59e7241ec8912af34fd29e0e743e3db992bd278e8b65"
+checksum = "9375e112e4b463ec1b1c6c011953545c65a30164fbab5b581df32b3abf0dcb88"
 dependencies = [
  "console",
  "portable-atomic",

@@ -1,5 +1,5 @@
 #![cfg_attr(not(feature = "compression"), allow(unused))]
-use assert_cmd::Command;
+use assert_cmd::cargo;
 use predicates::prelude::*;
 use std::fs;
 use std::fs::File;
@@ -31,7 +31,7 @@ fn create_test_paired_fastq(path1: &Path, path2: &Path) {
 }
 
 fn build_index(fasta_path: &Path, bin_path: &Path) {
-    let output = StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"))
+    let output = StdCommand::new(cargo::cargo_bin!("deacon"))
         .arg("index")
         .arg("build")
         .arg(fasta_path)
@@ -106,7 +106,7 @@ fn test_filter_to_file() {
     assert!(bin_path.exists(), "Index file wasn't created");
 
     // Run filtering command
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg(&bin_path)
         .arg(&fastq_path)
@@ -141,7 +141,7 @@ fn test_filter_to_file_gzip() {
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg(&bin_path)
         .arg(&fastq_path)
@@ -170,7 +170,7 @@ fn test_filter_to_file_zstd() {
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg(&bin_path)
         .arg(&fastq_path)
@@ -199,7 +199,7 @@ fn test_filter_to_file_xz() {
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg(&bin_path)
         .arg(&fastq_path)
@@ -228,7 +228,7 @@ fn test_filter_deplete_flag() {
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--deplete")
         .arg(&bin_path)
@@ -256,7 +256,7 @@ fn test_filter_rename() {
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--rename")
         .arg("-a")
@@ -294,7 +294,7 @@ fn test_filter_min_matches() {
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--abs-threshold")
         .arg("2")
@@ -325,7 +325,7 @@ fn test_filter_prefix_length() {
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--prefix-length")
         .arg("6")
@@ -358,7 +358,7 @@ fn test_filter_paired() {
     assert!(bin_path.exists(), "Index file wasn't created");
 
     // Run filtering command with paired-end reads (using -a 1 so short sequences pass through)
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("-a")
         .arg("1")
@@ -393,7 +393,7 @@ fn test_filter_paired_with_deplete() {
     create_test_paired_fastq(&fastq_path1, &fastq_path2);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--deplete")
         .arg(&bin_path)
@@ -423,7 +423,7 @@ fn test_filter_paired_with_rename() {
     create_test_paired_fastq(&fastq_path1, &fastq_path2);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--rename")
         .arg("-a")
@@ -463,7 +463,7 @@ fn test_filter_paired_with_min_matches() {
     create_test_paired_fastq(&fastq_path1, &fastq_path2);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--abs-threshold")
         .arg("2")
@@ -504,7 +504,7 @@ fn test_interleaved_paired_reads_stdin() {
     assert!(bin_path.exists(), "Index file wasn't created");
 
     // Test piping interleaved file to stdin for processing
-    let mut cmd = StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"));
+    let mut cmd = StdCommand::new(cargo::cargo_bin!("deacon"));
     let output = cmd
         .arg("filter")
         .arg("-a")
@@ -550,7 +550,7 @@ fn test_interleaved_paired_reads_stdin_separate_out() {
     assert!(bin_path.exists(), "Index file wasn't created");
 
     // Test piping interleaved file to stdin with separate output files
-    let mut cmd = StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"));
+    let mut cmd = StdCommand::new(cargo::cargo_bin!("deacon"));
     let output = cmd
         .arg("filter")
         .arg("-a")
@@ -637,7 +637,7 @@ fn test_single_read_stdin() {
     assert!(bin_path.exists(), "Index file wasn't created");
 
     // Test single-end stdin
-    let mut cmd = StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"));
+    let mut cmd = StdCommand::new(cargo::cargo_bin!("deacon"));
     let output = cmd
         .arg("filter")
         .arg("-a")
@@ -692,7 +692,7 @@ fn test_filter_filtration_fwd() {
     build_index(&fasta_path, &bin_path);
     assert!(bin_path.exists(), "Index file wasn't created");
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--deplete")
         .arg(&bin_path)
@@ -731,7 +731,7 @@ fn test_filter_filtration_rev() {
     build_index(&fasta_path, &bin_path);
     assert!(bin_path.exists(), "Index file wasn't created");
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--deplete")
         .arg(&bin_path)
@@ -766,7 +766,7 @@ fn test_filter_paired_filtration_fwd() {
     build_index(&fasta_path, &bin_path);
     assert!(bin_path.exists(), "Index file wasn't created");
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--deplete")
         .arg(&bin_path)
@@ -799,7 +799,7 @@ fn test_filter_paired_filtration_rev() {
     build_index(&fasta_path, &bin_path);
     assert!(bin_path.exists(), "Index file wasn't created");
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--deplete")
         .arg(&bin_path)
@@ -818,7 +818,7 @@ fn test_filter_paired_filtration_rev() {
 
 #[cfg(test)]
 mod output2_tests {
-    use assert_cmd::Command;
+    use assert_cmd::cargo;
     use std::fs;
     use std::path::Path;
     use std::process::Command as StdCommand;
@@ -838,7 +838,7 @@ mod output2_tests {
     }
 
     fn build_index(fasta_path: &Path, bin_path: &Path) {
-        let output = StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"))
+        let output = StdCommand::new(cargo::cargo_bin!("deacon"))
             .arg("index")
             .arg("build")
             .arg(fasta_path)
@@ -867,7 +867,7 @@ mod output2_tests {
         assert!(bin_path.exists(), "Index file wasn't created");
 
         // Run filtering command with separate output files
-        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        let mut cmd = cargo::cargo_bin_cmd!("deacon");
         cmd.arg("filter")
             .arg(&bin_path)
             .arg(&fastq_path1)
@@ -938,7 +938,7 @@ mod output2_tests {
         create_test_paired_fastq(&fastq_path1, &fastq_path2);
         build_index(&fasta_path, &bin_path);
 
-        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        let mut cmd = cargo::cargo_bin_cmd!("deacon");
         cmd.arg("filter")
             .arg(&bin_path)
             .arg(&fastq_path1)
@@ -1014,7 +1014,7 @@ mod output2_tests {
         build_index(&fasta_path, &bin_path);
 
         // Run filtering command with output2 but no second input (should warn)
-        let mut cmd = Command::cargo_bin("deacon").unwrap();
+        let mut cmd = cargo::cargo_bin_cmd!("deacon");
         cmd.arg("filter")
             .arg(&bin_path)
             .arg(&fastq_path)
@@ -1070,7 +1070,7 @@ fn test_shared_minimizer_counted_once() {
     // If shared minimizers are counted once (correct): total hits = 1, pair kept (1 < 2)
     // If shared minimizers are counted twice (bug): total hits = 2+, pair filtered (2+ >= 2)
     // Using --deplete to restore original behavior for this bug test
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--deplete")
         .arg(&bin_path)
@@ -1123,7 +1123,7 @@ fn test_filter_proportional_threshold() {
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--abs-threshold")
         .arg("1")
@@ -1155,7 +1155,7 @@ fn test_filter_proportional_paired() {
     create_test_paired_fastq(&fastq_path1, &fastq_path2);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--abs-threshold")
         .arg("1")
@@ -1188,7 +1188,7 @@ fn test_filter_edge_case_proportional_values() {
     build_index(&fasta_path, &bin_path);
 
     // Test with 0.0 (should pass everything)
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--abs-threshold")
         .arg("1")
@@ -1203,7 +1203,7 @@ fn test_filter_edge_case_proportional_values() {
 
     // Test with 1.0 (very strict)
     let output_path_strict = temp_dir.path().join("filtered_strict.fastq");
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--abs-threshold")
         .arg("1")
@@ -1241,7 +1241,7 @@ fn test_multiline_fasta_matching() {
     fs::write(&query_path, query_fasta).unwrap();
 
     // Build index with k=31, w=1
-    let output = StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"))
+    let output = StdCommand::new(cargo::cargo_bin!("deacon"))
         .arg("index")
         .arg("build")
         .arg("-k")
@@ -1256,7 +1256,7 @@ fn test_multiline_fasta_matching() {
     assert!(output.status.success(), "Index build command failed");
 
     // Filter with -a 1
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("-a")
         .arg("1")
@@ -1301,7 +1301,7 @@ fn test_newline_mapping_bug() {
     fs::write(&query_path, query_content).unwrap();
 
     // Build index with k=5, w=5 (k+w-1 must be odd: 5+5-1=9, odd ✓)
-    let output = StdCommand::new(assert_cmd::cargo::cargo_bin("deacon"))
+    let output = StdCommand::new(cargo::cargo_bin!("deacon"))
         .arg("index")
         .arg("build")
         .arg("-k")
@@ -1316,7 +1316,7 @@ fn test_newline_mapping_bug() {
     assert!(output.status.success(), "Index build command failed");
 
     // Filter query against index
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("-a")
         .arg("1")
@@ -1359,7 +1359,7 @@ fn test_large_kmer_filter() {
     create_test_fastq(&fastq_path);
 
     // Index with k=41 (u128 code path)
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("index")
         .arg("build")
         .arg("-k")
@@ -1373,8 +1373,7 @@ fn test_large_kmer_filter() {
         .success();
 
     // Test filtering with our k=41 index
-    let output = Command::cargo_bin("deacon")
-        .unwrap()
+    let output = cargo::cargo_bin_cmd!("deacon")
         .arg("filter")
         .arg(&bin_path)
         .arg(&fastq_path)
@@ -1410,8 +1409,7 @@ fn test_filter_empty_file() {
 
         fs::write(&test_file_path, "\n".repeat(num_bytes)).unwrap();
 
-        Command::cargo_bin("deacon")
-            .unwrap()
+        cargo::cargo_bin_cmd!("deacon")
             .arg("filter")
             .arg(&bin_path)
             .arg(&test_file_path)
@@ -1488,8 +1486,7 @@ fn test_filter_empty_gzip_file() {
     encoder.write_all(b"").unwrap();
     encoder.finish().unwrap();
 
-    Command::cargo_bin("deacon")
-        .unwrap()
+    cargo::cargo_bin_cmd!("deacon")
         .arg("filter")
         .arg(&bin_path)
         .arg(&empty_gz_file)
@@ -1558,8 +1555,7 @@ fn test_filter_empty_zstd_file() {
     encoder.write_all(b"").unwrap();
     encoder.finish().unwrap();
 
-    Command::cargo_bin("deacon")
-        .unwrap()
+    cargo::cargo_bin_cmd!("deacon")
         .arg("filter")
         .arg(&bin_path)
         .arg(&empty_zst_file)
@@ -1628,8 +1624,7 @@ fn test_filter_empty_xz_file() {
     encoder.write_all(b"").unwrap();
     encoder.finish().unwrap();
 
-    Command::cargo_bin("deacon")
-        .unwrap()
+    cargo::cargo_bin_cmd!("deacon")
         .arg("filter")
         .arg(&bin_path)
         .arg(&empty_xz_file)
@@ -1696,7 +1691,7 @@ fn test_filter_4_byte_record() {
     fs::write(&empty_file, b">a\nA").unwrap();
 
     // Run filter with --deplete
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--deplete")
         .arg(&bin_path)
@@ -1733,8 +1728,7 @@ fn test_filter_5_byte_record() {
     fs::write(&short_file, b">a\nA\n").unwrap();
 
     // Run filter with --deplete
-    let output = Command::cargo_bin("deacon")
-        .unwrap()
+    let output = cargo::cargo_bin_cmd!("deacon")
         .arg("filter")
         .arg("--deplete")
         .arg(&bin_path)
@@ -1776,7 +1770,7 @@ fn test_fastq_parsing_no_trailing_newline() {
     build_index(&fasta_path, &bin_path);
 
     // Run filter in deplete mode with minimal thresholds
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--deplete")
         .arg("-a")
@@ -1810,7 +1804,7 @@ fn test_thread_allocation_auto_single_gz() {
     build_index(&fasta_path, &bin_path);
 
     // Run with default auto thread allocation (8 threads)
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg(&bin_path)
         .arg(&fastq_path)
@@ -1839,7 +1833,7 @@ fn test_thread_allocation_auto_paired_gz() {
     build_index(&fasta_path, &bin_path);
 
     // Run with default auto thread allocation (8 threads, 2 outputs)
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg(&bin_path)
         .arg(&fastq1_path)
@@ -1871,7 +1865,7 @@ fn test_thread_allocation_manual_override() {
     build_index(&fasta_path, &bin_path);
 
     // Run with manual compression-threads override
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg(&bin_path)
         .arg(&fastq1_path)
@@ -1906,7 +1900,7 @@ fn test_thread_allocation_ceiling_division() {
 
     // Test ceiling division: 5 compression threads / 2 outputs = ceil(2.5) = 3 threads per output
     // So total compression = 2*3 = 6 threads
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg(&bin_path)
         .arg(&fastq1_path)
@@ -1937,7 +1931,7 @@ fn test_thread_allocation_no_compression() {
     build_index(&fasta_path, &bin_path);
 
     // Run with uncompressed output - should show threads=8 without allocation suffix
-    let mut cmd = Command::cargo_bin("deacon").unwrap();
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg(&bin_path)
         .arg(&fastq_path)
