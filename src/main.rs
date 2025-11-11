@@ -72,11 +72,11 @@ enum Commands {
         #[arg(short = 's', long = "summary")]
         summary: Option<PathBuf>,
 
-        /// Number of execution threads (0 = auto)
+        /// Number of threads (0 = auto)
         #[arg(short = 't', long = "threads", default_value_t = 8)]
         threads: u16,
 
-        /// Number of threads for compression (0 = auto)
+        /// Number of threads used for output compression (0 = auto)
         #[arg(long = "compression-threads", default_value_t = 0)]
         compression_threads: u16,
 

@@ -1100,8 +1100,7 @@ pub fn fetch(
     std::io::copy(&mut pb.wrap_read(body.as_reader()), &mut file)
         .context("Failed to write index to file")?;
 
-    std::fs::rename(&temp_path, &output_path)
-        .context("Failed to finalise index")?;
+    std::fs::rename(&temp_path, &output_path).context("Failed to finalise index")?;
 
     pb.finish_and_clear();
     eprintln!("Index saved to: {}", output_path.display());
