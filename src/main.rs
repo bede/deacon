@@ -38,14 +38,6 @@ enum Commands {
         /// Optional path to second paired fastx file (or - for interleaved stdin)
         input2: Option<String>,
 
-        /// Path to output fastx file (stdout if not specified; detects .gz and .zst)
-        #[arg(short = 'o', long = "output")]
-        output: Option<PathBuf>,
-
-        /// Optional path to second paired output fastx file (detects .gz and .zst)
-        #[arg(short = 'O', long = "output2")]
-        output2: Option<String>,
-
         /// Minimum absolute number of minimizer hits for a match
         #[arg(short = 'a', long = "abs-threshold", default_value_t = 2, value_parser = clap::value_parser!(u16).range(1..))]
         abs_threshold: u16,
@@ -66,6 +58,14 @@ enum Commands {
         #[arg(short = 'R', long = "rename", default_value_t = false)]
         rename: bool,
 
+        /// Path to output fastx file (stdout if not specified; detects .gz and .zst)
+        #[arg(short = 'o', long = "output")]
+        output: Option<PathBuf>,
+
+        /// Optional path to second paired output fastx file (detects .gz and .zst)
+        #[arg(short = 'O', long = "output2")]
+        output2: Option<String>,
+
         /// Path to JSON summary output file
         #[arg(short = 's', long = "summary")]
         summary: Option<PathBuf>,
@@ -74,13 +74,13 @@ enum Commands {
         #[arg(short = 't', long = "threads", default_value_t = 8)]
         threads: u16,
 
-        /// Output compression level (1-9 for gz & xz; 1-22 for zstd)
-        #[arg(long = "compression-level", default_value_t = 2)]
-        compression_level: u8,
-
         /// Number of threads for compression (0 = auto)
         #[arg(long = "compression-threads", default_value_t = 0)]
         compression_threads: u16,
+
+        /// Output compression level (1-9 for gz & xz; 1-22 for zstd)
+        #[arg(long = "compression-level", default_value_t = 2)]
+        compression_level: u8,
 
         /// Output sequences with minimizer hits to stderr
         #[arg(long = "debug", default_value_t = false)]
