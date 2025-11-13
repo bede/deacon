@@ -772,7 +772,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         } else {
             (total_threads + 1) / 2 // Auto: ceil(total_threads / 2)
         };
-        let filtering_threads = (total_threads - compression_threads_total).max(1);
+        let filtering_threads = total_threads.saturating_sub(compression_threads_total).max(1);
         let output_count = compressed_output_count as usize;
         let threads_per_output =
             ((compression_threads_total + output_count - 1) / output_count).max(1);
