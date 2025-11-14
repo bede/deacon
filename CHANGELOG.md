@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2025-11-14
+
+### Changed
+
+- `deacon index fetch` now uses `minreq` rather than `ureq` to download indexes, removing dependency on `rustls` & `ring`, which caused a curious build error on Bioconda arm64 MacOS runners, meaning that 0.13.0 was released via Cargo only.
+
 ## [0.13.0] - 2025-11-11
 
 ### Added
