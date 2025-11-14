@@ -14,6 +14,11 @@ Default parameters are carefully chosen but easily changed. Classification sensi
 
 Benchmarks for panhuman host depletion of complex microbial metagenomes are described in a [preprint](https://www.biorxiv.org/content/10.1101/2025.06.09.658732v1). Deacon with the `panhuman-1` (*k*=31, w=15) index exhibited the highest balanced accuracy for both long and short simulated reads. Deacon was less specific only than Hostile for short reads.
 
+## Use cases
+
+- Depletion of human or other host genome sequences in FASTQ reads or streams.
+- Quickly searching for genes, genomes or pangenomes in terabase genome catalogues like [AllTheBacteria](https://allthebacteria.org/) without tedious pre-indexing.
+
 ## Install
 
 ### Conda/mamba/pixi  [![Conda version](https://img.shields.io/conda/v/bioconda/deacon?style=flat-square&label=bioconda&color=blue)](https://anaconda.org/bioconda/deacon)
@@ -42,7 +47,7 @@ docker pull quay.io/biocontainers/deacon:0.12.0--h4349ce8_0
 ### Ultrafast panhuman host depletion
 
 ```bash
-# Download validated 3GB human pangenome index
+# Download validated 3GB human pangenome index (0.13.0 or later)
 deacon index fetch panhuman-1
 
 # Deplete long reads
@@ -124,7 +129,7 @@ deacon filter -d --debug panhuman-1.k31w15.idx reads.fq.gz > filt.fq
 
 > [!NOTE]
 >
-> `deacon filter` uses 8 threads by default. Using more threads (e.g.  `--threads 16`) can accelerate filtering given sufficient resources, especially with uncompressed sequences whose processing is not rate limited by decompression. Since version `0.13.0`, Deacon writes gzipped output files (e.g `-o out.fastq.gz`) in parallel, providing particular practical benefit for applications involving compressed paired reads. When output file(s) ending in `.gz` are detected, half of the total `--threads` are assigned to to compression and filtering respectively. The compression thread allocation can be overriden with `--compression-threads`. For best performance avoid gzip compression where possible, and consider using Zstandard (.zst), which has native support in Deacon.
+> `deacon filter` uses 8 threads by default. Using more threads (e.g.  `--threads 16`) can accelerate filtering given sufficient resources, especially with uncompressed sequences whose processing is not rate limited by decompression. Since version `0.13.0`, Deacon writes gzipped output files (e.g `-o out.fastq.gz`) in parallel, providing particular practical benefit for gzipped paired reads. If output file(s) ending in `.gz` are detected, half of `--threads` are allocated to to compression and filtering tasks respectively. Compression thread allocation can be overriden with `--compression-threads`. For best performance avoid gzip compression where possible, and consider using Zstandard (.zst), which has native support in Deacon.
 
 ## Command line reference
 
