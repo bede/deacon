@@ -15,8 +15,6 @@ use std::time::Instant;
 
 #[cfg(feature = "fetch")]
 use indicatif::ProgressBar;
-#[cfg(feature = "fetch")]
-use std::time::Duration;
 
 /// Index format version
 pub const INDEX_FORMAT_VERSION: u8 = 3;
@@ -1069,26 +1067,22 @@ pub fn fetch(
 
     eprintln!("Fetching {}", url);
 
-    let agent = ureq::Agent::config_builder()
-        .timeout_connect(Some(Duration::from_secs(15)))
-        .build()
-        .new_agent();
+    let mut response = minreq::get(&url)
+        .send_lazy()
+        .context("Failed to download index")?;
 
-    let response = agent.get(&url).call().context("Failed to download index")?;
-
-    if response.status() != 200 {
-        anyhow::bail!("Failed to fetch index: HTTP {}", response.status());
+    if response.status_code != 200 {
+        anyhow::bail!("Failed to fetch index: HTTP {}", response.status_code);
     }
 
     let content_length = response
-        .headers()
-        .get("Content-Length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<u64>().ok());
+        .headers
+        .get("content-length")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
 
-    let pb = ProgressBar::new(content_length.unwrap_or(0));
+    let pb = ProgressBar::new(content_length);
 
-    let mut body = response.into_body();
     let output_path = output
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from(&filename));
@@ -1097,7 +1091,7 @@ pub fn fetch(
     temp_path.as_mut_os_string().push(".tmp");
 
     let mut file = File::create(&temp_path).context("Failed to create temporary file")?;
-    std::io::copy(&mut pb.wrap_read(body.as_reader()), &mut file)
+    std::io::copy(&mut pb.wrap_read(&mut response), &mut file)
         .context("Failed to write index to file")?;
 
     std::fs::rename(&temp_path, &output_path).context("Failed to finalise index")?;
