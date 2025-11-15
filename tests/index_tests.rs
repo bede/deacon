@@ -428,3 +428,46 @@ fn test_index_intersect() {
         bin2_size
     );
 }
+
+#[test]
+fn test_index_truncated() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("test.fasta");
+    let bin_path = temp_dir.path().join("test.bin");
+    let truncated_path = temp_dir.path().join("truncated.bin");
+
+    create_test_fasta(&fasta_path, 1);
+    build_index(&fasta_path, &bin_path);
+    let original_size = fs::metadata(&bin_path).unwrap().len();
+
+    // Create a truncated copy (keep 90%)
+    let original_content = fs::read(&bin_path).unwrap();
+    let truncated_size = (original_size * 9) / 10;
+    fs::write(
+        &truncated_path,
+        &original_content[..truncated_size as usize],
+    )
+    .unwrap();
+
+    // Try using trunc index
+    let output = cargo::cargo_bin_cmd!("deacon")
+        .arg("index")
+        .arg("info")
+        .arg(&truncated_path)
+        .output()
+        .unwrap();
+
+    // Fails hopefully
+    assert!(
+        !output.status.success(),
+        "Loading truncated index should fail"
+    );
+
+    // Should have a helpful error message (not a panic)
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("corrupt") || stderr.contains("Failed to load minimizer batch"),
+        "Error message should mention corruption or batch load failure. Got: {}",
+        stderr
+    );
+}

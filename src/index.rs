@@ -135,7 +135,10 @@ pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)
             let batch_count = B.min(count - i);
             let batch_bytes = bytes_per_minimizer * batch_count;
             let batch = &mut buffer[..batch_bytes];
-            reader.read_exact(batch).unwrap();
+            reader.read_exact(batch).context(format!(
+                "Failed to load minimizer batch {}, index may be corrupt",
+                i / B
+            ))?;
 
             // Extract minimizers from packed bytes
             for j in 0..batch_count {
@@ -156,7 +159,10 @@ pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)
             let batch_count = B.min(count - i);
             let batch_bytes = bytes_per_minimizer * batch_count;
             let batch = &mut buffer[..batch_bytes];
-            reader.read_exact(batch).unwrap();
+            reader.read_exact(batch).context(format!(
+                "Failed to load minimizer batch {}, index may be corrupt",
+                i / B
+            ))?;
 
             // Extract minimizers from packed bytes
             for j in 0..batch_count {
@@ -169,6 +175,16 @@ pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)
         }
         crate::MinimizerSet::U128(set)
     };
+
+    // Validate that we loaded the expected number of minimizers
+    let loaded_count = minimizers.len();
+    if loaded_count != count {
+        return Err(anyhow::anyhow!(
+            "Failed to load expected number of minimizers; expected {} and observed {}. Index may be corrupt",
+            count,
+            loaded_count
+        ));
+    }
 
     Ok((minimizers, header))
 }
@@ -866,7 +882,7 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
 
         let expected_count = headers_and_counts[i].1;
         eprintln!(
-            "Index {}: expected {} minimizers, added {}, total: {}",
+            "Index {}: {} minimizers, added {}, total: {}",
             i + 1,
             expected_count,
             all_minimizers.len() - before_count,
@@ -942,7 +958,7 @@ pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
 
         let expected_count = headers_and_counts[i].1;
         eprintln!(
-            "Index {}: expected {} minimizers, retained {}, total: {}",
+            "Index {}: {} minimizers, retained {}, total: {}",
             i + 1,
             expected_count,
             result_minimizers.len(),
