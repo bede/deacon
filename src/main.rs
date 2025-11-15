@@ -117,7 +117,7 @@ enum ServerCommands {
 enum IndexCommands {
     /// Index minimizers contained within a fastx file
     Build {
-        /// Path to input fastx file (supports gz, zst and xz compression)
+        /// Path to input fastx file (or - for stdin; supports gz, zst and xz compression)
         input: PathBuf,
 
         /// K-mer length used for indexing (k+w-1 must be <= 96 and odd)
