@@ -1,5 +1,7 @@
-[build]
-rustflags = ["-C", "target-cpu=native"]
+[target.'cfg(target_arch="x86_64")']
+# x86-64-v2 does not have AVX2 which we need
+# x86-64-v4 has AVX512 which for portability we wish to avoid
+rustflags = ["-C", "target-cpu=x86-64-v3"]
 
 [target.'cfg(all(target_arch="aarch64", target_os="macos"))']
 # To work around the rustls/ring issue with native, we want to specify a target
