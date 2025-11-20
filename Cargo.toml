@@ -38,7 +38,7 @@ liblzma = { version = "0.3", optional = true }
 flate2 = { version = "1.1", features = ["zlib-rs"], optional = true }
 zstd = { version = "0.13", optional = true }
 gzp = { version = "2.0", default-features = false, features = ["deflate_rust"], optional = true }
-minreq = { version = "2", features = ["https-native"], optional = true }
+minreq = { version = "2", features = ["https-rustls-probe"], optional = true }
 
 [lints.clippy]
 too_many_arguments = "allow"
