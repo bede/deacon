@@ -8,6 +8,7 @@ use paraseq::Record;
 use paraseq::fastx::Reader;
 use paraseq::parallel::{PairedParallelProcessor, ParallelProcessor, ParallelReader};
 use parking_lot::Mutex;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
@@ -26,6 +27,7 @@ struct FilterProcessorConfig {
     prefix_length: usize,
     deplete: bool,
     rename: bool,
+    rename_random: bool,
     debug: bool,
 }
 
@@ -95,14 +97,20 @@ fn format_record_to_buffer<R: Record>(
     seq: &[u8],
     counter: u64,
     rename: bool,
+    rename_random: bool,
     buffer: &mut Vec<u8>,
 ) -> Result<()> {
     let is_fasta = record.qual().is_none();
 
     // Header
     buffer.write_all(if is_fasta { b">" } else { b"@" })?;
-    if rename {
+    if rename || rename_random {
         buffer.extend_from_slice(counter.to_string().as_bytes());
+        if rename_random {
+            buffer.write_all(b"-")?;
+            let random_suffix = rand::rng().random::<u64>();
+            buffer.extend_from_slice(random_suffix.to_string().as_bytes());
+        }
     } else {
         buffer.extend_from_slice(record.id());
     }
@@ -236,6 +244,7 @@ pub struct FilterSummary {
     prefix_length: usize,
     deplete: bool,
     rename: bool,
+    rename_random: bool,
     seqs_in: u64,
     seqs_out: u64,
     seqs_out_proportion: f64,
@@ -264,6 +273,7 @@ struct FilterProcessor {
     prefix_length: usize,
     deplete: bool,
     rename: bool,
+    rename_random: bool,
     debug: bool,
 
     hasher: KmerHasher,
@@ -367,6 +377,7 @@ impl FilterProcessor {
             prefix_length: config.prefix_length,
             deplete: config.deplete,
             rename: config.rename,
+            rename_random: config.rename_random,
             debug: config.debug,
             hasher: KmerHasher::new(kmer_length as usize),
             local_buffer: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
@@ -541,6 +552,7 @@ impl FilterProcessor {
             seq,
             self.local_stats.output_seq_counter,
             self.rename,
+            self.rename_random,
             &mut self.local_buffer,
         )
     }
@@ -552,6 +564,7 @@ impl FilterProcessor {
             seq,
             self.local_stats.output_seq_counter,
             self.rename,
+            self.rename_random,
             &mut self.local_buffer2,
         )
     }
@@ -895,6 +908,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         prefix_length: config.prefix_length,
         deplete: config.deplete,
         rename: config.rename,
+        rename_random: config.rename_random,
         debug: config.debug,
     };
     let mut processor = FilterProcessor::new(
@@ -1078,6 +1092,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
             prefix_length: config.prefix_length,
             deplete: config.deplete,
             rename: config.rename,
+            rename_random: config.rename_random,
             seqs_in: total_seqs as u64,
             seqs_out: seqs_out as u64,
             seqs_out_proportion: output_seq_proportion,
@@ -1129,6 +1144,7 @@ mod tests {
             prefix_length: 0,
             deplete: false,
             rename: false,
+            rename_random: false,
             seqs_in: 100,
             seqs_out: 90,
             seqs_out_proportion: 0.9,

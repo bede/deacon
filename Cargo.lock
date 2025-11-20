@@ -383,6 +383,7 @@ dependencies = [
  "paraseq",
  "parking_lot",
  "predicates",
+ "rand",
  "rapidhash",
  "rayon",
  "rstest",

@@ -26,6 +26,7 @@ bincode = { version = "2.0", features = ["serde"] }
 rapidhash = "4.1.0"
 parking_lot = "0.12"
 indicatif = "0.18"
+rand = "0.9"
 
 packed-seq = "4.2.0"
 simd-minimizers = "2.2.0"

@@ -60,6 +60,10 @@ enum Commands {
         #[arg(short = 'R', long = "rename", default_value_t = false)]
         rename: bool,
 
+        /// Replace sequence headers with incrementing numbers and random suffixes
+        #[arg(long = "rename-random", default_value_t = false)]
+        rename_random: bool,
+
         /// Path to output fastx file (stdout if not specified; detects .gz and .zst)
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
@@ -412,6 +416,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             summary,
             deplete,
             rename,
+            rename_random,
             threads,
             compression_level,
             compression_threads,
@@ -437,6 +442,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 summary_path: summary.as_ref(),
                 deplete: *deplete,
                 rename: *rename,
+                rename_random: *rename_random,
                 threads: *threads,
                 compression_level: *compression_level,
                 compression_threads: *compression_threads,
