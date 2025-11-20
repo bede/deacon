@@ -26,13 +26,5 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - name: Override target-cpu on macOS
-        if: runner.os == 'macOS'
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml << 'EOF'
-          [build]
-          rustflags = ["-C", "target-cpu=apple-m1"]
-          EOF
       - name: Run tests
         run: cargo test --verbose
