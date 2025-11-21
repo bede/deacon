@@ -253,6 +253,9 @@ fn main() -> Result<()> {
         );
     }
 
+    // If the binary was compiled with AVX2, check that the machine supports it at runtime.
+    ensure_simd::ensure_simd();
+
     let cli = Cli::parse();
 
     if let Commands::Server { command } = &cli.command {
