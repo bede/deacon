@@ -828,6 +828,9 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     if config.rename {
         options.push("rename".to_string());
     }
+    if config.rename_random {
+        options.push("rename-random".to_string());
+    }
     if config.threads > 0 {
         let threads_str = if compressed_output_count > 0 {
             let compression_total =

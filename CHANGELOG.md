@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.2] - 2025-11-21
+
+### Added
+
+- `deacon filter` accepts `--rename-random` for anonymising read names using both incrementing and random (64 bit) integers to practically assure uniqueness. This mitigates a reported issue relating to identical read names across separate files causing problems during upload to the Eurpean Nucleotide Archive.
+
+### Changed
+
+- Groundwork for ensuring Bioconda binaries are always built for the most portable `x86-64-v3` (AVX2) target supporting all AMD and Intel CPUs released in the last decade.
+- The crate `minreq` now uses the `rustls` backend enabling native compilation on a wider range of Linux systems. Implements a workaround for the previously described `rustls` & `ring` issue on MacOS ARM runners.
+
 ## [0.13.1] - 2025-11-14
 
 ### Changed
