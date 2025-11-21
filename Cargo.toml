@@ -79,3 +79,7 @@ codegen-units = 1
 panic = "abort"
 strip = false
 debug = false
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"

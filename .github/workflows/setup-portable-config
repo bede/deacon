@@ -1,0 +1,2 @@
+- name: Initialize portable config
+  run: mv .cargo/config-portable.toml .cargo/config.toml
