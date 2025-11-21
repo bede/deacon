@@ -36,6 +36,9 @@ RUSTFLAGS="-C target-cpu=native" cargo install deacon
 > [!IMPORTANT]
 > Cargo installation requires Rust 1.88 or newer. Update using `rustup update`.
 
+See [here](https://github.com/ragnargrootkoerkamp/ensure_simd) for
+details on `target-cpu=native`.
+
 ### Docker [![Crates.io version](https://img.shields.io/badge/install%20with-docker-important.svg?style=flat-square&logo=docker)](https://biocontainers.pro/tools/deacon)
 
 ```bash
