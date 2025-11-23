@@ -34,9 +34,11 @@ RUSTFLAGS="-C target-cpu=native" cargo install deacon
 ```
 
 > [!IMPORTANT]
-> Cargo installation requires Rust 1.88 or newer. Update using `rustup update`.
+> Cargo installation requires [Rust 1.88 or newer](https://rust-lang.org/tools/install/). Update using `rustup update`.
 
 ### Docker [![Crates.io version](https://img.shields.io/badge/install%20with-docker-important.svg?style=flat-square&logo=docker)](https://biocontainers.pro/tools/deacon)
+
+Containers are available from the [BioContainer registry](https://biocontainers.pro/tools/deacon)
 
 ```bash
 docker pull quay.io/biocontainers/deacon:0.12.0--h4349ce8_0
@@ -47,7 +49,7 @@ docker pull quay.io/biocontainers/deacon:0.12.0--h4349ce8_0
 ### Ultrafast panhuman host depletion
 
 ```bash
-# Download validated 3GB human pangenome index (0.13.0 or later)
+# Download validated 3GB human pangenome index (version 0.13.0 or later)
 deacon index fetch panhuman-1
 
 # Deplete long reads
@@ -64,11 +66,11 @@ deacon index build amr-genes.fa > amr-genes.idx
 deacon filter amr-genes.idx AllTheBacteria.fa.zst > hits.fa
 ```
 
-*N.B. Indexing a 3Gbp human genome takes ~30s using 18GB of RAM. Filtering with this index uses 5GB of RAM.*
+*N.B. Indexing a 3Gbp human genome takes ~30s using 18GB of RAM with default parameters. Filtering uses 5GB.*
 
-## Prebuilt Indexes
+## Prebuilt indexes
 
-For human or mouse host depletion, prebuilt pangenome indexes are provided.
+Prebuilt pangenome indexes are provided for human and mouse host classification and depletion. Prebuilt indexes may be downloaded from the table below, or using `deacon index fetch <name>`.
 
 |                          Name & URL                          |                         Composition                          | Minimizers  | Subtracted minimizers | Size  | Date    |
 | :----------------------------------------------------------: | :----------------------------------------------------------: | ----------- | --------------------- | ----- | ------- |
@@ -84,6 +86,8 @@ For human or mouse host depletion, prebuilt pangenome indexes are provided.
 > - Deacon **`0.1.0`** through to **`0.6.0`** used index format version **`1`**
 
 ## Usage
+
+### Filtering
 
 The main command `deacon filter` accepts an index path followed by up to two FASTA/FASTQ file paths, depending on whether input sequences originate from stdin, a single file, or paired input files. Indexes are built with `deacon index build`.  Paired queries are supported as either separate files or interleaved stdin, and written interleaved to either stdout or file, or else to separate paired output files. For paired reads, distinct minimizer hits originating from either mate are counted. By default, input sequences must meet both an absolute threshold of 2 minimizer hits (`-a 2`) and a relative threshold of 1% of minimizers (`-r 0.01`) to pass the filter. Filtering can be inverted for e.g. host depletion using the `--deplete` (`-d`) flag. Gzip, Zstandard, and xz compression formats are detected automatically by file extension.
 
@@ -125,11 +129,36 @@ deacon filter -d -p 1000 panhuman-1.k31w15.idx reads.fq.gz > filt.fq
 deacon filter -d --debug panhuman-1.k31w15.idx reads.fq.gz > filt.fq
 ```
 
-### Multithreading
-
 > [!NOTE]
 >
-> `deacon filter` uses 8 threads by default. Using more threads (e.g.  `--threads 16`) can accelerate filtering given sufficient resources, especially with uncompressed sequences whose processing is not rate limited by decompression. Since version `0.13.0`, Deacon writes gzipped output files (e.g `-o out.fastq.gz`) in parallel, providing particular practical benefit for gzipped paired reads. If output file(s) ending in `.gz` are detected, half of `--threads` are allocated to to compression and filtering tasks respectively. Compression thread allocation can be overriden with `--compression-threads`. For best performance avoid gzip compression where possible, and consider using Zstandard (.zst), which has native support in Deacon.
+> `deacon filter` uses 8 threads by default. Using more threads (e.g.  `--threads 16`) can accelerate filtering given sufficient resources, especially with uncompressed sequences whose processing is not rate limited by decompression. Since version `0.13.0`, Deacon writes gzipped output files (e.g `-o out.fastq.gz`) in parallel, providing particular practical benefit for gzipped paired reads. If output file(s) ending in `.gz` are detected, total `--threads` are allocated 1:1 to compression and filtering tasks respectively. Compression thread allocation can be overriden with `--compression-threads`. For best performance, avoid gzip compression where possible and consider using Zstandard (.zst), which has native support in Deacon.
+
+### Indexing
+
+```bash
+# Index one FASTA/FASTQ file
+deacon index build genome.fa.gz > genome.idx
+
+# Index many FASTA/FASTQ files using stdin
+zcat *.fa.gz | deacon index build - > genomes.idx
+```
+
+`deacon index build` accepts either a FASTA/FASTQ file or a stdin stream (`-`), enabling convenient indexing of compressed sequences in one or many files with a single step. Indexing a human genome takes a few seconds. Indexing uses 2-4x as much RAM as filtering. For indexing large collections approaching terabase scale—such as mammalian pangenomes—it may be practical to index genomes individually in parallel and later combine them using the `deacon index union` set operation, described below.
+
+#### Set operations
+
+A differentiating feature of Deacon is the ease of combining, subtracting and intersecting minimizer indexes. For example, `deacon index diff`can be used to subtract shared minimizers between target and host genomes when building custom indexes for host depletion.
+
+- Use `deacon index union 1.idx 2.idx 3.idx… > 1+2+3.idx` to succinctly combine two (or more!) indexes.
+- Use `deacon index diff 1.idx 2.idx > 1-2.idx` to subtract minimizers in 2.idx from 1.idx. Useful for masking out shared minimizer content between e.g. target and host genomes.
+  - `deacon index diff` also supports subtracting minimizers from an index using a fastx file or stream directly, e.g. `deacon index diff 1.idx 2.fa.gz > 1-2.idx` or `zcat *.fa.gz | deacon index diff 1.idx - > 1-2.idx`. This enables diffing with larger-than-memory sequence collections if desired.
+
+- Use `deacon index intersect 1.idx 2.idx > 1∩2.idx` to find the intersection of minimizers in two indexes.
+
+#### Inspecting indexes
+
+- Use `deacon index info 1.idx` to display index information including minimizer *k* and *w* parameters, number of minimizers, and index format version.
+- Use `deacon index dump 1.idx > 1.fa` to dump a minimizer index to FASTA.
 
 ## Command line reference
 
@@ -157,6 +186,8 @@ Options:
           Discard matching sequences (invert filtering behaviour)
   -R, --rename
           Replace sequence headers with incrementing numbers
+      --rename-random
+          Replace sequence headers with incrementing numbers and random suffixes
   -o, --output <OUTPUT>
           Path to output fastx file (stdout if not specified; detects .gz and .zst)
   -O, --output2 <OUTPUT2>
@@ -225,14 +256,6 @@ Options:
   -h, --help
           Print help
 ```
-
-## Building custom indexes
-
-Building custom Deacon indexes is fast. Nevertheless, when indexing many large genomes, it may be worthwhile separately indexing and subsequently combining indexes into one succinct index. Combine distinct minimizers from multiple indexes using `deacon index union`. Similarly, use `deacon index diff` to subtract the minimizers contained in one index from another. This can be helpful for e.g. eliminating shared minimizers between the target and host genomes when building custom (non-human) indexes for host depletion.
-
-- Use `deacon index union 1.idx 2.idx 3.idx… > 1+2+3.idx` to succinctly combine two (or more!) deacon indexes.
-- Use `deacon index diff 1.idx 2.idx > 1-2.idx` to subtract minimizers in 1.idx from 2.idx. Useful for masking out shared minimizer content between e.g. target and host genomes.
-- From version `0.7.0`, `deacon index diff` also supports subtracting minimizers from an index using a fastx file or stream, e.g. `deacon index diff 1.idx 2.fa.gz > 1-2.idx` or `zcat *.fa.gz | deacon index diff 1.idx - > 1-2.idx`.
 
 
 ## Filtering summary statistics
