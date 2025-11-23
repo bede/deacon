@@ -21,5 +21,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo registry
         uses: Swatinem/rust-cache@v2
+      - name: Use portable config
+        run: mv .cargo/config-portable.toml .cargo/config.toml
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test
