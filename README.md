@@ -38,7 +38,7 @@ RUSTFLAGS="-C target-cpu=native" cargo install deacon
 
 ### Docker [![Crates.io version](https://img.shields.io/badge/install%20with-docker-important.svg?style=flat-square&logo=docker)](https://biocontainers.pro/tools/deacon)
 
-Containers are available from the [BioContainer registry](https://biocontainers.pro/tools/deacon)
+Containers are available from the [BioContainers registry](https://biocontainers.pro/tools/deacon).
 
 ```bash
 docker pull quay.io/biocontainers/deacon:0.12.0--h4349ce8_0
@@ -70,12 +70,12 @@ deacon filter amr-genes.idx AllTheBacteria.fa.zst > hits.fa
 
 ## Prebuilt indexes
 
-Prebuilt pangenome indexes are provided for human and mouse host classification and depletion. Prebuilt indexes may be downloaded from the table below, or using `deacon index fetch <name>`.
+Prebuilt pangenome indexes are provided for human and mouse host classification and depletion. These can be downloaded using the links below, or with `deacon index fetch <name>`.
 
 |                          Name & URL                          |                         Composition                          | Minimizers  | Subtracted minimizers | Size  | Date    |
 | :----------------------------------------------------------: | :----------------------------------------------------------: | ----------- | --------------------- | ----- | ------- |
 | **`panhuman-1` (*k*=31, *w*=15)** [Cloud](https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panhuman-1.k31w15.idx), [Zenodo](https://zenodo.org/records/17288185) | [HPRC Year 1](https://github.com/human-pangenomics/HPP_Year1_Assemblies/blob/main/assembly_index/Year1_assemblies_v2_genbank.index) ∪ [`CHM13v2.0`](https://www.ncbi.nlm.nih.gov/assembly/11828891) ∪ [`GRCh38.p14`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001405.40) - bacteria (FDA-ARGOS) - viruses (RefSeq) | 409,907,949 | 20,671 (**0.0050%**)  | 3.3GB | 2025-04 |
-| **`panmouse-1` (k=31, w=15, e=0.5)** [Cloud](https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panmouse-1.k31w15.idx) | [`GRCm39`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001635.27) ∪ [`PRJEB47108`](https://www.ebi.ac.uk/ena/browser/view/PRJEB47108?show=sequences) - bacteria (FDA-ARGOS) - viruses (RefSeq) | 548,328,389 | 8,243 (**0.0015%**)   | 4.4GB | 2025-08 |
+| **`panmouse-1` (*k*=31, *w*=15)** [Cloud](https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panmouse-1.k31w15.idx), [Zenodo](https://zenodo.org/records/17699167) | [`GRCm39`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001635.27) ∪ [`PRJEB47108`](https://www.ebi.ac.uk/ena/browser/view/PRJEB47108?show=sequences) - bacteria (FDA-ARGOS) - viruses (RefSeq) | 551,041,865 | 9,866 (**0.0018%**)   | 4.4GB | 2025-11 |
 
 > [!NOTE]
 >
