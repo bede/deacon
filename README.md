@@ -149,11 +149,11 @@ zcat *.fa.gz | deacon index build - > genomes.idx
 
 A differentiating feature of Deacon is the ease of combining, subtracting and intersecting minimizer indexes. For example, `deacon index diff`can be used to subtract shared minimizers between target and host genomes when building custom indexes for host depletion.
 
-- Use `deacon index union 1.idx 2.idx 3.idx… > 1+2+3.idx` to succinctly combine two (or more!) indexes.
+- Use `deacon index union 1.idx 2.idx 3.idx… > 1+2+3.idx` to succinctly combine two or more indexes.
 - Use `deacon index diff 1.idx 2.idx > 1-2.idx` to subtract minimizers in 2.idx from 1.idx. Useful for masking out shared minimizer content between e.g. target and host genomes.
   - `deacon index diff` also supports subtracting minimizers from an index using a fastx file or stream directly, e.g. `deacon index diff 1.idx 2.fa.gz > 1-2.idx` or `zcat *.fa.gz | deacon index diff 1.idx - > 1-2.idx`. This enables diffing with larger-than-memory sequence collections if desired.
 
-- Use `deacon index intersect 1.idx 2.idx > 1∩2.idx` to find the intersection of minimizers in two indexes.
+- Use `deacon index intersect 1.idx 2.idx… > 1∩2.idx` to find the intersection of minimizers in two or more indexes.
 
 #### Inspecting indexes
 
