@@ -936,7 +936,27 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     // Process based on input type - use filtering threads (already calculated above)
     let num_threads = filtering_threads;
 
-    if paired_stdin {
+    if config.mim {
+        // Assume single-file .gz input.
+        assert!(
+            config.input2_path.is_none(),
+            "--mim does not yet work for paired input."
+        );
+        assert!(
+            !paired_stdin,
+            "--mim does not yet work for interleaved input."
+        );
+        assert!(
+            config.input_path.ends_with(".gz"),
+            "--mim requires .gz input."
+        );
+
+        let reader = mimrs::paraseq_reader::MimReader::build_if_missing(config.input_path.as_ref())
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to build mim index for {}: {e}", config.input_path)
+            })?;
+        reader.process_parallel(&mut processor, num_threads)?;
+    } else if paired_stdin {
         // Interleaved paired stdin - use interleaved processor
         let reader = create_paraseq_reader(Some("-"))?;
         reader.process_parallel_interleaved(&mut processor, num_threads)?;

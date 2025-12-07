@@ -95,6 +95,10 @@ enum Commands {
         /// Suppress progress reporting
         #[arg(short = 'q', long = "quiet", default_value_t = false)]
         quiet: bool,
+
+        /// Use (and build) a .mim index file for .gz inputs.
+        #[arg(long = "mim", default_value_t = false)]
+        mim: bool,
     },
     /// Start/stop a server process for reduced latency filtering
     Server {
@@ -252,6 +256,8 @@ fn main() -> Result<()> {
             "Warning: SIMD acceleration is unavailable. For best performance, compile with `cargo build --release -C target-cpu=native`"
         );
     }
+
+    env_logger::init();
 
     // If the binary was compiled with AVX2, check that the machine supports it at runtime.
     ensure_simd::ensure_simd();
@@ -425,6 +431,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             compression_threads,
             debug,
             quiet,
+            mim,
         } => {
             // Validate output2 usage
             if output2.is_some() && input2.is_none() {
@@ -451,6 +458,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 compression_threads: *compression_threads,
                 debug: *debug,
                 quiet: *quiet,
+                mim: *mim,
             };
             config.execute().context("Failed to run filter command")?;
         }

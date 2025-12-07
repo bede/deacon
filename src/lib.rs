@@ -186,6 +186,9 @@ pub struct FilterConfig<'a> {
 
     /// Suppress progress reporting
     pub quiet: bool,
+
+    /// Use (and build) mim index.
+    pub mim: bool,
 }
 
 impl<'a> FilterConfig<'a> {
@@ -208,6 +211,7 @@ impl<'a> FilterConfig<'a> {
             compression_threads: 0, // Auto-calculate as ceil(total/2)
             debug: false,
             quiet: false,
+            mim: false,
         }
     }
 
