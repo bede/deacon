@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-02-25
+
+### Added
+
+- `deacon filter` accepts `-f`/`--fasta` to force FASTA output regardless of input format.
+
 ## [0.13.2] - 2025-11-21
 
 ### Added

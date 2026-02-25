@@ -28,6 +28,7 @@ struct FilterProcessorConfig {
     deplete: bool,
     rename: bool,
     rename_random: bool,
+    output_fasta: bool,
     debug: bool,
 }
 
@@ -114,9 +115,10 @@ fn format_record_to_buffer<R: Record>(
     counter: u64,
     rename: bool,
     rename_random: bool,
+    output_fasta: bool,
     buffer: &mut Vec<u8>,
 ) -> Result<()> {
-    let is_fasta = record.qual().is_none();
+    let is_fasta = output_fasta || record.qual().is_none();
 
     // Header
     buffer.write_all(if is_fasta { b">" } else { b"@" })?;
@@ -290,6 +292,7 @@ struct FilterProcessor {
     deplete: bool,
     rename: bool,
     rename_random: bool,
+    output_fasta: bool,
     debug: bool,
 
     hasher: KmerHasher,
@@ -394,6 +397,7 @@ impl FilterProcessor {
             deplete: config.deplete,
             rename: config.rename,
             rename_random: config.rename_random,
+            output_fasta: config.output_fasta,
             debug: config.debug,
             hasher: KmerHasher::new(kmer_length as usize),
             local_buffer: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
@@ -569,6 +573,7 @@ impl FilterProcessor {
             self.local_stats.output_seq_counter,
             self.rename,
             self.rename_random,
+            self.output_fasta,
             &mut self.local_buffer,
         )
     }
@@ -581,6 +586,7 @@ impl FilterProcessor {
             self.local_stats.output_seq_counter,
             self.rename,
             self.rename_random,
+            self.output_fasta,
             &mut self.local_buffer2,
         )
     }
@@ -928,6 +934,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         deplete: config.deplete,
         rename: config.rename,
         rename_random: config.rename_random,
+        output_fasta: config.output_fasta,
         debug: config.debug,
     };
     let mut processor = FilterProcessor::new(

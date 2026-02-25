@@ -64,6 +64,10 @@ enum Commands {
         #[arg(long = "rename-random", default_value_t = false)]
         rename_random: bool,
 
+        /// Output FASTA format regardless of input format
+        #[arg(short = 'f', long = "fasta", default_value_t = false)]
+        output_fasta: bool,
+
         /// Path to output fastx file (stdout if not specified; detects .gz and .zst)
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
@@ -420,6 +424,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             deplete,
             rename,
             rename_random,
+            output_fasta,
             threads,
             compression_level,
             compression_threads,
@@ -446,6 +451,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 deplete: *deplete,
                 rename: *rename,
                 rename_random: *rename_random,
+                output_fasta: *output_fasta,
                 threads: *threads,
                 compression_level: *compression_level,
                 compression_threads: *compression_threads,

@@ -172,6 +172,9 @@ pub struct FilterConfig<'a> {
     /// Replace headers with sequential numbers followed by random u64 (1-12345, 2-67890, ...)
     pub rename_random: bool,
 
+    /// Force FASTA output (discards quality scores)
+    pub output_fasta: bool,
+
     /// Number of execution threads (0 = auto)
     pub threads: u16,
 
@@ -203,6 +206,7 @@ impl<'a> FilterConfig<'a> {
             deplete: false,
             rename: false,
             rename_random: false,
+            output_fasta: false,
             threads: 0,             // Use all available threads by default
             compression_level: 2,   // Default compression level
             compression_threads: 0, // Auto-calculate as ceil(total/2)

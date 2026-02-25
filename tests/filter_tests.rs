@@ -284,6 +284,40 @@ fn test_filter_rename() {
 }
 
 #[test]
+fn test_filter_fasta_flag() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+
+    create_test_fasta(&fasta_path);
+    create_test_fastq(&fastq_path);
+    build_index(&fasta_path, &bin_path);
+
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    let output = cmd
+        .arg("filter")
+        .arg("-f")
+        .arg("-a")
+        .arg("1")
+        .arg("-r")
+        .arg("0.0")
+        .arg(&bin_path)
+        .arg(&fastq_path)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let output_str = std::str::from_utf8(&output).unwrap();
+    assert!(
+        output_str.starts_with('>'),
+        "FASTQ in with -f should gen FASTA out"
+    );
+}
+
+#[test]
 fn test_filter_min_matches() {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("ref.fasta");

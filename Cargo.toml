@@ -1,7 +1,7 @@
 [package]
 name = "deacon"
-version = "0.13.2"
-description = "Fast DNA search and [host] depletion using minimizers"
+version = "0.14.0"
+description = "Accelerated DNA sequence search and [host] depletion using minimizers"
 authors = ["Bede Constantinides <b@bede.im>"]
 edition = "2024"
 repository = "https://github.com/bede/deacon"
@@ -80,3 +80,6 @@ codegen-units = 1
 panic = "abort"
 strip = false
 debug = false
+
+[profile.dist]
+inherits = "release"

@@ -130,6 +130,9 @@ deacon filter -d -R panhuman-1.k31w15.idx reads.fq.gz > filt.fq
 # Only look for minimizer hits inside the first 1000bp per record
 deacon filter -d -p 1000 panhuman-1.k31w15.idx reads.fq.gz > filt.fq
 
+# Output FASTA regardless of input format (discards quality scores)
+deacon filter -d -f panhuman-1.k31w15.idx reads.fq.gz > filt.fa
+
 # Debug mode: see sequences with minimizer hits in stderr
 deacon filter -d --debug panhuman-1.k31w15.idx reads.fq.gz > filt.fq
 ```
@@ -193,6 +196,8 @@ Options:
           Replace sequence headers with incrementing numbers
       --rename-random
           Replace sequence headers with incrementing numbers and random suffixes
+  -f, --fasta
+          Output FASTA format regardless of input format
   -o, --output <OUTPUT>
           Path to output fastx file (stdout if not specified; detects .gz and .zst)
   -O, --output2 <OUTPUT2>
