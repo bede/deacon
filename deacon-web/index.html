@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Deacon Web</title>
+<title>Deacon wasm</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, -apple-system, sans-serif; background: #f5f5f5; color: #333; padding: 2rem; max-width: 720px; margin: 0 auto; }
@@ -27,9 +27,6 @@
 </style>
 </head>
 <body>
-<h1>Deacon Web</h1>
-<p class="subtitle">Browser-based minimizer sequence filtering</p>
-
 <div class="drop-zone" id="index-zone">
   <input type="file" id="index-input" accept=".idx">
   <div class="label">Drop index file (.idx) here or click to select</div>
@@ -44,8 +41,8 @@
 </div>
 
 <div class="controls">
-  <label><input type="checkbox" id="deplete" checked> Deplete (remove matches)</label>
-  <label>Abs threshold: <input type="number" id="abs-threshold" value="2" min="1"></label>
+  <label><input type="checkbox" id="deplete" checked> Deplete mode</label>
+  <label>Abs threshold: <input type="number" id="abs-threshold" value="1" min="1"></label>
   <label>Rel threshold: <input type="number" id="rel-threshold" value="0.01" min="0" max="1" step="0.001"></label>
 </div>
 
@@ -94,7 +91,7 @@
       const blob = new Blob([bytes], { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      const outName = readsFilename.replace(/\.(fastq|fq)(\.gz)?$/i, ".filtered.$1");
+      const outName = readsFilename.replace(/\.(fastq|fq)(\.gz)?$/i, ".filtered.$1.gz");
       a.href = url;
       a.download = outName;
       a.click();

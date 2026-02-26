@@ -419,6 +419,7 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "deacon",
+ "flate2",
  "getrandom 0.3.4",
  "js-sys",
  "needletail",

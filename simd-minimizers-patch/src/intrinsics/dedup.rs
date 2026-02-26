@@ -3,6 +3,7 @@ use crate::S;
 use crate::minimizers::SIMD_SKIPPED;
 #[cfg(not(any(target_feature = "avx2", target_feature = "neon")))]
 use crate::minimizers::SKIPPED;
+#[cfg(any(target_feature = "avx2", target_feature = "neon"))]
 use core::mem::transmute;
 use packed_seq::L;
 

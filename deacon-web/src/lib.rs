@@ -1,4 +1,6 @@
-use std::io::Cursor;
+use std::io::{Cursor, Write};
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use wasm_bindgen::prelude::*;
 
 use deacon::minimizers::{Buffers, KmerHasher};
@@ -49,7 +51,7 @@ pub fn filter(
         Buffers::new_u128()
     };
 
-    let mut output = Vec::with_capacity(input.len());
+    let mut encoder = GzEncoder::new(Vec::with_capacity(input.len()), Compression::new(2));
     let mut seqs_in: u64 = 0;
     let mut seqs_out: u64 = 0;
 
@@ -83,7 +85,7 @@ pub fn filter(
 
         if keep {
             seqs_out += 1;
-            write_record(&record, &seq, &mut output);
+            write_record(&record, &seq, &mut encoder);
         }
     }
 
@@ -101,7 +103,7 @@ pub fn filter(
         .into(),
     );
 
-    Ok(output)
+    encoder.finish().map_err(|e| JsValue::from_str(&format!("Compression error: {}", e)))
 }
 
 fn count_hits(minimizers: &MinimizerVec, set: &MinimizerSet) -> usize {
@@ -128,20 +130,20 @@ fn count_hits(minimizers: &MinimizerVec, set: &MinimizerSet) -> usize {
     }
 }
 
-fn write_record(record: &needletail::parser::SequenceRecord, seq: &[u8], output: &mut Vec<u8>) {
+fn write_record(record: &needletail::parser::SequenceRecord, seq: &[u8], output: &mut impl Write) {
     if let Some(qual) = record.qual() {
-        output.push(b'@');
-        output.extend_from_slice(record.id());
-        output.push(b'\n');
-        output.extend_from_slice(seq);
-        output.extend_from_slice(b"\n+\n");
-        output.extend_from_slice(qual);
-        output.push(b'\n');
+        let _ = output.write_all(b"@");
+        let _ = output.write_all(record.id());
+        let _ = output.write_all(b"\n");
+        let _ = output.write_all(seq);
+        let _ = output.write_all(b"\n+\n");
+        let _ = output.write_all(qual);
+        let _ = output.write_all(b"\n");
     } else {
-        output.push(b'>');
-        output.extend_from_slice(record.id());
-        output.push(b'\n');
-        output.extend_from_slice(seq);
-        output.push(b'\n');
+        let _ = output.write_all(b">");
+        let _ = output.write_all(record.id());
+        let _ = output.write_all(b"\n");
+        let _ = output.write_all(seq);
+        let _ = output.write_all(b"\n");
     }
 }
