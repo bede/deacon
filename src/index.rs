@@ -6,9 +6,9 @@ use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 #[cfg(feature = "cli")]
-use crate::minimizers::{Buffers, KmerHasher};
-#[cfg(feature = "cli")]
 use crate::IndexConfig;
+#[cfg(feature = "cli")]
+use crate::minimizers::{Buffers, KmerHasher};
 #[cfg(feature = "cli")]
 use paraseq::Record;
 #[cfg(feature = "cli")]

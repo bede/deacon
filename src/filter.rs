@@ -328,7 +328,6 @@ pub(crate) struct ProcessingStats {
     pub last_reported: u64,
 }
 
-
 impl FilterProcessor {
     /// Calculate required hits based on absolute and relative thresholds
     fn calculate_required_hits(&self, total_minimizers: usize) -> usize {
