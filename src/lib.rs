@@ -8,24 +8,31 @@
 #![doc = include_str!("../README.md")]
 
 // Re-export public functionality
+#[cfg(feature = "cli")]
 pub mod filter;
 pub mod index;
 pub mod minimizers;
 
 // Re-export the important structures and functions for library users
+#[cfg(feature = "cli")]
 pub use filter::{FilterSummary, run as run_filter};
 #[cfg(feature = "fetch")]
 pub use index::fetch as index_fetch;
+#[cfg(feature = "cli")]
 pub use index::{
-    INDEX_FORMAT_VERSION, IndexHeader, build as index_build, diff as index_diff,
-    dump as index_dump, dump_minimizers, info as index_info, intersect as index_intersect,
-    load_minimizers, union as index_union,
+    build as index_build, diff as index_diff, dump as index_dump, info as index_info,
+    intersect as index_intersect, union as index_union,
+};
+pub use index::{
+    INDEX_FORMAT_VERSION, IndexHeader, dump_minimizers, load_minimizers, load_minimizers_from_path,
 };
 pub use minimizers::{DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, decode_u64, decode_u128};
 
-use anyhow::Result;
 use std::collections::HashSet;
 use std::hash::BuildHasher;
+#[cfg(feature = "cli")]
+use anyhow::Result;
+#[cfg(feature = "cli")]
 use std::path::{Path, PathBuf};
 
 /// BuildHasher using rapidhash with fixed seed for fast init
@@ -135,6 +142,7 @@ impl MinimizerVec {
     }
 }
 
+#[cfg(feature = "cli")]
 pub struct FilterConfig<'a> {
     /// Minimizer index file path
     pub minimizers_path: &'a Path,
@@ -191,6 +199,7 @@ pub struct FilterConfig<'a> {
     pub quiet: bool,
 }
 
+#[cfg(feature = "cli")]
 impl<'a> FilterConfig<'a> {
     pub fn new(minimizers_path: &'a Path) -> Self {
         Self {
@@ -301,6 +310,7 @@ impl<'a> FilterConfig<'a> {
     }
 }
 
+#[cfg(feature = "cli")]
 pub struct IndexConfig {
     /// Path to input fastx file
     pub input_path: PathBuf,
@@ -324,6 +334,7 @@ pub struct IndexConfig {
     pub entropy_threshold: f32,
 }
 
+#[cfg(feature = "cli")]
 impl IndexConfig {
     /// Create a new index configuration with the specified input path
     pub fn new(input_path: PathBuf) -> Self {
