@@ -1,9 +1,9 @@
 use crate::index::load_minimizers_cached;
-use crate::minimizers::{KmerHasher, decode_u64, decode_u128};
+use crate::minimizers::{Buffers, KmerHasher, decode_u64, decode_u128};
 use crate::{FilterConfig, MinimizerSet};
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use packed_seq::{PackedNSeqVec, SeqVec, u32x8};
+use packed_seq::SeqVec;
 use paraseq::Record;
 use paraseq::fastx::Reader;
 use paraseq::parallel::{PairedParallelProcessor, ParallelProcessor, ParallelReader};
@@ -33,6 +33,7 @@ struct FilterProcessorConfig {
 }
 
 /// Check if path is a named pipe or process substitution / /dev/fd/*
+#[cfg(unix)]
 fn is_special_input_path(path: &str) -> bool {
     use std::os::unix::fs::FileTypeExt;
     path.starts_with("/dev/fd/")
@@ -41,6 +42,11 @@ fn is_special_input_path(path: &str) -> bool {
             .metadata()
             .map(|m| m.file_type().is_fifo())
             .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_special_input_path(_path: &str) -> bool {
+    false
 }
 
 /// Check input file path(s) exist
@@ -322,39 +328,6 @@ pub(crate) struct ProcessingStats {
     pub last_reported: u64,
 }
 
-#[derive(Clone)]
-pub(crate) struct Buffers {
-    pub packed_nseq: PackedNSeqVec,
-    pub positions: Vec<u32>,
-    pub minimizers: crate::MinimizerVec,
-    pub cache: (simd_minimizers::Cache, Vec<u32x8>, Vec<u32x8>),
-}
-
-impl Buffers {
-    pub fn new_u64() -> Self {
-        Self {
-            packed_nseq: PackedNSeqVec {
-                seq: Default::default(),
-                ambiguous: Default::default(),
-            },
-            positions: Default::default(),
-            minimizers: crate::MinimizerVec::U64(Vec::new()),
-            cache: Default::default(),
-        }
-    }
-
-    pub fn new_u128() -> Self {
-        Self {
-            packed_nseq: PackedNSeqVec {
-                seq: Default::default(),
-                ambiguous: Default::default(),
-            },
-            positions: Default::default(),
-            minimizers: crate::MinimizerVec::U128(Vec::new()),
-            cache: Default::default(),
-        }
-    }
-}
 
 impl FilterProcessor {
     /// Calculate required hits based on absolute and relative thresholds

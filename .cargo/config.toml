@@ -5,3 +5,6 @@ rustflags = ["-C", "target-cpu=native"]
 # To work around the rustls/ring issue with native, we want to specify a target
 # Little practical differences from M1 to M4
 rustflags = ["-C", "target-cpu=apple-m1"]
+
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+reference-types"]

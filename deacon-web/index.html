@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deacon Web</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #f5f5f5; color: #333; padding: 2rem; max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+  .subtitle { color: #666; margin-bottom: 1.5rem; font-size: 0.9rem; }
+  .drop-zone { border: 2px dashed #aaa; border-radius: 8px; padding: 2rem; text-align: center; cursor: pointer; transition: all 0.2s; background: #fff; margin-bottom: 1rem; }
+  .drop-zone:hover, .drop-zone.dragover { border-color: #4a90d9; background: #f0f7ff; }
+  .drop-zone.loaded { border-color: #4caf50; background: #f0fff0; }
+  .drop-zone input { display: none; }
+  .drop-zone .label { font-size: 0.95rem; color: #555; }
+  .drop-zone .filename { font-weight: 600; color: #333; margin-top: 0.5rem; }
+  .controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+  .controls label { font-size: 0.85rem; display: flex; align-items: center; gap: 0.3rem; }
+  .controls input[type="number"] { width: 5rem; padding: 0.25rem 0.4rem; border: 1px solid #ccc; border-radius: 4px; }
+  button { background: #4a90d9; color: #fff; border: none; padding: 0.6rem 1.5rem; border-radius: 6px; cursor: pointer; font-size: 0.95rem; transition: background 0.2s; }
+  button:hover:not(:disabled) { background: #3a7bc8; }
+  button:disabled { background: #aaa; cursor: not-allowed; }
+  #status { margin-top: 1rem; padding: 0.8rem; background: #fff; border-radius: 6px; font-size: 0.9rem; min-height: 2.5rem; border: 1px solid #ddd; }
+  #status.error { border-color: #e74c3c; color: #e74c3c; }
+  .info { font-size: 0.8rem; color: #888; margin-top: 0.3rem; }
+</style>
+</head>
+<body>
+<h1>Deacon Web</h1>
+<p class="subtitle">Browser-based minimizer sequence filtering</p>
+
+<div class="drop-zone" id="index-zone">
+  <input type="file" id="index-input" accept=".idx">
+  <div class="label">Drop index file (.idx) here or click to select</div>
+  <div class="filename" id="index-name"></div>
+  <div class="info" id="index-info"></div>
+</div>
+
+<div class="drop-zone" id="reads-zone">
+  <input type="file" id="reads-input" accept=".fastq,.fq,.fastq.gz,.fq.gz">
+  <div class="label">Drop reads file (.fastq / .fastq.gz) here or click to select</div>
+  <div class="filename" id="reads-name"></div>
+</div>
+
+<div class="controls">
+  <label><input type="checkbox" id="deplete" checked> Deplete (remove matches)</label>
+  <label>Abs threshold: <input type="number" id="abs-threshold" value="2" min="1"></label>
+  <label>Rel threshold: <input type="number" id="rel-threshold" value="0.01" min="0" max="1" step="0.001"></label>
+</div>
+
+<button id="run-btn" disabled>Filter</button>
+
+<div id="status"></div>
+
+<script type="module">
+  const worker = new Worker("worker.js", { type: "module" });
+  const status = document.getElementById("status");
+
+  let indexLoaded = false;
+  let readsFile = null;
+  let readsFilename = "";
+
+  function setStatus(msg, isError) {
+    status.textContent = msg;
+    status.className = isError ? "error" : "";
+  }
+
+  function updateButton() {
+    document.getElementById("run-btn").disabled = !(indexLoaded && readsFile);
+  }
+
+  // Init WASM
+  setStatus("Initializing WASM…");
+  worker.postMessage({ type: "init" });
+
+  worker.onmessage = function (e) {
+    const { type, info, message, result, elapsed } = e.data;
+
+    if (type === "ready") {
+      setStatus("Ready. Load an index file to begin.");
+    } else if (type === "index_loaded") {
+      indexLoaded = true;
+      document.getElementById("index-zone").classList.add("loaded");
+      document.getElementById("index-info").textContent = info;
+      setStatus("Index loaded. Now load reads to filter.");
+      updateButton();
+    } else if (type === "filtered") {
+      const bytes = new Uint8Array(result);
+      const sizeMB = (bytes.length / 1024 / 1024).toFixed(1);
+      setStatus(`Filtering complete in ${elapsed}s. Output: ${sizeMB} MB`);
+
+      // Trigger download
+      const blob = new Blob([bytes], { type: "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const outName = readsFilename.replace(/\.(fastq|fq)(\.gz)?$/i, ".filtered.$1");
+      a.href = url;
+      a.download = outName;
+      a.click();
+      URL.revokeObjectURL(url);
+      document.getElementById("run-btn").disabled = false;
+    } else if (type === "error") {
+      setStatus("Error: " + message, true);
+      document.getElementById("run-btn").disabled = false;
+    }
+  };
+
+  // Drop zone helpers
+  function setupDropZone(zoneId, inputId, onFile) {
+    const zone = document.getElementById(zoneId);
+    const input = document.getElementById(inputId);
+
+    zone.addEventListener("click", () => input.click());
+    zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("dragover"); });
+    zone.addEventListener("dragleave", () => zone.classList.remove("dragover"));
+    zone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      zone.classList.remove("dragover");
+      if (e.dataTransfer.files.length > 0) onFile(e.dataTransfer.files[0]);
+    });
+    input.addEventListener("change", () => { if (input.files.length > 0) onFile(input.files[0]); });
+  }
+
+  // Index file
+  setupDropZone("index-zone", "index-input", async (file) => {
+    document.getElementById("index-name").textContent = file.name;
+    document.getElementById("index-info").textContent = "Loading…";
+    setStatus("Loading index (" + (file.size / 1024 / 1024).toFixed(0) + " MB)…");
+    const buf = await file.arrayBuffer();
+    worker.postMessage({ type: "load_index", data: buf }, [buf]);
+  });
+
+  // Reads file
+  setupDropZone("reads-zone", "reads-input", (file) => {
+    readsFile = file;
+    readsFilename = file.name;
+    document.getElementById("reads-name").textContent = file.name + " (" + (file.size / 1024 / 1024).toFixed(1) + " MB)";
+    document.getElementById("reads-zone").classList.add("loaded");
+    updateButton();
+  });
+
+  // Run filter
+  document.getElementById("run-btn").addEventListener("click", async () => {
+    if (!readsFile) return;
+    document.getElementById("run-btn").disabled = true;
+    setStatus("Filtering…");
+    const buf = await readsFile.arrayBuffer();
+    worker.postMessage({
+      type: "filter",
+      data: {
+        input: buf,
+        filename: readsFilename,
+        deplete: document.getElementById("deplete").checked,
+        absThreshold: parseInt(document.getElementById("abs-threshold").value) || 2,
+        relThreshold: parseFloat(document.getElementById("rel-threshold").value) || 0.01,
+      }
+    }, [buf]);
+    // Re-read file for potential re-run
+    readsFile = new File([new Uint8Array(0)], readsFilename);
+    // Reload the file reference so user can filter again
+    const input = document.getElementById("reads-input");
+    if (input.files.length > 0) {
+      readsFile = input.files[0];
+    }
+  });
+</script>
+</body>
+</html>

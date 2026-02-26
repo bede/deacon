@@ -16,31 +16,34 @@ name = "deacon"
 path = "src/lib.rs"
 
 [dependencies]
-clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
 thiserror = "2.0"
-rayon = "1"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 bincode = { version = "2.0", features = ["serde"] }
 rapidhash = "4.1.0"
-parking_lot = "0.12"
-indicatif = "0.18"
-rand = "0.9"
 
-packed-seq = "4.2.0"
-simd-minimizers = "2.2.0"
+packed-seq = "4.4.1"
+simd-minimizers = "2.3.0"
 
 needletail = { version = "0.6", default-features = false }
-niffler = { version = "3", default-features = false }
-paraseq = { version = "0.4.3", default-features = false, features = ["anyhow", "niffler"] }
 
+# CLI/platform-specific deps (optional for WASM builds)
+clap = { version = "4.5", features = ["derive"], optional = true }
+rayon = { version = "1", optional = true }
+parking_lot = { version = "0.12", optional = true }
+indicatif = { version = "0.18", optional = true }
+rand = { version = "0.9", optional = true }
+serde_json = { version = "1.0", optional = true }
+niffler = { version = "3", default-features = false, optional = true }
+paraseq = { version = "0.4.3", default-features = false, features = ["anyhow", "niffler"], optional = true }
+ensure_simd = { version = "0.1.0", optional = true }
+
+# Compression deps (optional)
 liblzma = { version = "0.3", optional = true }
 flate2 = { version = "1.1", features = ["zlib-rs"], optional = true }
 zstd = { version = "0.13", optional = true }
 gzp = { version = "2.0", default-features = false, features = ["deflate_rust"], optional = true }
 minreq = { version = "2", features = ["https-rustls-probe"], optional = true }
-ensure_simd = "0.1.0"
 
 [lints.clippy]
 too_many_arguments = "allow"
@@ -53,13 +56,15 @@ rstest = "0.26"
 nix = { version = "0.30", features = ["fs"] }
 
 [features]
+scalar = ["simd-minimizers/scalar", "packed-seq/scalar"]
+cli = ["rayon", "parking_lot", "indicatif", "paraseq", "ensure_simd", "clap", "rand", "niffler", "serde_json"]
 # Disable for faster builds.
 compression = ["zstd", "liblzma", "flate2", "gzp", "needletail/compression", "paraseq/default"]
 # Use to still handle .gz files when "compression" is not enabled.
 gz = ["niffler/gz", "flate2", "flate2/default"]
 # Enable fetching indexes from remote storage
 fetch = ["minreq"]
-default = ["compression", "fetch"]
+default = ["compression", "fetch", "cli"]
 
 [[test]]
 name = "cli_tests"
@@ -83,3 +88,9 @@ debug = false
 
 [profile.dist]
 inherits = "release"
+
+[workspace]
+members = [".", "deacon-web"]
+
+[patch.crates-io]
+simd-minimizers = { path = "simd-minimizers-patch" }

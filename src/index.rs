@@ -1,16 +1,27 @@
-use crate::filter::{Buffers, ProcessingStats};
-use crate::minimizers::KmerHasher;
-use crate::{FixedRapidHasher, IndexConfig, RapidHashSet};
+use crate::{FixedRapidHasher, RapidHashSet};
 use anyhow::{Context, Result};
 use bincode::serde::{decode_from_std_read, encode_into_std_write};
-use paraseq::Record;
-use paraseq::prelude::{ParallelProcessor, ParallelReader};
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+#[cfg(feature = "cli")]
+use crate::minimizers::{Buffers, KmerHasher};
+#[cfg(feature = "cli")]
+use crate::IndexConfig;
+#[cfg(feature = "cli")]
+use paraseq::Record;
+#[cfg(feature = "cli")]
+use paraseq::prelude::{ParallelProcessor, ParallelReader};
+#[cfg(feature = "cli")]
+use parking_lot::Mutex;
+#[cfg(feature = "cli")]
+use std::fs::File;
+#[cfg(feature = "cli")]
+use std::path::PathBuf;
+#[cfg(feature = "cli")]
 use std::sync::{Arc, OnceLock};
+#[cfg(feature = "cli")]
 use std::time::Instant;
 
 #[cfg(feature = "fetch")]
@@ -74,8 +85,8 @@ impl IndexHeader {
 
 /// Load just the header and count from an index file
 pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, usize)> {
-    let file =
-        File::open(path).context(format!("Failed to open index file {:?}", path.as_ref()))?;
+    let file = std::fs::File::open(path)
+        .context(format!("Failed to open index file {:?}", path.as_ref()))?;
     let mut reader = BufReader::new(file);
 
     let config = bincode::config::standard().with_fixed_int_encoding();
@@ -85,20 +96,22 @@ pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, u
         decode_from_std_read(&mut reader, config).context("Failed to deserialise index header")?;
     header.validate()?;
 
-    // Deserialise the count of minimizers
-    let count: usize = decode_from_std_read(&mut reader, config)
+    // Deserialise the count of minimizers (stored as u64 for cross-platform compatibility)
+    let count: u64 = decode_from_std_read(&mut reader, config)
         .context("Failed to deserialise minimizer count")?;
 
-    Ok((header, count))
+    Ok((header, count as usize))
 }
 
+#[cfg(feature = "cli")]
 static INDEX: OnceLock<(PathBuf, crate::MinimizerSet, IndexHeader)> = OnceLock::new();
 
+#[cfg(feature = "cli")]
 pub fn load_minimizers_cached(
     path: &Path,
 ) -> Result<(&'static crate::MinimizerSet, &'static IndexHeader)> {
     let (p, minimizers, header) = INDEX.get_or_init(|| {
-        let (m, h) = load_minimizers(path).unwrap();
+        let (m, h) = load_minimizers_from_path(path).unwrap();
         (path.to_owned(), m, h)
     });
     assert_eq!(
@@ -109,10 +122,9 @@ pub fn load_minimizers_cached(
     Ok((minimizers, header))
 }
 
-/// Load minimizers from an index file
-pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)> {
-    let file = File::open(path).context(format!("Failed to open index file {:?}", path))?;
-    let mut reader = BufReader::with_capacity(1 << 20, file);
+/// Load minimizers from a reader (generic over any Read impl)
+pub fn load_minimizers(reader: &mut impl Read) -> Result<(crate::MinimizerSet, IndexHeader)> {
+    let mut reader = BufReader::with_capacity(1 << 20, reader);
     let config = bincode::config::standard().with_fixed_int_encoding();
 
     // Deserialise header
@@ -120,9 +132,10 @@ pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)
         decode_from_std_read(&mut reader, config).context("Failed to deserialise index header")?;
     header.validate()?;
 
-    // Deserialise the count of minimizers
-    let count: usize = decode_from_std_read(&mut reader, config)
+    // Deserialise the count of minimizers (stored as u64 for cross-platform compatibility)
+    let count: u64 = decode_from_std_read(&mut reader, config)
         .context("Failed to deserialise minimizer count")?;
+    let count = count as usize;
 
     let bytes_per_minimizer = (header.kmer_length as usize).div_ceil(4);
 
@@ -189,6 +202,13 @@ pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)
     Ok((minimizers, header))
 }
 
+/// Load minimizers from an index file path
+pub fn load_minimizers_from_path(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)> {
+    let mut file =
+        std::fs::File::open(path).context(format!("Failed to open index file {:?}", path))?;
+    load_minimizers(&mut file)
+}
+
 /// Helper function to write minimizers to output file or stdout
 pub fn dump_minimizers(
     minimizers: &crate::MinimizerSet,
@@ -198,7 +218,7 @@ pub fn dump_minimizers(
     // Create writer based on output path
     let mut writer: BufWriter<Box<dyn Write>> = match output_path {
         Some(path) if path.as_os_str() != "-" => BufWriter::new(Box::new(
-            File::create(path).context("Failed to create output file")?,
+            std::fs::File::create(path).context("Failed to create output file")?,
         )),
         _ => BufWriter::new(Box::new(io::stdout())),
     };
@@ -208,8 +228,8 @@ pub fn dump_minimizers(
     encode_into_std_write(header, &mut writer, config)
         .context("Failed to serialise index header")?;
 
-    // Serialise the count of minimizers first
-    let count = minimizers.len();
+    // Serialise the count of minimizers first (as u64 for cross-platform compatibility)
+    let count = minimizers.len() as u64;
     encode_into_std_write(count, &mut writer, config)
         .context("Failed to serialise minimizer count")?;
 
@@ -239,9 +259,11 @@ pub fn dump_minimizers(
 }
 
 /// Dump indexed minimizers to FASTA
+#[cfg(feature = "cli")]
 pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
     // Load the index
-    let (minimizers, header) = load_minimizers(index_path).context("Failed to load index")?;
+    let (minimizers, header) =
+        load_minimizers_from_path(index_path).context("Failed to load index")?;
 
     // Create writer based on output path
     let mut writer: BufWriter<Box<dyn Write>> = match output_path {
@@ -276,6 +298,7 @@ pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "cli")]
 fn reader_with_inferred_batch_size(
     in_path: Option<&Path>,
 ) -> Result<paraseq::fastx::Reader<Box<dyn Read + Send>>> {
@@ -284,6 +307,10 @@ fn reader_with_inferred_batch_size(
     Ok(reader)
 }
 
+#[cfg(feature = "cli")]
+use crate::filter::ProcessingStats;
+
+#[cfg(feature = "cli")]
 #[derive(Clone)]
 struct BuildIndexProcessor<'c> {
     config: &'c IndexConfig,
@@ -300,6 +327,7 @@ struct BuildIndexProcessor<'c> {
     global_minimizers_u128: Arc<Mutex<Option<RapidHashSet<u128>>>>,
 }
 
+#[cfg(feature = "cli")]
 impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
     fn process_record(&mut self, record: Rf) -> paraseq::parallel::Result<()> {
         let seq = record.seq();
@@ -382,6 +410,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
 }
 
 /// Build an index of minimizers from a fastx file
+#[cfg(feature = "cli")]
 pub fn build(config: &IndexConfig) -> Result<()> {
     let start_time = Instant::now();
     let path = &config.input_path;
@@ -479,6 +508,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "cli")]
 #[derive(Clone)]
 struct DiffIndexProcessor {
     kmer_length: u8,
@@ -496,6 +526,7 @@ struct DiffIndexProcessor {
     global_minimizers_u128: Arc<Mutex<Option<RapidHashSet<u128>>>>,
 }
 
+#[cfg(feature = "cli")]
 impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor {
     fn process_record(&mut self, record: Rf) -> paraseq::parallel::Result<()> {
         let seq = record.seq();
@@ -577,6 +608,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor {
 }
 
 /// Stream minimizers from a FASTX file or stdin and remove those present in first_minimizers
+#[cfg(feature = "cli")]
 fn stream_diff_fastx(
     fastx_path: &Path,
     kmer_length: u8,
@@ -698,6 +730,7 @@ fn stream_diff_fastx(
 }
 
 /// Compute the set difference between two minimizer indexes (A - B)
+#[cfg(feature = "cli")]
 pub fn diff(
     first: &Path,
     second: &Path,
@@ -709,7 +742,7 @@ pub fn diff(
     let start_time = Instant::now();
 
     // Load first file (always an index)
-    let (mut first_minimizers, header) = load_minimizers(first)?;
+    let (mut first_minimizers, header) = load_minimizers_from_path(first)?;
     eprintln!("First index: loaded {} minimizers", first_minimizers.len());
 
     // Guess if second file is an index or FASTX file
@@ -734,7 +767,7 @@ pub fn diff(
         return Ok(());
     } else {
         // Try to load as index file first
-        if let Ok((second_minimizers, second_header)) = load_minimizers(&second) {
+        if let Ok((second_minimizers, second_header)) = load_minimizers_from_path(&second) {
             // Second file is an index file
             eprintln!(
                 "Second index: loaded {} minimizers",
@@ -806,11 +839,12 @@ pub fn diff(
 }
 
 /// Show info about an index
+#[cfg(feature = "cli")]
 pub fn info(index_path: &Path) -> Result<()> {
     let start_time = Instant::now();
 
     // Load index file
-    let (minimizers, header) = load_minimizers(index_path)?;
+    let (minimizers, header) = load_minimizers_from_path(index_path)?;
 
     // Show index info
     eprintln!("Index information:");
@@ -826,6 +860,7 @@ pub fn info(index_path: &Path) -> Result<()> {
 }
 
 /// Combine minimizer indexes (set union)
+#[cfg(feature = "cli")]
 pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     let start_time = Instant::now();
     // Check input files
@@ -869,12 +904,12 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     }
 
     // Load first index to determine type (u64 vs u128)
-    let (mut all_minimizers, _) = load_minimizers(&inputs[0])?;
+    let (mut all_minimizers, _) = load_minimizers_from_path(&inputs[0])?;
     eprintln!("Index 1: loaded {} minimizers", all_minimizers.len());
 
     // Now load and merge remaining indexes
     for (i, path) in inputs.iter().enumerate().skip(1) {
-        let (minimizers, _) = load_minimizers(path)?;
+        let (minimizers, _) = load_minimizers_from_path(path)?;
         let before_count = all_minimizers.len();
 
         // Merge minimizers (set union)
@@ -903,6 +938,7 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "cli")]
 pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     let start_time = Instant::now();
     // Check inputs
@@ -946,12 +982,12 @@ pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     }
 
     // Load first index
-    let (mut result_minimizers, _) = load_minimizers(&inputs[0])?;
+    let (mut result_minimizers, _) = load_minimizers_from_path(&inputs[0])?;
     eprintln!("Index 1: loaded {} minimizers", result_minimizers.len());
 
     // Intersect with remaining indexes
     for (i, path) in inputs.iter().enumerate().skip(1) {
-        let (minimizers, _) = load_minimizers(path)?;
+        let (minimizers, _) = load_minimizers_from_path(path)?;
 
         // Intersect minimizers (set intersection)
         result_minimizers.intersect(&minimizers);
@@ -1101,12 +1137,12 @@ pub fn fetch(
 
     let output_path = output
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(&filename));
+        .unwrap_or_else(|| std::path::PathBuf::from(&filename));
 
     let mut temp_path = output_path.clone();
     temp_path.as_mut_os_string().push(".tmp");
 
-    let mut file = File::create(&temp_path).context("Failed to create temporary file")?;
+    let mut file = std::fs::File::create(&temp_path).context("Failed to create temporary file")?;
     std::io::copy(&mut pb.wrap_read(&mut response), &mut file)
         .context("Failed to write index to file")?;
 

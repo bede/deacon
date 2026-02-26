@@ -1,6 +1,4 @@
-use packed_seq::{SeqVec, unpack_base};
-
-use crate::filter::Buffers;
+use packed_seq::{PackedNSeqVec, SeqVec, u32x8, unpack_base};
 
 pub const DEFAULT_KMER_LENGTH: u8 = 31;
 pub const DEFAULT_WINDOW_SIZE: u8 = 15;
@@ -27,6 +25,41 @@ pub fn decode_u128(minimizer: u128, k: u8) -> Vec<u8> {
 
 /// Canonical NtHash, with 1-bit rotations for backwards compatibility.
 pub type KmerHasher = simd_minimizers::seq_hash::NtHasher<true, 1>;
+
+/// Reusable buffers for minimizer computation
+#[derive(Clone)]
+pub struct Buffers {
+    pub packed_nseq: PackedNSeqVec,
+    pub positions: Vec<u32>,
+    pub minimizers: crate::MinimizerVec,
+    pub cache: (simd_minimizers::Cache, Vec<u32x8>, Vec<u32x8>),
+}
+
+impl Buffers {
+    pub fn new_u64() -> Self {
+        Self {
+            packed_nseq: PackedNSeqVec {
+                seq: Default::default(),
+                ambiguous: Default::default(),
+            },
+            positions: Default::default(),
+            minimizers: crate::MinimizerVec::U64(Vec::new()),
+            cache: Default::default(),
+        }
+    }
+
+    pub fn new_u128() -> Self {
+        Self {
+            packed_nseq: PackedNSeqVec {
+                seq: Default::default(),
+                ambiguous: Default::default(),
+            },
+            positions: Default::default(),
+            minimizers: crate::MinimizerVec::U128(Vec::new()),
+            cache: Default::default(),
+        }
+    }
+}
 
 /// Returns vector of all minimizers for a sequence
 pub fn compute_minimizers(
@@ -107,7 +140,7 @@ fn calculate_scaled_entropy(kmer: &[u8], kmer_length: u8) -> f32 {
 
 /// Fill a vector with minimizers, skipping k-mers with non-ACGT bases
 /// and optionally filtering by scaled entropy
-pub(crate) fn fill_minimizers(
+pub fn fill_minimizers(
     seq: &[u8],
     hasher: &KmerHasher,
     kmer_length: u8,
