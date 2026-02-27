@@ -36,11 +36,11 @@ self.onmessage = async function (e) {
       const { input, deplete, absThreshold, relThreshold } = data;
       const bytes = new Uint8Array(input);
       const t0 = performance.now();
-      const result = wasm.filter(index, bytes, deplete, absThreshold, relThreshold);
+      const { output, stats } = wasm.filter_with_stats(index, bytes, deplete, absThreshold, relThreshold);
       const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
       self.postMessage(
-        { type: "filtered", result: result.buffer, elapsed },
-        [result.buffer]
+        { type: "filtered", result: output.buffer, elapsed, stats },
+        [output.buffer]
       );
     } catch (err) {
       self.postMessage({ type: "error", message: "Filtering failed: " + err.message });
