@@ -93,4 +93,4 @@ inherits = "release"
 members = [".", "deacon-web"]
 
 [patch.crates-io]
-simd-minimizers = { path = "simd-minimizers-patch" }
+simd-minimizers = { git = "https://github.com/rust-seq/simd-minimizers", rev = "bccd8f5de860c3c740bb017fa98b7d1e9b988e3b" }
