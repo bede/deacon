@@ -41,8 +41,9 @@
 </div>
 
 <div class="controls">
-  <label>Abs threshold: <input type="number" id="abs-threshold" value="1" min="1"></label>
-  <label>Rel threshold: <input type="number" id="rel-threshold" value="0.01" min="0" max="1" step="0.001"></label>
+  <label><input type="checkbox" id="deplete" checked> Deplete</label>
+  <label>Absolute match threshold: <input type="number" id="abs-threshold" value="1" min="1"></label>
+  <label>Relative match threshold: <input type="number" id="rel-threshold" value="0.05" min="0" max="1" step="0.01"></label>
 </div>
 
 <button id="run-btn" disabled>Filter</button>
@@ -148,7 +149,7 @@
       data: {
         input: buf,
         filename: readsFilename,
-        deplete: true,
+        deplete: document.getElementById("deplete").checked,
         absThreshold: parseInt(document.getElementById("abs-threshold").value) || 2,
         relThreshold: parseFloat(document.getElementById("rel-threshold").value) || 0.01,
       }
