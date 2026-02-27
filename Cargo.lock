@@ -891,6 +891,7 @@ checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 [[package]]
 name = "packed-seq"
 version = "4.4.1"
+source = "git+https://github.com/rust-seq/packed-seq?rev=acca7add375527b5f6b73da0fd5cd578e207467e#acca7add375527b5f6b73da0fd5cd578e207467e"
 dependencies = [
  "cfg-if",
  "ensure_simd",
