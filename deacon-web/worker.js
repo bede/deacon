@@ -1,14 +1,16 @@
 // Web Worker for off-main-thread WASM filtering
 let wasm = null;
 let index = null;
+const ASSET_VERSION = "20260227-1";
 
 self.onmessage = async function (e) {
   const { type, data } = e.data;
 
   if (type === "init") {
     try {
-      const mod = await import("./pkg/deacon_web.js");
-      await mod.default();
+      const mod = await import(`./pkg/deacon_web.js?v=${ASSET_VERSION}`);
+      const wasmUrl = new URL(`./pkg/deacon_web_bg.wasm?v=${ASSET_VERSION}`, import.meta.url);
+      await mod.default(wasmUrl);
       wasm = mod;
       self.postMessage({ type: "ready" });
     } catch (err) {
