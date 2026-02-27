@@ -94,4 +94,4 @@ members = [".", "deacon-web"]
 
 [patch.crates-io]
 simd-minimizers = { path = "simd-minimizers-patch" }
-packed-seq = { path = "packed-seq-patch" }
+packed-seq = { git = "https://github.com/rust-seq/packed-seq", rev = "acca7add375527b5f6b73da0fd5cd578e207467e" }
