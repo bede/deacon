@@ -1,20 +1,18 @@
 use crate::S;
-#[cfg(any(target_feature = "avx2", target_feature = "neon"))]
-use crate::minimizers::SIMD_SKIPPED;
-#[cfg(not(any(target_feature = "avx2", target_feature = "neon")))]
-use crate::minimizers::SKIPPED;
-#[cfg(any(target_feature = "avx2", target_feature = "neon"))]
+#[allow(unused)]
 use core::mem::transmute;
 use packed_seq::L;
 
-/// Append the values of `x` selected by `mask` to `v`.
+/// Append the values of `x` where `mask` is *false* to `v`.
 #[cfg(not(any(target_feature = "avx2", target_feature = "neon")))]
 #[inline(always)]
 pub unsafe fn append_filtered_vals(vals: S, mask: S, v: &mut [u32], write_idx: &mut usize) {
     unsafe {
+        let mask = mask.to_array();
+        let vals = vals.to_array();
         for i in 0..L {
-            if mask.to_array()[i] != 0 {
-                v.as_mut_ptr().add(*write_idx).write(vals.to_array()[i]);
+            if mask[i] == 0 {
+                v.as_mut_ptr().add(*write_idx).write(vals[i]);
                 *write_idx += 1;
             }
         }
@@ -38,7 +36,7 @@ pub unsafe fn append_unique_vals<const SKIP_MAX: bool>(
         let vals = vals.to_array();
         let mut prec = old[7];
         for (i, &curr) in new.iter().enumerate() {
-            if curr != prec && (!SKIP_MAX || curr != SKIPPED) {
+            if curr != prec && (!SKIP_MAX || curr != crate::minimizers::SKIPPED) {
                 v.as_mut_ptr().add(*write_idx).write(vals[i]);
                 *write_idx += 1;
                 prec = curr;
@@ -149,7 +147,7 @@ pub unsafe fn append_unique_vals<const SKIP_MAX: bool>(
         let mut mask = vec_tmp.cmp_eq(new);
         if SKIP_MAX {
             // skip everything equal to prev, or equal to MAX.
-            mask |= new.cmp_eq(SIMD_SKIPPED);
+            mask |= new.cmp_eq(crate::minimizers::SIMD_SKIPPED);
         }
 
         append_filtered_vals(vals, mask, v, write_idx);
@@ -286,7 +284,7 @@ pub unsafe fn append_unique_vals<const SKIP_MAX: bool>(
         let prec: S = transmute((r1, r2));
         let mut dup = prec.cmp_eq(new);
         if SKIP_MAX {
-            dup |= new.cmp_eq(SIMD_SKIPPED);
+            dup |= new.cmp_eq(crate::minimizers::SIMD_SKIPPED);
         }
         append_filtered_vals(vals, dup, v, write_idx);
     }
