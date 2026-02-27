@@ -41,7 +41,6 @@
 </div>
 
 <div class="controls">
-  <label><input type="checkbox" id="deplete" checked> Deplete mode</label>
   <label>Abs threshold: <input type="number" id="abs-threshold" value="1" min="1"></label>
   <label>Rel threshold: <input type="number" id="rel-threshold" value="0.01" min="0" max="1" step="0.001"></label>
 </div>
@@ -51,7 +50,8 @@
 <div id="status"></div>
 
 <script type="module">
-  const worker = new Worker("worker.js", { type: "module" });
+  const ASSET_VERSION = "20260227-1";
+  const worker = new Worker(`worker.js?v=${ASSET_VERSION}`, { type: "module" });
   const status = document.getElementById("status");
 
   let indexLoaded = false;
@@ -148,7 +148,7 @@
       data: {
         input: buf,
         filename: readsFilename,
-        deplete: document.getElementById("deplete").checked,
+        deplete: true,
         absThreshold: parseInt(document.getElementById("abs-threshold").value) || 2,
         relThreshold: parseFloat(document.getElementById("rel-threshold").value) || 0.01,
       }
