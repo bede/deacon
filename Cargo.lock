@@ -891,8 +891,6 @@ checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 [[package]]
 name = "packed-seq"
 version = "4.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dabfead55492c45dbd560d8f057d45a701e78412f4a97a043583b7d745ce899"
 dependencies = [
  "cfg-if",
  "ensure_simd",
