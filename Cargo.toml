@@ -94,3 +94,4 @@ members = [".", "deacon-web"]
 
 [patch.crates-io]
 simd-minimizers = { path = "simd-minimizers-patch" }
+packed-seq = { path = "packed-seq-patch" }
