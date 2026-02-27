@@ -1,6 +1,7 @@
 use std::io::{Cursor, Write};
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use js_sys::{Object, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use deacon::minimizers::{Buffers, KmerHasher};
@@ -42,6 +43,49 @@ pub fn filter(
     abs_threshold: usize,
     rel_threshold: f64,
 ) -> Result<Vec<u8>, JsValue> {
+    let (output, _) = run_filter(index, input, deplete, abs_threshold, rel_threshold)?;
+    Ok(output)
+}
+
+#[wasm_bindgen]
+pub fn filter_with_stats(
+    index: &WasmIndex,
+    input: &[u8],
+    deplete: bool,
+    abs_threshold: usize,
+    rel_threshold: f64,
+) -> Result<JsValue, JsValue> {
+    let (output, stats) = run_filter(index, input, deplete, abs_threshold, rel_threshold)?;
+    let output_bytes = Uint8Array::from(output.as_slice());
+
+    let stats_obj = Object::new();
+    set_field(&stats_obj, "readsIn", stats.reads_in)?;
+    set_field(&stats_obj, "readsOut", stats.reads_out)?;
+    set_field(&stats_obj, "basesIn", stats.bases_in)?;
+    set_field(&stats_obj, "basesOut", stats.bases_out)?;
+
+    let result_obj = Object::new();
+    Reflect::set(&result_obj, &"output".into(), &output_bytes.into())?;
+    Reflect::set(&result_obj, &"stats".into(), &stats_obj.into())?;
+
+    Ok(result_obj.into())
+}
+
+#[derive(Default)]
+struct FilterStats {
+    reads_in: u64,
+    reads_out: u64,
+    bases_in: u64,
+    bases_out: u64,
+}
+
+fn run_filter(
+    index: &WasmIndex,
+    input: &[u8],
+    deplete: bool,
+    abs_threshold: usize,
+    rel_threshold: f64,
+) -> Result<(Vec<u8>, FilterStats), JsValue> {
     let k = index.header.kmer_length();
     let w = index.header.window_size();
     let hasher = KmerHasher::new(k as usize);
@@ -52,16 +96,16 @@ pub fn filter(
     };
 
     let mut encoder = GzEncoder::new(Vec::with_capacity(input.len()), Compression::new(2));
-    let mut seqs_in: u64 = 0;
-    let mut seqs_out: u64 = 0;
+    let mut stats = FilterStats::default();
 
     let mut reader = parse_fastx_reader(Cursor::new(input))
         .map_err(|e| JsValue::from_str(&format!("Failed to parse input: {}", e)))?;
 
     while let Some(result) = reader.next() {
         let record = result.map_err(|e| JsValue::from_str(&format!("Parse error: {}", e)))?;
-        seqs_in += 1;
+        stats.reads_in += 1;
         let seq = record.seq();
+        stats.bases_in += seq.len() as u64;
 
         let keep = if (seq.len()) < k as usize {
             deplete
@@ -84,26 +128,21 @@ pub fn filter(
         };
 
         if keep {
-            seqs_out += 1;
+            stats.reads_out += 1;
+            stats.bases_out += seq.len() as u64;
             write_record(&record, &seq, &mut encoder);
         }
     }
 
-    web_sys::console::log_1(
-        &format!(
-            "Filtered: {}/{} sequences retained ({}%)",
-            seqs_out,
-            seqs_in,
-            if seqs_in > 0 {
-                (seqs_out as f64 / seqs_in as f64 * 100.0) as u64
-            } else {
-                0
-            }
-        )
-        .into(),
-    );
+    let output = encoder
+        .finish()
+        .map_err(|e| JsValue::from_str(&format!("Compression error: {}", e)))?;
+    Ok((output, stats))
+}
 
-    encoder.finish().map_err(|e| JsValue::from_str(&format!("Compression error: {}", e)))
+fn set_field(obj: &Object, key: &str, value: u64) -> Result<(), JsValue> {
+    Reflect::set(obj, &key.into(), &JsValue::from_f64(value as f64))?;
+    Ok(())
 }
 
 fn count_hits(minimizers: &MinimizerVec, set: &MinimizerSet) -> usize {

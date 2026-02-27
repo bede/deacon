@@ -9,7 +9,7 @@
   body { font-family: system-ui, -apple-system, sans-serif; background: #f5f5f5; color: #333; padding: 2rem; max-width: 720px; margin: 0 auto; }
   h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
   .subtitle { color: #666; margin-bottom: 1.5rem; font-size: 0.9rem; }
-  .drop-zone { border: 2px dashed #aaa; border-radius: 8px; padding: 2rem; text-align: center; cursor: pointer; transition: all 0.2s; background: #fff; margin-bottom: 1rem; }
+  .drop-zone { border: 2px dashed #aaa; padding: 2rem; text-align: center; cursor: pointer; transition: all 0.2s; background: #fff; margin-bottom: 1rem; }
   .drop-zone:hover, .drop-zone.dragover { border-color: #4a90d9; background: #f0f7ff; }
   .drop-zone.loaded { border-color: #4caf50; background: #f0fff0; }
   .drop-zone input { display: none; }
@@ -17,13 +17,14 @@
   .drop-zone .filename { font-weight: 600; color: #333; margin-top: 0.5rem; }
   .controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
   .controls label { font-size: 0.85rem; display: flex; align-items: center; gap: 0.3rem; }
-  .controls input[type="number"] { width: 5rem; padding: 0.25rem 0.4rem; border: 1px solid #ccc; border-radius: 4px; }
-  button { background: #4a90d9; color: #fff; border: none; padding: 0.6rem 1.5rem; border-radius: 6px; cursor: pointer; font-size: 0.95rem; transition: background 0.2s; }
+  .controls input[type="number"] { width: 5rem; padding: 0.25rem 0.4rem; border: 1px solid #ccc; }
+  button { background: #4a90d9; color: #fff; border: none; padding: 0.6rem 1.5rem; cursor: pointer; font-size: 0.95rem; transition: background 0.2s; }
   button:hover:not(:disabled) { background: #3a7bc8; }
   button:disabled { background: #aaa; cursor: not-allowed; }
-  #status { margin-top: 1rem; padding: 0.8rem; background: #fff; border-radius: 6px; font-size: 0.9rem; min-height: 2.5rem; border: 1px solid #ddd; }
+  #status { margin-top: 1rem; padding: 0.8rem; background: #fff; font-size: 0.9rem; min-height: 2.5rem; border: 1px solid #ddd; white-space: pre-line; }
   #status.error { border-color: #e74c3c; color: #e74c3c; }
   .info { font-size: 0.8rem; color: #888; margin-top: 0.3rem; }
+  .download-link { margin-top: 0.6rem; }
 </style>
 </head>
 <body>
@@ -49,6 +50,10 @@
 <button id="run-btn" disabled>Filter</button>
 
 <div id="status"></div>
+<div class="info download-link">
+  Download index:
+  <a href="https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panhuman-1.k31w63.idx">panhuman-1.k31w63.idx</a>
+</div>
 
 <script type="module">
   const ASSET_VERSION = "20260227-1";
@@ -73,7 +78,7 @@
   worker.postMessage({ type: "init" });
 
   worker.onmessage = function (e) {
-    const { type, info, message, result, elapsed } = e.data;
+    const { type, info, message, result, elapsed, stats } = e.data;
 
     if (type === "ready") {
       setStatus("Ready. Load an index file to begin.");
@@ -86,7 +91,18 @@
     } else if (type === "filtered") {
       const bytes = new Uint8Array(result);
       const sizeMB = (bytes.length / 1024 / 1024).toFixed(1);
-      setStatus(`Filtering complete in ${elapsed}s. Output: ${sizeMB} MB`);
+      const readsIn = Number(stats?.readsIn || 0);
+      const readsOut = Number(stats?.readsOut || 0);
+      const basesIn = Number(stats?.basesIn || 0);
+      const basesOut = Number(stats?.basesOut || 0);
+      const readsPct = readsIn > 0 ? ((readsOut / readsIn) * 100).toFixed(2) : "0.00";
+      const basesPct = basesIn > 0 ? ((basesOut / basesIn) * 100).toFixed(2) : "0.00";
+      setStatus(
+        `Completed in ${elapsed}s\n` +
+        `Reads retained: ${readsOut.toLocaleString()}/${readsIn.toLocaleString()} (${readsPct}%)\n` +
+        `Bases retained: ${basesOut.toLocaleString()}/${basesIn.toLocaleString()} (${basesPct}%)\n` +
+        `Output: ${sizeMB} MB`
+      );
 
       // Trigger download
       const blob = new Blob([bytes], { type: "application/octet-stream" });
