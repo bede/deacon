@@ -30,14 +30,14 @@
 <body>
 <div class="drop-zone" id="index-zone">
   <input type="file" id="index-input" accept=".idx">
-  <div class="label">Drop index file (.idx) here or click to select</div>
+  <div class="label">Drop index file (.idx), or click to select</div>
   <div class="filename" id="index-name"></div>
   <div class="info" id="index-info"></div>
 </div>
 
 <div class="drop-zone" id="reads-zone">
   <input type="file" id="reads-input" accept=".fastq,.fq,.fastq.gz,.fq.gz">
-  <div class="label">Drop reads file (.fastq / .fastq.gz) here or click to select</div>
+  <div class="label">Drop sequences file (.fasta / .fastq[.gz]), or click to select</div>
   <div class="filename" id="reads-name"></div>
 </div>
 
@@ -56,7 +56,8 @@
 </div>
 
 <script type="module">
-  const ASSET_VERSION = "20260227-1";
+  const ASSET_VERSION = "20260301-3";
+  const MAX_INPUT_BYTES = 1024 * 1024 * 1024; // 1 GiB
   const worker = new Worker(`worker.js?v=${ASSET_VERSION}`, { type: "module" });
   const status = document.getElementById("status");
 
@@ -91,15 +92,17 @@
     } else if (type === "filtered") {
       const bytes = new Uint8Array(result);
       const sizeMB = (bytes.length / 1024 / 1024).toFixed(1);
+      const elapsedSec = Number(elapsed) || 0;
       const readsIn = Number(stats?.readsIn || 0);
       const readsOut = Number(stats?.readsOut || 0);
       const basesIn = Number(stats?.basesIn || 0);
       const basesOut = Number(stats?.basesOut || 0);
       const readsPct = readsIn > 0 ? ((readsOut / readsIn) * 100).toFixed(2) : "0.00";
       const basesPct = basesIn > 0 ? ((basesOut / basesIn) * 100).toFixed(2) : "0.00";
+      const mbpPerSec = elapsedSec > 0 ? (basesIn / 1_000_000 / elapsedSec).toFixed(2) : "0.00";
       setStatus(
-        `Completed in ${elapsed}s\n` +
-        `Reads retained: ${readsOut.toLocaleString()}/${readsIn.toLocaleString()} (${readsPct}%)\n` +
+        `Completed in ${elapsed}s (${mbpPerSec} Mbp/s)\n` +
+        `Sequences retained: ${readsOut.toLocaleString()}/${readsIn.toLocaleString()} (${readsPct}%)\n` +
         `Bases retained: ${basesOut.toLocaleString()}/${basesIn.toLocaleString()} (${basesPct}%)\n` +
         `Output: ${sizeMB} MB`
       );
@@ -157,6 +160,14 @@
   // Run filter
   document.getElementById("run-btn").addEventListener("click", async () => {
     if (!readsFile) return;
+    if (readsFile.size > MAX_INPUT_BYTES) {
+      const gib = (readsFile.size / (1024 ** 3)).toFixed(2);
+      setStatus(
+        `Error: Input sequence file size (${gib} GiB) exceeds 1 GiB limit for Deacon under wasm32. Use native deacon for larger inputs.`,
+        true
+      );
+      return;
+    }
     document.getElementById("run-btn").disabled = true;
     setStatus("Filtering…");
     const buf = await readsFile.arrayBuffer();
