@@ -38,7 +38,7 @@ impl WasmIndex {
             "k={}, w={}, {} minimizers",
             self.inner.header.kmer_length(),
             self.inner.header.window_size(),
-            self.inner.minimizers.len()
+            fmt_commas(self.inner.minimizers.len())
         )
     }
 }
@@ -441,6 +441,18 @@ impl SeqChunkParser {
             Ok(None)
         }
     }
+}
+
+fn fmt_commas(n: usize) -> String {
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result
 }
 
 fn set_field(obj: &Object, key: &str, value: u64) -> Result<(), JsValue> {

@@ -414,7 +414,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "deacon-web"
+name = "deacon-wasm"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",

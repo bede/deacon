@@ -149,10 +149,10 @@
       setStatus("Index loaded. Now load reads to filter.");
       updateButton();
     } else if (type === "progress") {
-      const processedMB = (Number(bytesProcessed || 0) / 1024 / 1024).toFixed(1);
+      const processedMB = (Number(bytesProcessed || 0) / 1024 / 1024).toFixed(0);
       if (bytesTotal && bytesTotal > 0) {
-        const totalMB = (bytesTotal / 1024 / 1024).toFixed(1);
-        const pct = ((bytesProcessed / bytesTotal) * 100).toFixed(1);
+        const totalMB = (bytesTotal / 1024 / 1024).toFixed(0);
+        const pct = ((bytesProcessed / bytesTotal) * 100).toFixed(0);
         setStatus(`Filtering… ${processedMB}/${totalMB} MB (${pct}%)`);
       } else if (progressCompressed) {
         setStatus(`Filtering… ${processedMB} MB`);
@@ -223,6 +223,11 @@
   }
 
   setupDropZone("index-zone", "index-input", async (file) => {
+    const MAX_INDEX_BYTES = 1024 * 1024 * 1024; // 1 GB
+    if (file.size > MAX_INDEX_BYTES) {
+      setStatus(`Index file too large for browser use (${(file.size / 1024 / 1024).toFixed(0)} MB). Maximum supported size is ${MAX_INDEX_BYTES / 1024 / 1024 / 1024} GB.`, true);
+      return;
+    }
     document.getElementById("index-name").textContent = file.name;
     document.getElementById("index-info").textContent = "Loading…";
     setStatus("Loading index (" + (file.size / 1024 / 1024).toFixed(0) + " MB)…");

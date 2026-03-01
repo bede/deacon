@@ -2,6 +2,6 @@
 # or copy to .cargo/config.toml when building WASM
 #
 # Build with:
-#   cd deacon-web && wasm-pack build --target web
+#   cd deacon-wasm && wasm-pack build --target web
 [build]
 # No native CPU flags for WASM
