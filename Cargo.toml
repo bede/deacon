@@ -90,7 +90,7 @@ debug = false
 inherits = "release"
 
 [workspace]
-members = [".", "deacon-web"]
+members = [".", "deacon-wasm"]
 
 [patch.crates-io]
 simd-minimizers = { path = "simd-minimizers-patch" }
