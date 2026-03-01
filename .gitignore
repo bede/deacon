@@ -4,3 +4,5 @@
 *S.md
 plans/
 tests/data/
+deacon-wasm/pkg/
+deacon-wasm/pkg-node/
