@@ -33,20 +33,25 @@
 <body>
 <div class="drop-zone" id="index-zone">
   <input type="file" id="index-input" accept=".idx">
-  <div class="label">Drop index file (.idx), or click to select</div>
+  <div class="label">Drop Deacon index (.idx), or click to select</div>
   <div class="filename" id="index-name"></div>
   <div class="info" id="index-info"></div>
 </div>
 
 <div class="drop-zone" id="reads-zone">
-  <input type="file" id="reads-input" accept=".fastq,.fq,.fastq.gz,.fq.gz">
-  <div class="label">Drop sequences file (.fasta / .fastq[.gz]), or click to select</div>
+  <input type="file" id="reads-input" accept=".fastq,.fq,.fastq.gz,.fq.gz,.fasta,.fa,.fasta.gz,.fa.gz">
+  <div class="label">Drop sequences (.fasta / .fastq[.gz]), or click to select</div>
   <div class="filename" id="reads-name"></div>
 </div>
 
 <div class="controls">
-  <label><input type="checkbox" id="deplete" checked> Deplete</label>
+  <label><input type="radio" name="mode" value="search"> Search</label>
+  <label><input type="radio" name="mode" value="deplete" checked> Deplete</label>
+</div>
+<div class="controls">
   <label>Absolute match threshold: <input type="number" id="abs-threshold" value="1" min="1"></label>
+</div>
+<div class="controls">
   <label>Relative match threshold: <input type="number" id="rel-threshold" value="0.05" min="0" max="1" step="0.01"></label>
 </div>
 
@@ -62,7 +67,7 @@
 </div>
 
 <script type="module">
-  const ASSET_VERSION = "20260301-3";
+  const ASSET_VERSION = "20260301-4";
   const worker = new Worker(`worker.js?v=${ASSET_VERSION}`, { type: "module" });
   const status = document.getElementById("status");
 
@@ -107,13 +112,25 @@
     if (/\.fq\.gz$/i.test(name)) {
       return name.replace(/\.fq\.gz$/i, compressed ? ".filtered.fq.gz" : ".filtered.fq");
     }
+    if (/\.fasta\.gz$/i.test(name)) {
+      return name.replace(/\.fasta\.gz$/i, compressed ? ".filtered.fasta.gz" : ".filtered.fasta");
+    }
+    if (/\.fa\.gz$/i.test(name)) {
+      return name.replace(/\.fa\.gz$/i, compressed ? ".filtered.fa.gz" : ".filtered.fa");
+    }
     if (/\.fastq$/i.test(name)) {
       return name.replace(/\.fastq$/i, compressed ? ".filtered.fastq.gz" : ".filtered.fastq");
     }
     if (/\.fq$/i.test(name)) {
       return name.replace(/\.fq$/i, compressed ? ".filtered.fq.gz" : ".filtered.fq");
     }
-    return compressed ? `${name}.filtered.fastq.gz` : `${name}.filtered.fastq`;
+    if (/\.fasta$/i.test(name)) {
+      return name.replace(/\.fasta$/i, compressed ? ".filtered.fasta.gz" : ".filtered.fasta");
+    }
+    if (/\.fa$/i.test(name)) {
+      return name.replace(/\.fa$/i, compressed ? ".filtered.fa.gz" : ".filtered.fa");
+    }
+    return compressed ? `${name}.filtered.gz` : `${name}.filtered`;
   }
 
   // Init WASM
@@ -170,7 +187,7 @@
         processedLine +
         `Sequences retained: ${readsOut.toLocaleString()}/${readsIn.toLocaleString()} (${readsPct}%)\n` +
         `Bases retained: ${basesOut.toLocaleString()}/${basesIn.toLocaleString()} (${basesPct}%)\n` +
-        `Output: ${sizeMB} MB`
+        `Output file size: ${sizeMB} MB`
       );
 
       const blob = new Blob([bytes], { type: "application/octet-stream" });
@@ -233,7 +250,7 @@
       data: {
         file: readsFile,
         filename: readsFilename,
-        deplete: document.getElementById("deplete").checked,
+        deplete: document.querySelector('input[name="mode"]:checked').value === "deplete",
         absThreshold: parseInt(document.getElementById("abs-threshold").value) || 2,
         relThreshold: parseFloat(document.getElementById("rel-threshold").value) || 0.01,
       }
