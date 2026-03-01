@@ -18,9 +18,12 @@
   .controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
   .controls label { font-size: 0.85rem; display: flex; align-items: center; gap: 0.3rem; }
   .controls input[type="number"] { width: 5rem; padding: 0.25rem 0.4rem; border: 1px solid #ccc; }
+  .actions { display: flex; gap: 0.6rem; align-items: center; margin-bottom: 0.4rem; }
   button { background: #4a90d9; color: #fff; border: none; padding: 0.6rem 1.5rem; cursor: pointer; font-size: 0.95rem; transition: background 0.2s; }
   button:hover:not(:disabled) { background: #3a7bc8; }
   button:disabled { background: #aaa; cursor: not-allowed; }
+  #reset-btn { background: #6c757d; }
+  #reset-btn:hover:not(:disabled) { background: #5b636a; }
   #status { margin-top: 1rem; padding: 0.8rem; background: #fff; font-size: 0.9rem; min-height: 2.5rem; border: 1px solid #ddd; white-space: pre-line; }
   #status.error { border-color: #e74c3c; color: #e74c3c; }
   .info { font-size: 0.8rem; color: #888; margin-top: 0.3rem; }
@@ -47,7 +50,10 @@
   <label>Relative match threshold: <input type="number" id="rel-threshold" value="0.05" min="0" max="1" step="0.01"></label>
 </div>
 
-<button id="run-btn" disabled>Filter</button>
+<div class="actions">
+  <button id="run-btn" disabled>Filter</button>
+  <button id="reset-btn" type="button">Reset</button>
+</div>
 
 <div id="status"></div>
 <div class="info download-link">
@@ -57,13 +63,13 @@
 
 <script type="module">
   const ASSET_VERSION = "20260301-3";
-  const MAX_INPUT_BYTES = 1024 * 1024 * 1024; // 1 GiB
   const worker = new Worker(`worker.js?v=${ASSET_VERSION}`, { type: "module" });
   const status = document.getElementById("status");
 
   let indexLoaded = false;
   let readsFile = null;
   let readsFilename = "";
+  let isFiltering = false;
 
   function setStatus(msg, isError) {
     status.textContent = msg;
@@ -71,7 +77,43 @@
   }
 
   function updateButton() {
-    document.getElementById("run-btn").disabled = !(indexLoaded && readsFile);
+    document.getElementById("run-btn").disabled = !(indexLoaded && readsFile) || isFiltering;
+    document.getElementById("reset-btn").disabled = isFiltering;
+  }
+
+  function resetSelectionState() {
+    indexLoaded = false;
+    readsFile = null;
+    readsFilename = "";
+
+    const indexZone = document.getElementById("index-zone");
+    const readsZone = document.getElementById("reads-zone");
+    indexZone.classList.remove("loaded");
+    readsZone.classList.remove("loaded");
+
+    document.getElementById("index-name").textContent = "";
+    document.getElementById("index-info").textContent = "";
+    document.getElementById("reads-name").textContent = "";
+    document.getElementById("index-input").value = "";
+    document.getElementById("reads-input").value = "";
+
+    updateButton();
+  }
+
+  function formatOutputName(name, compressed) {
+    if (/\.fastq\.gz$/i.test(name)) {
+      return name.replace(/\.fastq\.gz$/i, compressed ? ".filtered.fastq.gz" : ".filtered.fastq");
+    }
+    if (/\.fq\.gz$/i.test(name)) {
+      return name.replace(/\.fq\.gz$/i, compressed ? ".filtered.fq.gz" : ".filtered.fq");
+    }
+    if (/\.fastq$/i.test(name)) {
+      return name.replace(/\.fastq$/i, compressed ? ".filtered.fastq.gz" : ".filtered.fastq");
+    }
+    if (/\.fq$/i.test(name)) {
+      return name.replace(/\.fq$/i, compressed ? ".filtered.fq.gz" : ".filtered.fq");
+    }
+    return compressed ? `${name}.filtered.fastq.gz` : `${name}.filtered.fastq`;
   }
 
   // Init WASM
@@ -79,17 +121,29 @@
   worker.postMessage({ type: "init" });
 
   worker.onmessage = function (e) {
-    const { type, info, message, result, elapsed, stats } = e.data;
+    const { type, info, message, result, elapsed, stats, bytesProcessed, bytesTotal, progressCompressed, outputCompressed } = e.data;
 
     if (type === "ready") {
-      setStatus("Ready. Load an index file to begin.");
+      setStatus("Load a Deacon index file to begin.");
     } else if (type === "index_loaded") {
       indexLoaded = true;
       document.getElementById("index-zone").classList.add("loaded");
       document.getElementById("index-info").textContent = info;
       setStatus("Index loaded. Now load reads to filter.");
       updateButton();
+    } else if (type === "progress") {
+      const processedMB = (Number(bytesProcessed || 0) / 1024 / 1024).toFixed(1);
+      if (bytesTotal && bytesTotal > 0) {
+        const totalMB = (bytesTotal / 1024 / 1024).toFixed(1);
+        const pct = ((bytesProcessed / bytesTotal) * 100).toFixed(1);
+        setStatus(`Filtering… ${processedMB}/${totalMB} MB (${pct}%)`);
+      } else if (progressCompressed) {
+        setStatus(`Filtering… ${processedMB} MB`);
+      } else {
+        setStatus(`Filtering… ${processedMB} MB decompressed`);
+      }
     } else if (type === "filtered") {
+      isFiltering = false;
       const bytes = new Uint8Array(result);
       const sizeMB = (bytes.length / 1024 / 1024).toFixed(1);
       const elapsedSec = Number(elapsed) || 0;
@@ -100,30 +154,42 @@
       const readsPct = readsIn > 0 ? ((readsOut / readsIn) * 100).toFixed(2) : "0.00";
       const basesPct = basesIn > 0 ? ((basesOut / basesIn) * 100).toFixed(2) : "0.00";
       const mbpPerSec = elapsedSec > 0 ? (basesIn / 1_000_000 / elapsedSec).toFixed(2) : "0.00";
+
+      let processedLine = "";
+      if (bytesTotal && bytesTotal > 0) {
+        const totalMB = (bytesTotal / 1024 / 1024).toFixed(1);
+        const processedMB = (Number(bytesProcessed || 0) / 1024 / 1024).toFixed(1);
+        processedLine = `Input processed: ${processedMB}/${totalMB} MB\n`;
+      } else if (bytesProcessed) {
+        const processedMB = (Number(bytesProcessed || 0) / 1024 / 1024).toFixed(1);
+        processedLine = `Input processed: ${processedMB} MB decompressed\n`;
+      }
+
       setStatus(
         `Completed in ${elapsed}s (${mbpPerSec} Mbp/s)\n` +
+        processedLine +
         `Sequences retained: ${readsOut.toLocaleString()}/${readsIn.toLocaleString()} (${readsPct}%)\n` +
         `Bases retained: ${basesOut.toLocaleString()}/${basesIn.toLocaleString()} (${basesPct}%)\n` +
         `Output: ${sizeMB} MB`
       );
 
-      // Trigger download
       const blob = new Blob([bytes], { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      const outName = readsFilename.replace(/\.(fastq|fq)(\.gz)?$/i, ".filtered.$1.gz");
       a.href = url;
-      a.download = outName;
+      a.download = formatOutputName(readsFilename, Boolean(outputCompressed));
       a.click();
       URL.revokeObjectURL(url);
-      document.getElementById("run-btn").disabled = false;
+      updateButton();
     } else if (type === "error") {
+      isFiltering = false;
       setStatus("Error: " + message, true);
-      document.getElementById("run-btn").disabled = false;
+      updateButton();
+    } else if (type === "reset_done") {
+      setStatus("Reset. Load an index file to begin.");
     }
   };
 
-  // Drop zone helpers
   function setupDropZone(zoneId, inputId, onFile) {
     const zone = document.getElementById(zoneId);
     const input = document.getElementById(inputId);
@@ -139,7 +205,6 @@
     input.addEventListener("change", () => { if (input.files.length > 0) onFile(input.files[0]); });
   }
 
-  // Index file
   setupDropZone("index-zone", "index-input", async (file) => {
     document.getElementById("index-name").textContent = file.name;
     document.getElementById("index-info").textContent = "Loading…";
@@ -148,7 +213,6 @@
     worker.postMessage({ type: "load_index", data: buf }, [buf]);
   });
 
-  // Reads file
   setupDropZone("reads-zone", "reads-input", (file) => {
     readsFile = file;
     readsFilename = file.name;
@@ -157,37 +221,29 @@
     updateButton();
   });
 
-  // Run filter
   document.getElementById("run-btn").addEventListener("click", async () => {
     if (!readsFile) return;
-    if (readsFile.size > MAX_INPUT_BYTES) {
-      const gib = (readsFile.size / (1024 ** 3)).toFixed(2);
-      setStatus(
-        `Error: Input sequence file size (${gib} GiB) exceeds 1 GiB limit for Deacon under wasm32. Use native deacon for larger inputs.`,
-        true
-      );
-      return;
-    }
-    document.getElementById("run-btn").disabled = true;
+
+    isFiltering = true;
+    updateButton();
     setStatus("Filtering…");
-    const buf = await readsFile.arrayBuffer();
+
     worker.postMessage({
       type: "filter",
       data: {
-        input: buf,
+        file: readsFile,
         filename: readsFilename,
         deplete: document.getElementById("deplete").checked,
         absThreshold: parseInt(document.getElementById("abs-threshold").value) || 2,
         relThreshold: parseFloat(document.getElementById("rel-threshold").value) || 0.01,
       }
-    }, [buf]);
-    // Re-read file for potential re-run
-    readsFile = new File([new Uint8Array(0)], readsFilename);
-    // Reload the file reference so user can filter again
-    const input = document.getElementById("reads-input");
-    if (input.files.length > 0) {
-      readsFile = input.files[0];
-    }
+    });
+  });
+
+  document.getElementById("reset-btn").addEventListener("click", () => {
+    if (isFiltering) return;
+    resetSelectionState();
+    worker.postMessage({ type: "reset" });
   });
 </script>
 </body>

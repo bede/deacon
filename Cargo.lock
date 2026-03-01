@@ -422,6 +422,7 @@ dependencies = [
  "flate2",
  "getrandom 0.3.4",
  "js-sys",
+ "memchr",
  "needletail",
  "wasm-bindgen",
  "web-sys",
