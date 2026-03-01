@@ -95,7 +95,9 @@ fn run_filter(
         Buffers::new_u128()
     };
 
-    let mut encoder = GzEncoder::new(Vec::with_capacity(input.len()), Compression::new(2));
+    // Avoid preallocating output to full input size, which can panic/abort in WASM
+    // for large inputs. Let the output buffer grow incrementally instead.
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::new(2));
     let mut stats = FilterStats::default();
 
     let mut reader = parse_fastx_reader(Cursor::new(input))
