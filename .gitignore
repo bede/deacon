@@ -2,5 +2,4 @@
 /data
 .DS_Store
 *S.md
-deacon-wasm/pkg/
 deacon-wasm/pkg-node/

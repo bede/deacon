@@ -2,7 +2,6 @@
 let wasm = null;
 let index = null;
 const ASSET_VERSION = "20260301-5";
-const STREAM_CHUNK_BYTES = 2 * 1024 * 1024; // 2 MiB (browser may choose different chunk sizes)
 
 function isGzipFilename(name) {
   return /\.(fastq|fq|fasta|fa)\.gz$/i.test(name || "");
@@ -58,7 +57,6 @@ async function streamFilterFile(file, opts) {
           bytesProcessed: processedBytes,
           bytesTotal: totalBytes,
           progressCompressed: isGz,
-          chunkHint: STREAM_CHUNK_BYTES,
         });
         lastProgressTs = now;
       }
