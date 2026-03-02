@@ -140,14 +140,18 @@
       outputWriteChain = outputWriteChain.then(async () => {
         if (outputWriteError) return;
         try {
-          await outputFileStream.write(new Blob(chunks, { type: "application/octet-stream" }));
+          for (const chunk of chunks) {
+            await outputFileStream.write(chunk);
+          }
         } catch (err) {
           outputWriteError = err;
         }
       });
       return;
     }
-    outputBlobParts.push(new Blob(chunks, { type: "application/octet-stream" }));
+    for (const chunk of chunks) {
+      outputBlobParts.push(chunk);
+    }
   }
 
   async function finalizeOutput() {
