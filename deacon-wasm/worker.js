@@ -1,7 +1,10 @@
+import { MSG, STAGE } from "./protocol.js?v=20260302-3";
+
 // Web Worker for off-main-thread WASM filtering
 let wasm = null;
 let index = null;
-const ASSET_VERSION = "20260301-5";
+const ASSET_VERSION = "20260302-3";
+const OUTPUT_BATCH_BYTES = 4 * 1024 * 1024; // 4 MiB
 
 function isGzipFilename(name) {
   return /\.(fastq|fq|fasta|fa)\.gz$/i.test(name || "");
@@ -34,9 +37,36 @@ async function streamFilterFile(file, opts) {
   );
 
   const reader = file.stream().getReader();
-  const outputChunks = [];
   let processedBytes = 0;
   let lastProgressTs = 0;
+  let pendingOutputBuffers = [];
+  let pendingOutputBytes = 0;
+
+  const flushPendingOutput = (force = false) => {
+    if (!force && pendingOutputBytes < OUTPUT_BATCH_BYTES) return;
+    if (pendingOutputBuffers.length === 0) return;
+    const transferList = pendingOutputBuffers;
+    self.postMessage(
+      {
+        type: MSG.OUTPUT_CHUNK_BATCH,
+        chunks: transferList,
+      },
+      transferList
+    );
+    pendingOutputBuffers = [];
+    pendingOutputBytes = 0;
+  };
+
+  const postOutputChunk = (chunk) => {
+    if (!chunk || chunk.length === 0) return;
+    const transfer =
+      chunk.byteOffset === 0 && chunk.byteLength === chunk.buffer.byteLength
+        ? chunk.buffer
+        : chunk.slice().buffer;
+    pendingOutputBuffers.push(transfer);
+    pendingOutputBytes += transfer.byteLength;
+    flushPendingOutput(false);
+  };
 
   try {
     while (true) {
@@ -46,14 +76,12 @@ async function streamFilterFile(file, opts) {
 
       processedBytes += value.length;
       const outChunk = session.push_chunk(value);
-      if (outChunk && outChunk.length > 0) {
-        outputChunks.push(outChunk);
-      }
+      postOutputChunk(outChunk);
 
       const now = performance.now();
       if (now - lastProgressTs >= 150) {
         self.postMessage({
-          type: "progress",
+          type: MSG.PROGRESS,
           bytesProcessed: processedBytes,
           bytesTotal: totalBytes,
           progressCompressed: isGz,
@@ -62,22 +90,18 @@ async function streamFilterFile(file, opts) {
       }
     }
 
-    const outputCompressed = session.output_compressed();
+    self.postMessage({ type: MSG.STAGE, stage: STAGE.FINALIZING });
     const tail = session.finish();
-    if (tail && tail.length > 0) outputChunks.push(tail);
+    postOutputChunk(tail);
+    flushPendingOutput(true);
 
     const stats = session.stats();
 
-    const blob = new Blob(outputChunks, { type: "application/octet-stream" });
-    const output = new Uint8Array(await blob.arrayBuffer());
-
     return {
-      output,
       stats,
       bytesProcessed: processedBytes,
       bytesTotal: totalBytes,
       progressCompressed: isGz,
-      outputCompressed,
     };
   } finally {
     reader.releaseLock();
@@ -87,67 +111,60 @@ async function streamFilterFile(file, opts) {
 self.onmessage = async function (e) {
   const { type, data } = e.data;
 
-  if (type === "init") {
+  if (type === MSG.INIT) {
     try {
       const mod = await import(`./pkg/deacon_wasm.js?v=${ASSET_VERSION}`);
       const wasmUrl = new URL(`./pkg/deacon_wasm_bg.wasm?v=${ASSET_VERSION}`, import.meta.url);
       await mod.default({ module_or_path: wasmUrl });
       wasm = mod;
-      self.postMessage({ type: "ready" });
+      self.postMessage({ type: MSG.READY });
     } catch (err) {
-      self.postMessage({ type: "error", message: "Failed to initialize WASM: " + err.message });
+      self.postMessage({ type: MSG.ERROR, message: "Failed to initialize WASM: " + err.message });
     }
     return;
   }
 
-  if (type === "load_index") {
+  if (type === MSG.LOAD_INDEX) {
     try {
       const bytes = new Uint8Array(data);
       index = new wasm.WasmIndex(bytes);
       const info = index.info();
-      self.postMessage({ type: "index_loaded", info });
+      self.postMessage({ type: MSG.INDEX_LOADED, info });
     } catch (err) {
-      self.postMessage({ type: "error", message: "Failed to load index: " + err.message });
+      self.postMessage({ type: MSG.ERROR, message: "Failed to load index: " + err.message });
     }
     return;
   }
 
-  if (type === "reset") {
+  if (type === MSG.RESET) {
     index = null;
-    self.postMessage({ type: "reset_done" });
+    self.postMessage({ type: MSG.RESET_DONE });
     return;
   }
 
-  if (type === "filter") {
+  if (type === MSG.FILTER) {
     try {
       const { file, deplete, absThreshold, relThreshold } = data;
       const t0 = performance.now();
       const result = await streamFilterFile(file, { deplete, absThreshold, relThreshold });
 
       const {
-        output,
         stats,
         bytesProcessed,
         bytesTotal,
         progressCompressed,
-        outputCompressed,
       } = result;
       const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
-      self.postMessage(
-        {
-          type: "filtered",
-          result: output.buffer,
-          elapsed,
-          stats,
-          bytesProcessed,
-          bytesTotal,
-          progressCompressed,
-          outputCompressed,
-        },
-        [output.buffer]
-      );
+      self.postMessage({
+        type: MSG.FILTERED_DONE,
+        elapsed,
+        stats,
+        bytesProcessed,
+        bytesTotal,
+        progressCompressed,
+      });
     } catch (err) {
-      self.postMessage({ type: "error", message: "Filtering failed: " + err.message });
+      self.postMessage({ type: MSG.ERROR, message: "Filtering failed: " + err.message });
     }
     return;
   }

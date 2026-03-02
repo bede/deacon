@@ -67,7 +67,9 @@
 </div>
 
 <script type="module">
-  const ASSET_VERSION = "20260301-5";
+  import { MSG, STAGE } from "./protocol.js?v=20260302-3";
+
+  const ASSET_VERSION = "20260302-3";
   const worker = new Worker(`worker.js?v=${ASSET_VERSION}`, { type: "module" });
   const status = document.getElementById("status");
 
@@ -75,6 +77,13 @@
   let readsFile = null;
   let readsFilename = "";
   let isFiltering = false;
+  let outputBytes = 0;
+  let outputName = "";
+  let outputFileStream = null;
+  let outputWriteChain = Promise.resolve();
+  let outputWriteError = null;
+  let outputBlobParts = [];
+  let outputFallbackReason = "";
 
   function setStatus(msg, isError) {
     status.textContent = msg;
@@ -84,6 +93,93 @@
   function updateButton() {
     document.getElementById("run-btn").disabled = !(indexLoaded && readsFile) || isFiltering;
     document.getElementById("reset-btn").disabled = isFiltering;
+  }
+
+  function isGzipFilename(name) {
+    return /\.(fastq|fq|fasta|fa)\.gz$/i.test(name || "");
+  }
+
+  function resetOutputState() {
+    outputBytes = 0;
+    outputName = "";
+    outputFileStream = null;
+    outputWriteChain = Promise.resolve();
+    outputWriteError = null;
+    outputBlobParts = [];
+    outputFallbackReason = "";
+  }
+
+  async function prepareOutputSink() {
+    resetOutputState();
+    outputName = formatOutputName(readsFilename, isGzipFilename(readsFilename));
+    if (!window.showSaveFilePicker) {
+      return true;
+    }
+    try {
+      const handle = await window.showSaveFilePicker({ suggestedName: outputName });
+      outputFileStream = await handle.createWritable();
+      outputName = handle.name || outputName;
+      return true;
+    } catch (err) {
+      if (err && err.name === "AbortError") return false;
+      if (err && (err.name === "SecurityError" || err.name === "NotAllowedError")) {
+        outputFallbackReason = "save picker blocked; buffering for final download";
+        return true;
+      }
+      throw err;
+    }
+  }
+
+  function queueOutputChunks(buffers) {
+    if (!buffers || buffers.length === 0) return;
+    const chunks = buffers.map((buffer) => new Uint8Array(buffer));
+    for (const chunk of chunks) {
+      outputBytes += chunk.byteLength;
+    }
+    if (outputFileStream) {
+      outputWriteChain = outputWriteChain.then(async () => {
+        if (outputWriteError) return;
+        try {
+          await outputFileStream.write(new Blob(chunks, { type: "application/octet-stream" }));
+        } catch (err) {
+          outputWriteError = err;
+        }
+      });
+      return;
+    }
+    outputBlobParts.push(new Blob(chunks, { type: "application/octet-stream" }));
+  }
+
+  async function finalizeOutput() {
+    await outputWriteChain;
+    if (outputWriteError) throw outputWriteError;
+    if (outputFileStream) {
+      await outputFileStream.close();
+      return;
+    }
+    const blob = new Blob(outputBlobParts, { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = outputName;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function abortOutput() {
+    try {
+      await outputWriteChain;
+    } catch (_) {}
+    if (outputFileStream) {
+      try {
+        if (typeof outputFileStream.abort === "function") {
+          await outputFileStream.abort();
+        } else {
+          await outputFileStream.close();
+        }
+      } catch (_) {}
+    }
+    resetOutputState();
   }
 
   function resetSelectionState() {
@@ -135,20 +231,20 @@
 
   // Init WASM
   setStatus("Initializing WASM…");
-  worker.postMessage({ type: "init" });
+  worker.postMessage({ type: MSG.INIT });
 
-  worker.onmessage = function (e) {
-    const { type, info, message, result, elapsed, stats, bytesProcessed, bytesTotal, progressCompressed, outputCompressed } = e.data;
+  worker.onmessage = async function (e) {
+    const { type, info, message, chunks, stage, elapsed, stats, bytesProcessed, bytesTotal, progressCompressed } = e.data;
 
-    if (type === "ready") {
+    if (type === MSG.READY) {
       setStatus("Load a Deacon index file to begin.");
-    } else if (type === "index_loaded") {
+    } else if (type === MSG.INDEX_LOADED) {
       indexLoaded = true;
       document.getElementById("index-zone").classList.add("loaded");
       document.getElementById("index-info").textContent = info;
       setStatus("Index loaded. Now load reads to filter.");
       updateButton();
-    } else if (type === "progress") {
+    } else if (type === MSG.PROGRESS) {
       const processedMB = (Number(bytesProcessed || 0) / 1024 / 1024).toFixed(0);
       if (bytesTotal && bytesTotal > 0) {
         const totalMB = (bytesTotal / 1024 / 1024).toFixed(0);
@@ -159,10 +255,23 @@
       } else {
         setStatus(`Filtering… ${processedMB} MB decompressed`);
       }
-    } else if (type === "filtered") {
+    } else if (type === MSG.STAGE) {
+      if (stage === STAGE.FINALIZING) {
+        setStatus("Finalizing output…");
+      }
+    } else if (type === MSG.OUTPUT_CHUNK_BATCH) {
+      queueOutputChunks(chunks);
+    } else if (type === MSG.FILTERED_DONE) {
       isFiltering = false;
-      const bytes = new Uint8Array(result);
-      const sizeMB = (bytes.length / 1024 / 1024).toFixed(1);
+      try {
+        await finalizeOutput();
+      } catch (err) {
+        await abortOutput();
+        setStatus("Error finalizing output: " + err.message, true);
+        updateButton();
+        return;
+      }
+      const sizeMB = (outputBytes / 1024 / 1024).toFixed(1);
       const elapsedSec = Number(elapsed) || 0;
       const readsIn = Number(stats?.readsIn || 0);
       const readsOut = Number(stats?.readsOut || 0);
@@ -187,22 +296,17 @@
         processedLine +
         `Sequences retained: ${readsOut.toLocaleString()}/${readsIn.toLocaleString()} (${readsPct}%)\n` +
         `Bases retained: ${basesOut.toLocaleString()}/${basesIn.toLocaleString()} (${basesPct}%)\n` +
-        `Output file size: ${sizeMB} MB`
+        `Output file size: ${sizeMB} MB\n` +
+        (outputFileStream ? "Output written to selected file." : "Output downloaded.")
       );
-
-      const blob = new Blob([bytes], { type: "application/octet-stream" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = formatOutputName(readsFilename, Boolean(outputCompressed));
-      a.click();
-      URL.revokeObjectURL(url);
+      resetOutputState();
       updateButton();
-    } else if (type === "error") {
+    } else if (type === MSG.ERROR) {
       isFiltering = false;
+      await abortOutput();
       setStatus("Error: " + message, true);
       updateButton();
-    } else if (type === "reset_done") {
+    } else if (type === MSG.RESET_DONE) {
       setStatus("Reset. Load an index file to begin.");
     }
   };
@@ -232,7 +336,7 @@
     document.getElementById("index-info").textContent = "Loading…";
     setStatus("Loading index (" + (file.size / 1024 / 1024).toFixed(0) + " MB)…");
     const buf = await file.arrayBuffer();
-    worker.postMessage({ type: "load_index", data: buf }, [buf]);
+    worker.postMessage({ type: MSG.LOAD_INDEX, data: buf }, [buf]);
   });
 
   setupDropZone("reads-zone", "reads-input", (file) => {
@@ -246,15 +350,30 @@
   document.getElementById("run-btn").addEventListener("click", async () => {
     if (!readsFile) return;
 
+    try {
+      const ok = await prepareOutputSink();
+      if (!ok) {
+        setStatus("Filtering cancelled.");
+        return;
+      }
+    } catch (err) {
+      setStatus("Error preparing output file: " + err.message, true);
+      return;
+    }
+
     isFiltering = true;
     updateButton();
-    setStatus("Filtering…");
+    if (!outputFileStream) {
+      const reason = outputFallbackReason || "browser fallback mode: buffering for final download";
+      setStatus(`Filtering… (${reason})`);
+    } else {
+      setStatus("Filtering…");
+    }
 
     worker.postMessage({
-      type: "filter",
+      type: MSG.FILTER,
       data: {
         file: readsFile,
-        filename: readsFilename,
         deplete: document.querySelector('input[name="mode"]:checked').value === "deplete",
         absThreshold: parseInt(document.getElementById("abs-threshold").value) || 2,
         relThreshold: parseFloat(document.getElementById("rel-threshold").value) || 0.01,
@@ -265,7 +384,8 @@
   document.getElementById("reset-btn").addEventListener("click", () => {
     if (isFiltering) return;
     resetSelectionState();
-    worker.postMessage({ type: "reset" });
+    resetOutputState();
+    worker.postMessage({ type: MSG.RESET });
   });
 </script>
 </body>
