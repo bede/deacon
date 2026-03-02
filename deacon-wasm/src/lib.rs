@@ -119,7 +119,12 @@ impl WasmFilterSession {
             .push_chunk(&input)
             .map_err(|e| JsValue::from_str(&e))?;
         for record in records {
-            self.process_record(&record.header, &record.seq, record.qual.as_deref(), &mut raw_output)?;
+            self.process_record(
+                &record.header,
+                &record.seq,
+                record.qual.as_deref(),
+                &mut raw_output,
+            )?;
         }
 
         // Step 3: Compress output if needed
@@ -162,7 +167,12 @@ impl WasmFilterSession {
         // Finish parsing (flush any pending partial record)
         let records = self.parser.finish().map_err(|e| JsValue::from_str(&e))?;
         for record in records {
-            self.process_record(&record.header, &record.seq, record.qual.as_deref(), &mut raw_output)?;
+            self.process_record(
+                &record.header,
+                &record.seq,
+                record.qual.as_deref(),
+                &mut raw_output,
+            )?;
         }
 
         // Finish compression
@@ -263,11 +273,14 @@ enum SeqFormat {
 struct SeqChunkParser {
     pending: Vec<u8>,
     format: Option<SeqFormat>,
-    // FASTQ state
-    record_lines: Vec<Vec<u8>>, // always 0..=3 lines
-    // FASTA state
-    fasta_header: Option<Vec<u8>>,
+    /// FASTQ: number of newlines seen in the current partial record (0..=3)
+    newlines_in_partial: u8,
+    /// Offset into `pending` where the current incomplete record starts
+    record_start: usize,
+    /// FASTA: accumulated sequence bytes for the current record
     fasta_seq: Vec<u8>,
+    /// FASTA: header of the current record being accumulated
+    fasta_header: Option<Vec<u8>>,
 }
 
 impl SeqChunkParser {
@@ -275,9 +288,10 @@ impl SeqChunkParser {
         Self {
             pending: Vec::new(),
             format: None,
-            record_lines: Vec::new(),
-            fasta_header: None,
+            newlines_in_partial: 0,
+            record_start: 0,
             fasta_seq: Vec::new(),
+            fasta_header: None,
         }
     }
 
@@ -290,155 +304,318 @@ impl SeqChunkParser {
             return Ok(Vec::new());
         }
 
-        let mut records = Vec::new();
         self.pending.extend_from_slice(chunk);
-        let mut cursor = 0usize;
 
-        while let Some(rel_pos) = memchr::memchr(b'\n', &self.pending[cursor..]) {
-            let line_end = cursor + rel_pos;
-            let mut line = self.pending[cursor..line_end].to_vec();
-            if line.last() == Some(&b'\r') {
-                line.pop();
-            }
-            if let Some(record) = self.push_line(line)? {
-                records.push(record);
-            }
-            cursor = line_end + 1;
-        }
-
-        if cursor > 0 {
-            self.pending.drain(..cursor);
-        }
-
-        Ok(records)
-    }
-
-    fn finish(&mut self) -> Result<Vec<SeqRecord>, String> {
-        let mut records = Vec::new();
-        if !self.pending.is_empty() {
-            let mut line = std::mem::take(&mut self.pending);
-            if line.last() == Some(&b'\r') {
-                line.pop();
-            }
-            if let Some(record) = self.push_line(line)? {
-                records.push(record);
-            }
-        }
-
-        match self.format.unwrap_or(SeqFormat::Fastq) {
-            SeqFormat::Fastq => {
-                if !self.record_lines.is_empty() {
-                    return Err(
-                        "Incomplete FASTQ record at end of stream (expected 4 lines per record)"
-                            .to_string(),
-                    );
-                }
-            }
-            SeqFormat::Fasta => {
-                if let Some(header) = self.fasta_header.take() {
-                    let seq = std::mem::take(&mut self.fasta_seq);
-                    if !seq.is_empty() {
-                        records.push(SeqRecord {
-                            header,
-                            seq,
-                            qual: None,
-                        });
-                    }
-                }
-            }
-        }
-
-        Ok(records)
-    }
-
-    fn push_line(&mut self, line: Vec<u8>) -> Result<Option<SeqRecord>, String> {
-        // Auto-detect format from the first non-empty line
+        // Auto-detect format from the first non-whitespace byte
         if self.format.is_none() {
-            if line.is_empty() {
-                return Ok(None);
-            }
-            match line.first() {
+            let first = self.pending.iter().find(|&&b| b != b'\n' && b != b'\r');
+            match first {
                 Some(b'@') => self.format = Some(SeqFormat::Fastq),
                 Some(b'>') => self.format = Some(SeqFormat::Fasta),
-                _ => {
-                    return Err(
-                        "Cannot detect format: first record must start with '@' (FASTQ) or '>' (FASTA)"
-                            .to_string(),
-                    )
-                }
+                Some(_) => return Err(
+                    "Cannot detect format: first record must start with '@' (FASTQ) or '>' (FASTA)"
+                        .to_string(),
+                ),
+                None => return Ok(Vec::new()), // only whitespace so far
             }
         }
 
         match self.format.unwrap() {
-            SeqFormat::Fastq => self.push_line_fastq(line),
-            SeqFormat::Fasta => self.push_line_fasta(line),
+            SeqFormat::Fastq => self.scan_fastq(),
+            SeqFormat::Fasta => self.scan_fasta(),
         }
     }
 
-    fn push_line_fastq(&mut self, line: Vec<u8>) -> Result<Option<SeqRecord>, String> {
-        if self.record_lines.is_empty() && line.is_empty() {
-            return Ok(None);
+    fn finish(&mut self) -> Result<Vec<SeqRecord>, String> {
+        // If there's trailing data without a final newline, append one to flush it
+        if !self.pending.is_empty() {
+            let last = *self.pending.last().unwrap();
+            if last != b'\n' {
+                self.pending.push(b'\n');
+            }
         }
 
-        self.record_lines.push(line);
+        let records = match self.format.unwrap_or(SeqFormat::Fastq) {
+            SeqFormat::Fastq => {
+                let records = self.scan_fastq()?;
+                if self.newlines_in_partial > 0 || self.record_start < self.pending.len() {
+                    // Check if remaining data is just whitespace
+                    let remaining = &self.pending[self.record_start..];
+                    let has_content = remaining.iter().any(|&b| b != b'\n' && b != b'\r');
+                    if has_content {
+                        return Err(
+                            "Incomplete FASTQ record at end of stream (expected 4 lines per record)"
+                                .to_string(),
+                        );
+                    }
+                }
+                records
+            }
+            SeqFormat::Fasta => {
+                let mut records = self.scan_fasta()?;
+                // Flush the last FASTA record
+                if let Some(header) = self.fasta_header.take() {
+                    let seq = std::mem::take(&mut self.fasta_seq);
+                    records.push(SeqRecord {
+                        header,
+                        seq,
+                        qual: None,
+                    });
+                }
+                records
+            }
+        };
 
-        if self.record_lines.len() < 4 {
-            return Ok(None);
+        self.pending.clear();
+        self.record_start = 0;
+        self.newlines_in_partial = 0;
+        Ok(records)
+    }
+
+    /// Scan pending buffer for complete FASTQ records (4 newline-delimited lines each).
+    fn scan_fastq(&mut self) -> Result<Vec<SeqRecord>, String> {
+        let mut records = Vec::new();
+
+        loop {
+            // Find the next newline starting from where we left off scanning
+            let search_start = self.record_start
+                + if self.newlines_in_partial == 0 {
+                    0
+                } else {
+                    // We need to skip past the newlines we've already counted
+                    let mut skip = self.record_start;
+                    let mut found = 0u8;
+                    for &b in &self.pending[self.record_start..] {
+                        skip += 1;
+                        if b == b'\n' {
+                            found += 1;
+                            if found == self.newlines_in_partial {
+                                break;
+                            }
+                        }
+                    }
+                    skip - self.record_start
+                };
+
+            // Count remaining newlines needed to complete a record
+            let needed = 4 - self.newlines_in_partial;
+            let mut pos = search_start;
+            let mut found = 0u8;
+
+            for &b in &self.pending[search_start..] {
+                pos += 1;
+                if b == b'\n' {
+                    found += 1;
+                    if found == needed {
+                        break;
+                    }
+                }
+            }
+
+            if found < needed {
+                // Not enough newlines for a complete record
+                self.newlines_in_partial += found;
+                break;
+            }
+
+            // We have a complete 4-line record from record_start..pos
+            let record_bytes = &self.pending[self.record_start..pos];
+            let record = Self::parse_fastq_record(record_bytes)?;
+            records.push(record);
+
+            // Skip any blank lines between records
+            let mut next_start = pos;
+            while next_start < self.pending.len()
+                && (self.pending[next_start] == b'\n' || self.pending[next_start] == b'\r')
+            {
+                next_start += 1;
+            }
+
+            self.record_start = next_start;
+            self.newlines_in_partial = 0;
         }
 
-        if self.record_lines[0].first() != Some(&b'@') {
+        // Compact: remove consumed data from pending
+        if self.record_start > 0 {
+            self.pending.drain(..self.record_start);
+            self.record_start = 0;
+        }
+
+        Ok(records)
+    }
+
+    /// Parse a single FASTQ record from a byte slice containing exactly 4 lines (with newlines).
+    fn parse_fastq_record(data: &[u8]) -> Result<SeqRecord, String> {
+        let mut lines = [0usize; 5]; // start offsets of each line, plus end
+        let mut li = 0;
+        lines[0] = 0;
+
+        for (i, &b) in data.iter().enumerate() {
+            if b == b'\n' {
+                li += 1;
+                if li <= 4 {
+                    lines[li] = i + 1;
+                }
+            }
+        }
+
+        let line = |n: usize| -> &[u8] {
+            let start = lines[n];
+            let mut end = if n + 1 <= li {
+                lines[n + 1] - 1
+            } else {
+                data.len()
+            };
+            // Strip \r
+            if end > start && data[end - 1] == b'\r' {
+                end -= 1;
+            }
+            &data[start..end]
+        };
+
+        let header_line = line(0);
+        let seq_line = line(1);
+        let sep_line = line(2);
+        let qual_line = line(3);
+
+        if header_line.first() != Some(&b'@') {
             return Err("Invalid FASTQ record: header must start with '@'".to_string());
         }
-        if self.record_lines[2].first() != Some(&b'+') {
+        if sep_line.first() != Some(&b'+') {
             return Err("Invalid FASTQ record: third line must start with '+'".to_string());
         }
-
-        let header = self.record_lines[0][1..].to_vec();
-        let seq = self.record_lines[1].clone();
-        let qual = self.record_lines[3].clone();
-
-        if qual.len() != seq.len() {
+        if qual_line.len() != seq_line.len() {
             return Err("Invalid FASTQ record: sequence and quality lengths differ".to_string());
         }
 
-        self.record_lines.clear();
-        Ok(Some(SeqRecord {
-            header,
-            seq,
-            qual: Some(qual),
-        }))
+        Ok(SeqRecord {
+            header: header_line[1..].to_vec(),
+            seq: seq_line.to_vec(),
+            qual: Some(qual_line.to_vec()),
+        })
     }
 
-    fn push_line_fasta(&mut self, line: Vec<u8>) -> Result<Option<SeqRecord>, String> {
-        if line.is_empty() {
-            return Ok(None);
-        }
+    /// Scan pending buffer for complete FASTA records (delimited by \n>).
+    fn scan_fasta(&mut self) -> Result<Vec<SeqRecord>, String> {
+        let mut records = Vec::new();
 
-        if line.first() == Some(&b'>') {
-            // New header — emit previous record if any
-            let prev = if let Some(prev_header) = self.fasta_header.take() {
-                let seq = std::mem::take(&mut self.fasta_seq);
-                if seq.is_empty() {
-                    return Err("Empty FASTA sequence".to_string());
+        loop {
+            // Look for \n> which marks the start of a new record
+            let search_from = if self.record_start == 0
+                && self.fasta_header.is_none()
+                && !self.pending.is_empty()
+            {
+                // First record: find the first > (should be at the start, possibly after whitespace)
+                match self.pending.iter().position(|&b| b == b'>') {
+                    Some(pos) => pos,
+                    None => break,
                 }
-                Some(SeqRecord {
-                    header: prev_header,
+            } else if self.fasta_header.is_some() {
+                // We have an active record; look for \n> to end it
+                let start = self.record_start;
+                let found = {
+                    let mut pos = start;
+                    loop {
+                        match memchr::memchr(b'>', &self.pending[pos..]) {
+                            Some(rel) => {
+                                let abs = pos + rel;
+                                // Valid record boundary if > is preceded by \n (or is at
+                                // record_start after all preceding data was accumulated)
+                                if abs > 0 && self.pending[abs - 1] == b'\n' {
+                                    break Some(abs);
+                                } else if abs == start && (self.fasta_seq.len() > 0 || abs == 0) {
+                                    // > is right at record_start — previous data was already
+                                    // accumulated (the \n was consumed/drained in a prior chunk)
+                                    break Some(abs);
+                                } else {
+                                    // This > is inside sequence data; skip it
+                                    pos = abs + 1;
+                                }
+                            }
+                            None => break None,
+                        }
+                    }
+                };
+                match found {
+                    Some(pos) => pos,
+                    None => {
+                        // No \n> found. Accumulate all complete lines into fasta_seq.
+                        self.accumulate_fasta_seq();
+                        break;
+                    }
+                }
+            } else {
+                break;
+            };
+
+            if self.fasta_header.is_some() {
+                // Flush sequence data up to this boundary
+                let end = if search_from > self.record_start {
+                    search_from - 1 // exclude the \n before >
+                } else {
+                    self.record_start // nothing between record_start and >
+                };
+                for i in self.record_start..end {
+                    let b = self.pending[i];
+                    if b != b'\n' && b != b'\r' {
+                        self.fasta_seq.push(b);
+                    }
+                }
+                let header = self.fasta_header.take().unwrap();
+                let seq = std::mem::take(&mut self.fasta_seq);
+                records.push(SeqRecord {
+                    header,
                     seq,
                     qual: None,
-                })
-            } else {
-                None
-            };
-            self.fasta_header = Some(line[1..].to_vec());
-            self.fasta_seq.clear();
-            Ok(prev)
-        } else {
-            // Sequence continuation line
-            if self.fasta_header.is_none() {
-                return Err("FASTA sequence data before header".to_string());
+                });
             }
-            self.fasta_seq.extend_from_slice(&line);
-            Ok(None)
+
+            // Parse the new header line starting at search_from
+            let header_start = search_from + 1; // skip '>'
+            match memchr::memchr(b'\n', &self.pending[header_start..]) {
+                Some(rel) => {
+                    let header_end = header_start + rel;
+                    let mut header = self.pending[header_start..header_end].to_vec();
+                    if header.last() == Some(&b'\r') {
+                        header.pop();
+                    }
+                    self.fasta_header = Some(header);
+                    self.record_start = header_end + 1;
+                    self.fasta_seq.clear();
+                }
+                None => {
+                    // Header line is incomplete; wait for more data
+                    // Put record_start at the '>' so we re-process it next time
+                    self.record_start = search_from;
+                    break;
+                }
+            }
+        }
+
+        // Compact: remove consumed data from pending
+        if self.record_start > 0 {
+            self.pending.drain(..self.record_start);
+            self.record_start = 0;
+        }
+
+        Ok(records)
+    }
+
+    /// Accumulate all complete lines from pending[record_start..] into fasta_seq,
+    /// advancing record_start past consumed data.
+    fn accumulate_fasta_seq(&mut self) {
+        // Find the last newline — only accumulate complete lines
+        let start = self.record_start;
+        let last_nl = self.pending[start..].iter().rposition(|&b| b == b'\n');
+        if let Some(last_nl) = last_nl {
+            let end = start + last_nl;
+            for i in start..end {
+                let b = self.pending[i];
+                if b != b'\n' && b != b'\r' {
+                    self.fasta_seq.push(b);
+                }
+            }
+            self.record_start = end + 1;
         }
     }
 }
@@ -608,5 +785,158 @@ mod tests {
         let records = parser.finish().unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].seq, b"ACGT");
+    }
+
+    #[test]
+    fn fastq_quality_line_starting_with_at() {
+        let input = b"@r1\nACGT\n+\n@!!!\n";
+        let mut parser = SeqChunkParser::new();
+        let records = parser.push_chunk(input).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].header, b"r1");
+        assert_eq!(records[0].seq, b"ACGT");
+        assert_eq!(records[0].qual.as_deref(), Some(b"@!!!".as_slice()));
+    }
+
+    #[test]
+    fn fastq_quality_line_starting_with_plus() {
+        let input = b"@r1\nACGT\n+\n+!!!\n";
+        let mut parser = SeqChunkParser::new();
+        let records = parser.push_chunk(input).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].qual.as_deref(), Some(b"+!!!".as_slice()));
+    }
+
+    #[test]
+    fn fastq_crlf_line_endings() {
+        let input = b"@r1\r\nACGT\r\n+\r\n!!!!\r\n";
+        let mut parser = SeqChunkParser::new();
+        let mut records = parser.push_chunk(input).unwrap();
+        records.append(&mut parser.finish().unwrap());
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].header, b"r1");
+        assert_eq!(records[0].seq, b"ACGT");
+        assert_eq!(records[0].qual.as_deref(), Some(b"!!!!".as_slice()));
+    }
+
+    #[test]
+    fn fasta_crlf_line_endings() {
+        let input = b">s1\r\nACGT\r\nTGCA\r\n";
+        let mut parser = SeqChunkParser::new();
+        parser.push_chunk(input).unwrap();
+        let records = parser.finish().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].header, b"s1");
+        assert_eq!(records[0].seq, b"ACGTTGCA");
+    }
+
+    #[test]
+    fn fastq_record_split_at_chunk_boundary() {
+        let mut parser = SeqChunkParser::new();
+        let mut records = Vec::new();
+        // Header in first chunk, rest in second
+        records.append(&mut parser.push_chunk(b"@r1\n").unwrap());
+        assert_eq!(records.len(), 0);
+        records.append(&mut parser.push_chunk(b"ACGT\n+\n!!!!\n").unwrap());
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].header, b"r1");
+        assert_eq!(records[0].seq, b"ACGT");
+    }
+
+    #[test]
+    fn fasta_record_split_at_chunk_boundary() {
+        let mut parser = SeqChunkParser::new();
+        let mut records = Vec::new();
+        records.append(&mut parser.push_chunk(b">r1\nAC").unwrap());
+        assert_eq!(records.len(), 0);
+        records.append(&mut parser.push_chunk(b"GT\nTGCA\n>r2\nAAAA\n").unwrap());
+        records.append(&mut parser.finish().unwrap());
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].header, b"r1");
+        assert_eq!(records[0].seq, b"ACGTTGCA");
+        assert_eq!(records[1].seq, b"AAAA");
+    }
+
+    #[test]
+    fn fastq_long_sequence_spanning_chunks() {
+        let seq = "A".repeat(10000);
+        let qual = "!".repeat(10000);
+        let input = format!("@long\n{}\n+\n{}\n", seq, qual);
+        let bytes = input.as_bytes();
+        let mut parser = SeqChunkParser::new();
+        let mut records = Vec::new();
+        // Feed in 137-byte chunks (odd size to stress boundaries)
+        for chunk in bytes.chunks(137) {
+            records.append(&mut parser.push_chunk(chunk).unwrap());
+        }
+        records.append(&mut parser.finish().unwrap());
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].seq.len(), 10000);
+        assert_eq!(records[0].qual.as_ref().unwrap().len(), 10000);
+    }
+
+    #[test]
+    fn fasta_long_sequence_spanning_chunks() {
+        let seq_line = "ACGTACGT".repeat(125); // 1000 bp per line
+        let input = format!(">long\n{}\n{}\n{}\n", seq_line, seq_line, seq_line);
+        let bytes = input.as_bytes();
+        let mut parser = SeqChunkParser::new();
+        let mut records = Vec::new();
+        for chunk in bytes.chunks(137) {
+            records.append(&mut parser.push_chunk(chunk).unwrap());
+        }
+        records.append(&mut parser.finish().unwrap());
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].seq.len(), 3000);
+    }
+
+    #[test]
+    fn fasta_blank_lines_between_records() {
+        let input = b">s1\nACGT\n\n>s2\nTGCA\n\n";
+        let mut parser = SeqChunkParser::new();
+        let mut records = parser.push_chunk(input).unwrap();
+        records.append(&mut parser.finish().unwrap());
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].seq, b"ACGT");
+        assert_eq!(records[1].seq, b"TGCA");
+    }
+
+    #[test]
+    fn fasta_allows_empty_record_mid_stream() {
+        let input = b">s1\nACGT\n>empty\n>s2\nTGCA\n";
+        let mut parser = SeqChunkParser::new();
+        let mut records = parser.push_chunk(input).unwrap();
+        records.append(&mut parser.finish().unwrap());
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].header, b"s1");
+        assert_eq!(records[0].seq, b"ACGT");
+        assert_eq!(records[1].header, b"empty");
+        assert_eq!(records[1].seq, b"");
+        assert_eq!(records[2].header, b"s2");
+        assert_eq!(records[2].seq, b"TGCA");
+    }
+
+    #[test]
+    fn fasta_allows_empty_record_at_eof() {
+        let input = b">s1\nACGT\n>empty\n";
+        let mut parser = SeqChunkParser::new();
+        let mut records = parser.push_chunk(input).unwrap();
+        records.append(&mut parser.finish().unwrap());
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].header, b"s1");
+        assert_eq!(records[0].seq, b"ACGT");
+        assert_eq!(records[1].header, b"empty");
+        assert_eq!(records[1].seq, b"");
+    }
+
+    #[test]
+    fn fastq_multiple_records_single_chunk() {
+        let input = b"@r1\nAA\n+\n!!\n@r2\nCC\n+\n##\n@r3\nGG\n+\n$$\n";
+        let mut parser = SeqChunkParser::new();
+        let records = parser.push_chunk(input).unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].header, b"r1");
+        assert_eq!(records[1].header, b"r2");
+        assert_eq!(records[2].header, b"r3");
     }
 }
