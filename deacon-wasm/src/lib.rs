@@ -51,6 +51,7 @@ pub struct WasmFilterSession {
     rel_threshold: f64,
     hasher: KmerHasher,
     buffers: Buffers,
+    seen: MinimizerSet,
     parser: SeqChunkParser,
     stats: FilterStats,
     gz_decoder: Option<MultiGzDecoder<Vec<u8>>>,
@@ -76,6 +77,12 @@ impl WasmFilterSession {
             Buffers::new_u128()
         };
 
+        let seen = if k <= 32 {
+            MinimizerSet::U64(RapidHashSet::default())
+        } else {
+            MinimizerSet::U128(RapidHashSet::default())
+        };
+
         let gz_decoder = if decompress_input {
             Some(MultiGzDecoder::new(Vec::new()))
         } else {
@@ -94,6 +101,7 @@ impl WasmFilterSession {
             rel_threshold,
             hasher,
             buffers,
+            seen,
             parser: SeqChunkParser::new(),
             stats: FilterStats::default(),
             gz_decoder,
@@ -225,7 +233,7 @@ impl WasmFilterSession {
         } else {
             deacon::minimizers::fill_minimizers(seq, &self.hasher, k, w, 0.0, &mut self.buffers);
             let num_minimizers = self.buffers.minimizers.len();
-            let hit_count = count_hits(&self.buffers.minimizers, &self.index.minimizers);
+            let hit_count = count_hits_into(&self.buffers.minimizers, &self.index.minimizers, &mut self.seen);
             let rel_required = if num_minimizers == 0 {
                 0
             } else {
@@ -637,10 +645,10 @@ fn set_field(obj: &Object, key: &str, value: u64) -> Result<(), JsValue> {
     Ok(())
 }
 
-fn count_hits(minimizers: &MinimizerVec, set: &MinimizerSet) -> usize {
-    match (minimizers, set) {
-        (MinimizerVec::U64(vec), MinimizerSet::U64(s)) => {
-            let mut seen = RapidHashSet::default();
+fn count_hits_into(minimizers: &MinimizerVec, set: &MinimizerSet, seen: &mut MinimizerSet) -> usize {
+    match (minimizers, set, seen) {
+        (MinimizerVec::U64(vec), MinimizerSet::U64(s), MinimizerSet::U64(seen)) => {
+            seen.clear();
             for &m in vec {
                 if s.contains(&m) {
                     seen.insert(m);
@@ -648,8 +656,8 @@ fn count_hits(minimizers: &MinimizerVec, set: &MinimizerSet) -> usize {
             }
             seen.len()
         }
-        (MinimizerVec::U128(vec), MinimizerSet::U128(s)) => {
-            let mut seen = RapidHashSet::default();
+        (MinimizerVec::U128(vec), MinimizerSet::U128(s), MinimizerSet::U128(seen)) => {
+            seen.clear();
             for &m in vec {
                 if s.contains(&m) {
                     seen.insert(m);
