@@ -1,0 +1,14 @@
+[package]
+name = "deacon-wasm-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "deacon-wasm-bench"
+path = "src/main.rs"
+
+[dependencies]
+deacon = { path = "..", default-features = false, features = ["scalar", "gz"] }
+flate2 = { version = "1.1", features = ["zlib-rs"] }
+memchr = "2.7"
