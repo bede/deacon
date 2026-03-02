@@ -110,21 +110,23 @@ impl WasmFilterSession {
     }
 
     pub fn push_chunk(&mut self, chunk: &[u8]) -> Result<Vec<u8>, JsValue> {
-        // Step 1: Decompress if needed
+        // Step 1: Decompress if needed, or pass through directly
+        let decompressed;
         let input = if let Some(ref mut decoder) = self.gz_decoder {
             decoder
                 .write_all(chunk)
                 .map_err(|e| JsValue::from_str(&format!("Decompression error: {}", e)))?;
-            std::mem::take(decoder.get_mut())
+            decompressed = std::mem::take(decoder.get_mut());
+            &decompressed[..]
         } else {
-            chunk.to_vec()
+            chunk
         };
 
         // Step 2: Parse FASTQ records and filter
         let mut raw_output = Vec::new();
         let records = self
             .parser
-            .push_chunk(&input)
+            .push_chunk(input)
             .map_err(|e| JsValue::from_str(&e))?;
         for record in records {
             self.process_record(
