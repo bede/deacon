@@ -90,5 +90,5 @@ debug = false
 inherits = "release"
 
 [workspace]
-members = [".", "deacon-wasm"]
+members = [".", "deacon-wasm", "deacon-wasm-bench"]
 
