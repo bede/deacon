@@ -35,7 +35,7 @@ impl WasmIndex {
 
     pub fn info(&self) -> String {
         format!(
-            "k={}, w={}, {} minimizers",
+            "k={}, w={} ({} minimizers)",
             self.inner.header.kmer_length(),
             self.inner.header.window_size(),
             fmt_commas(self.inner.minimizers.len())
@@ -141,6 +141,11 @@ impl WasmFilterSession {
                 encoder
                     .write_all(&raw_output)
                     .map_err(|e| JsValue::from_str(&format!("Compression error: {}", e)))?;
+                // Encourage incremental output so the browser doesn't receive one
+                // huge final chunk at finish.
+                encoder
+                    .flush()
+                    .map_err(|e| JsValue::from_str(&format!("Compression flush error: {}", e)))?;
             }
             Ok(std::mem::take(encoder.get_mut()))
         } else {
@@ -233,7 +238,11 @@ impl WasmFilterSession {
         } else {
             deacon::minimizers::fill_minimizers(seq, &self.hasher, k, w, 0.0, &mut self.buffers);
             let num_minimizers = self.buffers.minimizers.len();
-            let hit_count = count_hits_into(&self.buffers.minimizers, &self.index.minimizers, &mut self.seen);
+            let hit_count = count_hits_into(
+                &self.buffers.minimizers,
+                &self.index.minimizers,
+                &mut self.seen,
+            );
             let rel_required = if num_minimizers == 0 {
                 0
             } else {
@@ -645,7 +654,11 @@ fn set_field(obj: &Object, key: &str, value: u64) -> Result<(), JsValue> {
     Ok(())
 }
 
-fn count_hits_into(minimizers: &MinimizerVec, set: &MinimizerSet, seen: &mut MinimizerSet) -> usize {
+fn count_hits_into(
+    minimizers: &MinimizerVec,
+    set: &MinimizerSet,
+    seen: &mut MinimizerSet,
+) -> usize {
     match (minimizers, set, seen) {
         (MinimizerVec::U64(vec), MinimizerSet::U64(s), MinimizerSet::U64(seen)) => {
             seen.clear();
