@@ -52,7 +52,7 @@
   <label>Absolute match threshold: <input type="number" id="abs-threshold" value="1" min="1"></label>
 </div>
 <div class="controls">
-  <label>Relative match threshold: <input type="number" id="rel-threshold" value="0.05" min="0" max="1" step="0.01"></label>
+  <label>Relative match threshold: <input type="number" id="rel-threshold" value="0.1" min="0" max="1" step="0.01"></label>
 </div>
 
 <div class="actions">
@@ -63,7 +63,7 @@
 <div id="status"></div>
 <div class="info download-link">
   Download index:
-  <a href="https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panhuman-1.k31w63.idx">panhuman-1.k31w63.idx</a>
+  <a href="https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panhuman-1.k31w61.idx">panhuman-1.k31w61.idx</a>
 </div>
 
 <script type="module">
@@ -376,7 +376,7 @@
         file: readsFile,
         deplete: document.querySelector('input[name="mode"]:checked').value === "deplete",
         absThreshold: parseInt(document.getElementById("abs-threshold").value) || 2,
-        relThreshold: parseFloat(document.getElementById("rel-threshold").value) || 0.01,
+        relThreshold: parseFloat(document.getElementById("rel-threshold").value) || 0.1,
       }
     });
   });
