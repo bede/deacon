@@ -1,0 +1,31 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "deacon"
+requires-python = " >=3.8,<3.13"
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Healthcare Industry",
+    "License :: OSI Approved :: MIT License"
+]
+description = "Accelerated DNA sequence search and [host] depletion using minimizers"
+readme = "README-python.md"
+license = "MIT"
+# license-files = "LICENSE"
+dynamic = ["version"]
+authors = [
+    { name = "Bede Constantinides", email = "b@bede.im" },
+    { name = "Jeremy Westhead", email = "jeremy.westhead@ndm.ox.ac.uk" },
+]
+
+[project.urls]
+Source = "https://github.com/bede/deacon"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]

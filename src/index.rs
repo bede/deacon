@@ -16,18 +16,26 @@ use std::time::Instant;
 #[cfg(feature = "fetch")]
 use indicatif::ProgressBar;
 
+use pyo3::prelude::*;
+
 /// Index format version
 pub const INDEX_FORMAT_VERSION: u8 = 3;
 
 /// Serialisable header for the index file
+#[pyclass]
 #[derive(Serialize, Deserialize, Debug)]
 pub struct IndexHeader {
+    #[pyo3(get, set)]
     pub format_version: u8,
+    #[pyo3(get, set)]
     pub kmer_length: u8,
+    #[pyo3(get, set)]
     pub window_size: u8,
 }
 
+#[pymethods]
 impl IndexHeader {
+    #[new]
     pub fn new(kmer_length: u8, window_size: u8) -> Self {
         IndexHeader {
             format_version: INDEX_FORMAT_VERSION,
@@ -95,10 +103,10 @@ pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, u
 static INDEX: OnceLock<(PathBuf, crate::MinimizerSet, IndexHeader)> = OnceLock::new();
 
 pub fn load_minimizers_cached(
-    path: &Path,
+    path: &PathBuf,
 ) -> Result<(&'static crate::MinimizerSet, &'static IndexHeader)> {
     let (p, minimizers, header) = INDEX.get_or_init(|| {
-        let (m, h) = load_minimizers(path).unwrap();
+        let (m, h) = load_minimizers(path.to_path_buf()).unwrap();
         (path.to_owned(), m, h)
     });
     assert_eq!(
@@ -110,8 +118,8 @@ pub fn load_minimizers_cached(
 }
 
 /// Load minimizers from an index file
-pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)> {
-    let file = File::open(path).context(format!("Failed to open index file {:?}", path))?;
+pub fn load_minimizers(path: PathBuf) -> Result<(crate::MinimizerSet, IndexHeader)> {
+    let file = File::open(&path).context(format!("Failed to open index file {:?}", &path))?;
     let mut reader = BufReader::with_capacity(1 << 20, file);
     let config = bincode::config::standard().with_fixed_int_encoding();
 
@@ -193,7 +201,7 @@ pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)
 pub fn dump_minimizers(
     minimizers: &crate::MinimizerSet,
     header: &IndexHeader,
-    output_path: Option<&Path>,
+    output_path: Option<PathBuf>,
 ) -> Result<()> {
     // Create writer based on output path
     let mut writer: BufWriter<Box<dyn Write>> = match output_path {
@@ -239,9 +247,12 @@ pub fn dump_minimizers(
 }
 
 /// Dump indexed minimizers to FASTA
-pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
+#[pyfunction]
+#[pyo3(signature = (index_path, output_path=None), name = "index_dump")]
+pub fn dump(index_path: PathBuf, output_path: Option<PathBuf>) -> Result<()> {
     // Load the index
-    let (minimizers, header) = load_minimizers(index_path).context("Failed to load index")?;
+    let (minimizers, header) =
+        load_minimizers(index_path.to_path_buf()).context("Failed to load index")?;
 
     // Create writer based on output path
     let mut writer: BufWriter<Box<dyn Write>> = match output_path {
@@ -277,7 +288,7 @@ pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
 }
 
 fn reader_with_inferred_batch_size(
-    in_path: Option<&Path>,
+    in_path: Option<PathBuf>,
 ) -> Result<paraseq::fastx::Reader<Box<dyn Read + Send>>> {
     let mut reader = paraseq::fastx::Reader::from_optional_path(in_path).unwrap();
     reader.update_batch_size_in_bp(256 * 1024)?;
@@ -382,6 +393,8 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
 }
 
 /// Build an index of minimizers from a fastx file
+#[pyfunction]
+#[pyo3(name = "index_build")]
 pub fn build(config: &IndexConfig) -> Result<()> {
     let start_time = Instant::now();
     let path = &config.input_path;
@@ -406,7 +419,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     let in_path = if path.as_os_str() == "-" {
         None
     } else {
-        Some(path.as_path())
+        Some(path.to_owned())
     };
     let reader = reader_with_inferred_batch_size(in_path)?;
 
@@ -471,7 +484,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     let header = IndexHeader::new(config.kmer_length, config.window_size);
 
     // Write to output path or stdout
-    dump_minimizers(&all_minimizers, &header, config.output_path.as_deref())?;
+    dump_minimizers(&all_minimizers, &header, config.output_path.clone())?;
 
     let total_time = start_time.elapsed();
     eprintln!("Completed in {:.2?}", total_time);
@@ -578,7 +591,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor {
 
 /// Stream minimizers from a FASTX file or stdin and remove those present in first_minimizers
 fn stream_diff_fastx(
-    fastx_path: &Path,
+    fastx_path: PathBuf,
     kmer_length: u8,
     window_size: u8,
     first_header: &IndexHeader,
@@ -698,18 +711,20 @@ fn stream_diff_fastx(
 }
 
 /// Compute the set difference between two minimizer indexes (A - B)
+#[pyfunction]
+#[pyo3(signature = (first, second, kmer_length=None, window_size=None, threads=0, output=None), name = "index_diff")]
 pub fn diff(
-    first: &Path,
-    second: &Path,
+    first: PathBuf,
+    second: PathBuf,
     kmer_length: Option<u8>,
     window_size: Option<u8>,
     threads: u16,
-    output: Option<&Path>,
+    output: Option<PathBuf>,
 ) -> Result<()> {
     let start_time = Instant::now();
 
     // Load first file (always an index)
-    let (mut first_minimizers, header) = load_minimizers(first)?;
+    let (mut first_minimizers, header) = load_minimizers(first.to_path_buf())?;
     eprintln!("First index: loaded {} minimizers", first_minimizers.len());
 
     // Guess if second file is an index or FASTX file
@@ -734,7 +749,7 @@ pub fn diff(
         return Ok(());
     } else {
         // Try to load as index file first
-        if let Ok((second_minimizers, second_header)) = load_minimizers(&second) {
+        if let Ok((second_minimizers, second_header)) = load_minimizers(second.to_path_buf()) {
             // Second file is an index file
             eprintln!(
                 "Second index: loaded {} minimizers",
@@ -765,7 +780,7 @@ pub fn diff(
             let before_count = first_minimizers.len();
 
             let (_seq_count, _total_bp) =
-                stream_diff_fastx(&second, k, w, &header, threads, &mut first_minimizers)?;
+                stream_diff_fastx(second, k, w, &header, threads, &mut first_minimizers)?;
 
             // Report results
             eprintln!(
@@ -806,11 +821,13 @@ pub fn diff(
 }
 
 /// Show info about an index
-pub fn info(index_path: &Path) -> Result<()> {
+#[pyfunction]
+#[pyo3(name = "index_info")]
+pub fn info(index_path: PathBuf) -> Result<()> {
     let start_time = Instant::now();
 
     // Load index file
-    let (minimizers, header) = load_minimizers(index_path)?;
+    let (minimizers, header) = load_minimizers(index_path.to_path_buf())?;
 
     // Show index info
     eprintln!("Index information:");
@@ -826,7 +843,9 @@ pub fn info(index_path: &Path) -> Result<()> {
 }
 
 /// Combine minimizer indexes (set union)
-pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
+#[pyfunction]
+#[pyo3(signature = (inputs, output=None), name = "index_union")]
+pub fn union(inputs: Vec<PathBuf>, output: Option<PathBuf>) -> Result<()> {
     let start_time = Instant::now();
     // Check input files
     if inputs.is_empty() {
@@ -838,8 +857,8 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     // Read all headers first to determine total capacity needed
     let mut headers_and_counts = Vec::new();
 
-    for path in inputs {
-        let (header, count) = load_header_and_count(path)?;
+    for path in &inputs {
+        let (header, count) = load_header_and_count(&path)?;
         headers_and_counts.push((header, count));
     }
 
@@ -869,12 +888,12 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     }
 
     // Load first index to determine type (u64 vs u128)
-    let (mut all_minimizers, _) = load_minimizers(&inputs[0])?;
+    let (mut all_minimizers, _) = load_minimizers(inputs[0].clone())?;
     eprintln!("Index 1: loaded {} minimizers", all_minimizers.len());
 
     // Now load and merge remaining indexes
     for (i, path) in inputs.iter().enumerate().skip(1) {
-        let (minimizers, _) = load_minimizers(path)?;
+        let (minimizers, _) = load_minimizers(path.to_path_buf())?;
         let before_count = all_minimizers.len();
 
         // Merge minimizers (set union)
@@ -903,7 +922,9 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
+#[pyfunction]
+#[pyo3(signature = (inputs, output=None), name = "index_intersect")]
+pub fn intersect(inputs: Vec<PathBuf>, output: Option<PathBuf>) -> Result<()> {
     let start_time = Instant::now();
     // Check inputs
     if inputs.len() < 2 {
@@ -915,8 +936,8 @@ pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     // Read all headers first
     let mut headers_and_counts = Vec::new();
 
-    for path in inputs {
-        let (header, count) = load_header_and_count(path)?;
+    for path in &inputs {
+        let (header, count) = load_header_and_count(&path)?;
         headers_and_counts.push((header, count));
     }
 
@@ -946,12 +967,12 @@ pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     }
 
     // Load first index
-    let (mut result_minimizers, _) = load_minimizers(&inputs[0])?;
+    let (mut result_minimizers, _) = load_minimizers(inputs[0].clone())?;
     eprintln!("Index 1: loaded {} minimizers", result_minimizers.len());
 
     // Intersect with remaining indexes
     for (i, path) in inputs.iter().enumerate().skip(1) {
-        let (minimizers, _) = load_minimizers(path)?;
+        let (minimizers, _) = load_minimizers(path.to_path_buf())?;
 
         // Intersect minimizers (set intersection)
         result_minimizers.intersect(&minimizers);
@@ -1066,11 +1087,13 @@ mod tests {
 
 /// Fetch a pre-built index from remote storage
 #[cfg(feature = "fetch")]
+#[pyfunction]
+#[pyo3(signature = (index_name="panhuman-1", kmer_length=crate::DEFAULT_KMER_LENGTH, window_size=crate::DEFAULT_WINDOW_SIZE, output=None), name="index_fetch")]
 pub fn fetch(
     index_name: &str,
     kmer_length: u8,
     window_size: u8,
-    output: Option<&Path>,
+    output: Option<PathBuf>,
 ) -> Result<()> {
     const DEFAULT_REPOSITORY_URL: &str =
         "https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o";
