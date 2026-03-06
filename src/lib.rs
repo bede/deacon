@@ -237,7 +237,7 @@ impl MinimizerVec {
     }
 }
 
-#[pyclass]
+#[pyclass(get_all, set_all)]
 pub struct FilterConfig {
     /// Minimizer index file path
     pub minimizers_path: PathBuf,
@@ -441,7 +441,7 @@ impl IndexConfig {
             entropy_threshold: 0.0,
         }
     }
-    
+
     /// Validate k-mer and window size constraints
     pub fn validate(&self) -> Result<()> {
         let k = self.kmer_length as usize;
