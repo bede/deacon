@@ -98,6 +98,14 @@ fn py_filter(
         debug,
         quiet,
     };
+    match (config.input2_path.as_ref(), config.output2_path.as_ref()) {
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(anyhow::anyhow!(
+                "Both input2_path and output2_path must be provided for paired-end filtering"
+            ));
+        }
+        _ => {}
+    }
     filter::run(&config)
 }
 
