@@ -28,6 +28,114 @@ use std::collections::HashSet;
 use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
 
+use pyo3::prelude::*;
+
+#[pymodule]
+/// Deacon: A fast minimizer-based filter for nucleotide sequences in FASTA or FASTQ format, built for efficient host depletion (*deacon*-tamination).
+fn deacon(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<MinimizerSet>()?;
+    m.add_class::<IndexHeader>()?;
+    m.add_class::<FilterConfig>()?;
+    m.add_class::<IndexConfig>()?;
+
+    m.add_function(wrap_pyfunction!(py_filter, m)?)?;
+    m.add_function(wrap_pyfunction!(py_index_build, m)?)?;
+    m.add_function(wrap_pyfunction!(index_diff, m)?)?;
+    m.add_function(wrap_pyfunction!(index_dump, m)?)?;
+    m.add_function(wrap_pyfunction!(index_info, m)?)?;
+    m.add_function(wrap_pyfunction!(index_intersect, m)?)?;
+    m.add_function(wrap_pyfunction!(index_union, m)?)?;
+
+    #[cfg(feature = "fetch")]
+    m.add_function(wrap_pyfunction!(index_fetch, m)?)?;
+    Ok(())
+}
+
+#[pyfunction]
+#[pyo3(signature = (minimizers_path, input_path, output_path, input2_path=None, output2_path=None, abs_threshold=2, rel_threshold=0.01, prefix_length=0, summary_path=None, deplete=false, rename=false, rename_random=false, output_fasta=false, threads=8, compression_level=2, compression_threads=0, debug=false, quiet=true), name="filter")]
+#[allow(clippy::too_many_arguments)]
+/// Run the deacon filter with the specified configuration parameters. See `FilterConfig` for details on each parameter.
+/// This function is a thin wrapper around `FilterConfig` that allows it to be called directly from Python with keyword arguments.
+/// Notably this differs from the usual defaults by setting `quiet=true` by default to avoid overwhelming users with progress output in Python environments.
+/// Simply pass `quiet=False` to enable progress reporting when calling from Python.
+/// Try `help(FilterConfig)` in Python for detailed parameter descriptions.
+fn py_filter(
+    minimizers_path: PathBuf,
+    input_path: String,
+    output_path: PathBuf,
+    input2_path: Option<String>,
+    output2_path: Option<String>,
+    abs_threshold: usize,
+    rel_threshold: f64,
+    prefix_length: usize,
+    summary_path: Option<PathBuf>,
+    deplete: bool,
+    rename: bool,
+    rename_random: bool,
+    output_fasta: bool,
+    threads: u16,
+    compression_level: u8,
+    compression_threads: u16,
+    debug: bool,
+    quiet: bool,
+) -> Result<FilterSummary> {
+    let config = FilterConfig {
+        minimizers_path,
+        input_path,
+        input2_path,
+        output_path: Some(output_path),
+        output2_path,
+        abs_threshold,
+        rel_threshold,
+        prefix_length,
+        summary_path,
+        deplete,
+        rename,
+        rename_random,
+        output_fasta,
+        threads,
+        compression_level,
+        compression_threads,
+        debug,
+        quiet,
+    };
+    match (config.input2_path.as_ref(), config.output2_path.as_ref()) {
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(anyhow::anyhow!(
+                "Both input2_path and output2_path must be provided for paired-end filtering"
+            ));
+        }
+        _ => {}
+    }
+    filter::run(&config)
+}
+
+#[pyfunction]
+#[pyo3(signature = (input_path, output_path, kmer_length=DEFAULT_KMER_LENGTH, window_size=DEFAULT_WINDOW_SIZE, threads=8, quiet=true, entropy_threshold=0.0), name = "index_build")]
+/// Build a minimizer index from the specified input FASTA/FASTQ file and write to the specified output path. See `IndexConfig` for details on each parameter.
+/// This function is a thin wrapper around `IndexConfig` that allows it to be called directly from Python with keyword arguments. Try `help(IndexConfig)` in Python for detailed parameter descriptions.
+fn py_index_build(
+    input_path: PathBuf,
+    output_path: PathBuf,
+    kmer_length: u8,
+    window_size: u8,
+    threads: u16,
+    quiet: bool,
+    entropy_threshold: f32,
+) -> Result<()> {
+    let config = IndexConfig {
+        input_path,
+        kmer_length,
+        window_size,
+        output_path: Some(output_path),
+        threads,
+        quiet,
+        entropy_threshold,
+    };
+    config.validate()?;
+    index::build(&config)
+}
+
 /// BuildHasher using rapidhash with fixed seed for fast init
 #[derive(Clone, Default)]
 pub struct FixedRapidHasher;
@@ -44,11 +152,13 @@ impl BuildHasher for FixedRapidHasher {
 pub type RapidHashSet<T> = HashSet<T, FixedRapidHasher>;
 
 /// Zero-cost (hopefully?) abstraction over u64 and u128 minimizer sets
+#[pyclass]
 pub enum MinimizerSet {
     U64(RapidHashSet<u64>),
     U128(RapidHashSet<u128>),
 }
 
+#[pymethods]
 impl MinimizerSet {
     pub fn len(&self) -> usize {
         match self {
@@ -60,7 +170,8 @@ impl MinimizerSet {
     pub fn is_u64(&self) -> bool {
         matches!(self, MinimizerSet::U64(_))
     }
-
+}
+impl MinimizerSet {
     /// Extend with another MinimizerSet (union operation)
     pub fn extend(&mut self, other: Self) {
         match (self, other) {
@@ -135,23 +246,24 @@ impl MinimizerVec {
     }
 }
 
-pub struct FilterConfig<'a> {
+#[pyclass(get_all, set_all)]
+pub struct FilterConfig {
     /// Minimizer index file path
-    pub minimizers_path: &'a Path,
+    pub minimizers_path: PathBuf,
 
     /// Path to input fastx file (or - for stdin)
-    pub input_path: &'a str,
+    pub input_path: String,
 
     /// Path to optional second paired fastx file (or - for interleaved stdin)
-    pub input2_path: Option<&'a str>,
+    pub input2_path: Option<String>,
 
     /// Path to output fastx file (None for stdout; detects .gz and .zst)
-    pub output_path: Option<&'a Path>,
+    pub output_path: Option<PathBuf>,
 
     /// Path to optional second output fastx file for paired reads (detects .gz and .zst)
-    pub output2_path: Option<&'a str>,
+    pub output2_path: Option<String>,
 
-    /// Absolute threshold for filtering sequences
+    /// Absolute threshold for filtering sequences (1-inf)
     pub abs_threshold: usize,
 
     /// Relative threshold for filtering sequences (0.0-1.0)
@@ -161,7 +273,7 @@ pub struct FilterConfig<'a> {
     pub prefix_length: usize,
 
     /// Path to JSON summary file
-    pub summary_path: Option<&'a PathBuf>,
+    pub summary_path: Option<PathBuf>,
 
     /// Deplete mode (remove sequences WITH matches, original deacon behavior)
     pub deplete: bool,
@@ -191,11 +303,11 @@ pub struct FilterConfig<'a> {
     pub quiet: bool,
 }
 
-impl<'a> FilterConfig<'a> {
-    pub fn new(minimizers_path: &'a Path) -> Self {
+impl FilterConfig {
+    pub fn new(minimizers_path: PathBuf) -> Self {
         Self {
             minimizers_path,
-            input_path: "-",
+            input_path: "-".to_string(),
             input2_path: None,
             output_path: None,
             output2_path: None,
@@ -215,23 +327,23 @@ impl<'a> FilterConfig<'a> {
         }
     }
 
-    pub fn with_input(mut self, input_path: &'a str) -> Self {
-        self.input_path = input_path;
+    pub fn with_input(mut self, input_path: &str) -> Self {
+        self.input_path = input_path.to_string();
         self
     }
 
-    pub fn with_input2(mut self, input2_path: &'a str) -> Self {
-        self.input2_path = Some(input2_path);
+    pub fn with_input2(mut self, input2_path: &str) -> Self {
+        self.input2_path = Some(input2_path.to_string());
         self
     }
 
-    pub fn with_output(mut self, output_path: &'a Path) -> Self {
-        self.output_path = Some(output_path);
+    pub fn with_output(mut self, output_path: &Path) -> Self {
+        self.output_path = Some(output_path.to_path_buf());
         self
     }
 
-    pub fn with_output2(mut self, output2_path: &'a str) -> Self {
-        self.output2_path = Some(output2_path);
+    pub fn with_output2(mut self, output2_path: &str) -> Self {
+        self.output2_path = Some(output2_path.to_string());
         self
     }
 
@@ -250,7 +362,7 @@ impl<'a> FilterConfig<'a> {
         self
     }
 
-    pub fn with_summary(mut self, summary_path: &'a PathBuf) -> Self {
+    pub fn with_summary(mut self, summary_path: PathBuf) -> Self {
         self.summary_path = Some(summary_path);
         self
     }
@@ -296,11 +408,12 @@ impl<'a> FilterConfig<'a> {
     }
 
     /// Filter with this configuration
-    pub fn execute(&self) -> Result<()> {
+    pub fn execute(&self) -> Result<FilterSummary> {
         filter::run(self)
     }
 }
 
+#[pyclass(get_all, set_all)]
 pub struct IndexConfig {
     /// Path to input fastx file
     pub input_path: PathBuf,
@@ -325,7 +438,7 @@ pub struct IndexConfig {
 }
 
 impl IndexConfig {
-    /// Create a new index configuration with the specified input path
+    /// Create a new index configuration with the specified input path and sensible defaults
     pub fn new(input_path: PathBuf) -> Self {
         Self {
             input_path: input_path,
@@ -354,6 +467,11 @@ impl IndexConfig {
         }
 
         Ok(())
+    }
+
+    /// Execute index build with this configuration
+    pub fn execute(&self) -> Result<()> {
+        index::build(self)
     }
 
     /// Set k-mer length
@@ -390,10 +508,5 @@ impl IndexConfig {
     pub fn with_entropy_threshold(mut self, threshold: f32) -> Self {
         self.entropy_threshold = threshold;
         self
-    }
-
-    /// Execute index build with this configuration
-    pub fn execute(&self) -> Result<()> {
-        index::build(self)
     }
 }

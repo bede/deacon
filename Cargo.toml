@@ -14,6 +14,7 @@ exclude = ["bench/*", "data/*"]
 [lib]
 name = "deacon"
 path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
@@ -41,6 +42,7 @@ zstd = { version = "0.13", optional = true }
 gzp = { version = "2.0", default-features = false, features = ["deflate_rust"], optional = true }
 minreq = { version = "2", features = ["https-rustls-probe"], optional = true }
 ensure_simd = "0.1.0"
+pyo3 = { version = "0.25.0", features = ["extension-module", "anyhow"] }
 
 [lints.clippy]
 too_many_arguments = "allow"
