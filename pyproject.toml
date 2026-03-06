@@ -6,7 +6,6 @@ build-backend = "maturin"
 name = "deacon"
 requires-python = " >=3.8,<3.13"
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
@@ -17,7 +16,6 @@ classifiers = [
 description = "Accelerated DNA sequence search and [host] depletion using minimizers"
 readme = "README-python.md"
 license = "MIT"
-# license-files = "LICENSE"
 dynamic = ["version"]
 authors = [
     { name = "Bede Constantinides", email = "b@bede.im" },
