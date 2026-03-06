@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(feature = "fetch")]
@@ -100,21 +100,32 @@ pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, u
     Ok((header, count))
 }
 
-static INDEX: OnceLock<(PathBuf, crate::MinimizerSet, IndexHeader)> = OnceLock::new();
+static INDEX: Mutex<Option<(PathBuf, crate::MinimizerSet, IndexHeader)>> = Mutex::new(None);
 
+/// Load minimizers from an index file, with caching to avoid repeated loads of the same file. If a different file is requested, the cache will be updated.
 pub fn load_minimizers_cached(
     path: &PathBuf,
 ) -> Result<(&'static crate::MinimizerSet, &'static IndexHeader)> {
-    let (p, minimizers, header) = INDEX.get_or_init(|| {
-        let (m, h) = load_minimizers(path.to_path_buf()).unwrap();
-        (path.to_owned(), m, h)
-    });
-    assert_eq!(
-        p, path,
-        "Currently, the server can only have one index loaded."
-    );
+    let mut index_guard = INDEX.lock();
+    // Index has not been cached yet
+    if index_guard.is_none() {
+        let (minimizers, header) = load_minimizers(path.to_path_buf())?;
+        *index_guard = Some((path.to_owned(), minimizers, header));
+    }
 
-    Ok((minimizers, header))
+    let cached_path = index_guard.as_ref().unwrap().0.clone();
+    // Index has been cached, but it's a mismatch with the request
+    if cached_path != *path {
+        // Different path for the index, so update
+        let (minimizers, header) = load_minimizers(path.to_path_buf())?;
+        *index_guard = Some((path.to_owned(), minimizers, header));
+    }
+
+    // Return the cached index
+    let (_, minimizers, header) = index_guard.as_ref().unwrap();
+    let minimizers_ref: &'static crate::MinimizerSet = unsafe { std::mem::transmute(minimizers) };
+    let header_ref: &'static IndexHeader = unsafe { std::mem::transmute(header) };
+    return Ok((minimizers_ref, header_ref));
 }
 
 /// Load minimizers from an index file
@@ -248,7 +259,7 @@ pub fn dump_minimizers(
 
 /// Dump indexed minimizers to FASTA
 #[pyfunction]
-#[pyo3(signature = (index_path, output_path=None), name = "index_dump")]
+#[pyo3(signature = (index_path, output_path), name = "index_dump")]
 pub fn dump(index_path: PathBuf, output_path: Option<PathBuf>) -> Result<()> {
     // Load the index
     let (minimizers, header) =
@@ -393,8 +404,6 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
 }
 
 /// Build an index of minimizers from a fastx file
-#[pyfunction]
-#[pyo3(name = "index_build")]
 pub fn build(config: &IndexConfig) -> Result<()> {
     let start_time = Instant::now();
     let path = &config.input_path;
@@ -712,14 +721,14 @@ fn stream_diff_fastx(
 
 /// Compute the set difference between two minimizer indexes (A - B)
 #[pyfunction]
-#[pyo3(signature = (first, second, kmer_length=None, window_size=None, threads=0, output=None), name = "index_diff")]
+#[pyo3(signature = (first, second, output, kmer_length=None, window_size=None, threads=0), name = "index_diff")]
 pub fn diff(
     first: PathBuf,
     second: PathBuf,
+    output: Option<PathBuf>,
     kmer_length: Option<u8>,
     window_size: Option<u8>,
     threads: u16,
-    output: Option<PathBuf>,
 ) -> Result<()> {
     let start_time = Instant::now();
 
@@ -844,7 +853,7 @@ pub fn info(index_path: PathBuf) -> Result<()> {
 
 /// Combine minimizer indexes (set union)
 #[pyfunction]
-#[pyo3(signature = (inputs, output=None), name = "index_union")]
+#[pyo3(signature = (inputs, output), name = "index_union")]
 pub fn union(inputs: Vec<PathBuf>, output: Option<PathBuf>) -> Result<()> {
     let start_time = Instant::now();
     // Check input files
@@ -923,7 +932,7 @@ pub fn union(inputs: Vec<PathBuf>, output: Option<PathBuf>) -> Result<()> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (inputs, output=None), name = "index_intersect")]
+#[pyo3(signature = (inputs, output), name = "index_intersect")]
 pub fn intersect(inputs: Vec<PathBuf>, output: Option<PathBuf>) -> Result<()> {
     let start_time = Instant::now();
     // Check inputs

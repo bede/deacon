@@ -39,7 +39,7 @@ fn deacon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<IndexConfig>()?;
 
     m.add_function(wrap_pyfunction!(py_filter, m)?)?;
-    m.add_function(wrap_pyfunction!(index_build, m)?)?;
+    m.add_function(wrap_pyfunction!(py_index_build, m)?)?;
     m.add_function(wrap_pyfunction!(index_diff, m)?)?;
     m.add_function(wrap_pyfunction!(index_dump, m)?)?;
     m.add_function(wrap_pyfunction!(index_info, m)?)?;
@@ -51,7 +51,7 @@ fn deacon(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (minimizers_path, input_path, output_path, input2_path=None, output2_path=None, abs_threshold=2, rel_threshold=0.01, prefix_length=0, summary_path=None, deplete=false, rename=false, rename_random=false, output_fasta=false, threads=0, compression_level=2, compression_threads=0, debug=false, quiet=true), name="filter")]
+#[pyo3(signature = (minimizers_path, input_path, output_path, input2_path=None, output2_path=None, abs_threshold=2, rel_threshold=0.01, prefix_length=0, summary_path=None, deplete=false, rename=false, rename_random=false, output_fasta=false, threads=8, compression_level=2, compression_threads=0, debug=false, quiet=true), name="filter")]
 #[allow(clippy::too_many_arguments)]
 /// Run the deacon filter with the specified configuration parameters. See `FilterConfig` for details on each parameter.
 /// This function is a thin wrapper around `FilterConfig` that allows it to be called directly from Python with keyword arguments.
@@ -99,6 +99,32 @@ fn py_filter(
         quiet,
     };
     filter::run(&config)
+}
+
+#[pyfunction]
+#[pyo3(signature = (input_path, output_path, kmer_length=DEFAULT_KMER_LENGTH, window_size=DEFAULT_WINDOW_SIZE, threads=8, quiet=true, entropy_threshold=0.0), name = "index_build")]
+/// Build a minimizer index from the specified input FASTA/FASTQ file and write to the specified output path. See `IndexConfig` for details on each parameter.
+/// This function is a thin wrapper around `IndexConfig` that allows it to be called directly from Python with keyword arguments. Try `help(IndexConfig)` in Python for detailed parameter descriptions.
+fn py_index_build(
+    input_path: PathBuf,
+    output_path: PathBuf,
+    kmer_length: u8,
+    window_size: u8,
+    threads: u16,
+    quiet: bool,
+    entropy_threshold: f32,
+) -> Result<()> {
+    let config = IndexConfig {
+        input_path,
+        kmer_length,
+        window_size,
+        output_path: Some(output_path),
+        threads,
+        quiet,
+        entropy_threshold,
+    };
+    config.validate()?;
+    index::build(&config)
 }
 
 /// BuildHasher using rapidhash with fixed seed for fast init
@@ -402,23 +428,20 @@ pub struct IndexConfig {
     pub entropy_threshold: f32,
 }
 
-#[pymethods]
 impl IndexConfig {
-    #[new]
-    #[pyo3(signature = (input_path, output_path, kmer_length=DEFAULT_KMER_LENGTH, window_size=DEFAULT_WINDOW_SIZE, threads=8, quiet=false, entropy_threshold=0.0))]
     /// Create a new index configuration with the specified input path and sensible defaults
-    pub fn py_new(input_path: PathBuf, output_path: PathBuf,kmer_length: u8, window_size: u8, threads: u16, quiet: bool, entropy_threshold: f32) -> Self {
+    pub fn new(input_path: PathBuf) -> Self {
         Self {
-            input_path,
-            kmer_length,
-            window_size,
-            output_path: Some(output_path),
-            threads,
-            quiet,
-            entropy_threshold,
+            input_path: input_path,
+            kmer_length: DEFAULT_KMER_LENGTH,
+            window_size: DEFAULT_WINDOW_SIZE,
+            output_path: None,
+            threads: 8,
+            quiet: false,
+            entropy_threshold: 0.0,
         }
     }
-
+    
     /// Validate k-mer and window size constraints
     pub fn validate(&self) -> Result<()> {
         let k = self.kmer_length as usize;
@@ -440,20 +463,6 @@ impl IndexConfig {
     /// Execute index build with this configuration
     pub fn execute(&self) -> Result<()> {
         index::build(self)
-    }
-}
-impl IndexConfig {
-    /// Create a new index configuration with the specified input path and sensible defaults
-    pub fn new(input_path: PathBuf) -> Self {
-        Self {
-            input_path: input_path,
-            kmer_length: DEFAULT_KMER_LENGTH,
-            window_size: DEFAULT_WINDOW_SIZE,
-            output_path: None,
-            threads: 8,
-            quiet: false,
-            entropy_threshold: 0.0,
-        }
     }
 
     /// Set k-mer length

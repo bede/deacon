@@ -400,10 +400,10 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 index_diff(
                     first.to_path_buf(),
                     second.to_path_buf(),
+                    output.clone(),
                     *kmer_length,
                     *window_size,
                     *threads,
-                    output.clone(),
                 )
                 .context("Failed to run index diff command")?;
             }

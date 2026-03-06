@@ -4,13 +4,13 @@
 [![Conda downloads](https://img.shields.io/conda/dn/bioconda/deacon.svg?style=flat-square&label=conda%20downloads&color=blue)](https://anaconda.org/bioconda/deacon)
 [![biorXiv preprint](https://img.shields.io/badge/biorXiv-10.1101/2025.06.09.658732-red?&style=flat-square)](https://doi.org/10.1101/2025.06.09.658732)
 
-<div align="center"><img src="deacon.png" width="180" alt="Logo"></div>
+<div align="center"><img src="https://github.com/bede/deacon/blob/main/deacon.png?raw=true" width="180" alt="Logo"></div>
 
 # Deacon
 
 Deacon filters DNA sequences in FASTA/Q files and streams using SIMD-accelerated minimizer comparison with query sequence(s), emitting either matching sequences (**search mode**), or sequences without matches (**deplete mode**). Sequences match when they share enough distinct minimizers with the indexed query to exceed chosen absolute and relative thresholds. Query size has little impact on filtering speed, enabling ultrafast search and depletion with gene-, genome- and pangenome-scale queries using a laptop. Deacon filters uncompressed FASTA/Q at **gigabases per second** on recent AMD, Intel (`x86_64`), and Apple `arm64` systems. Built with panhuman host depletion in mind—yet broadly useful for searching large sequence collections—Deacon delivers [leading classification accuracy](https://doi.org/10.1101/2025.06.09.658732) for host depletion and unrivalled speed using 5GB of RAM.
 
-Default parameters are carefully chosen but easily changed. Classification sensitivity, specificity and memory requirements may be tuned by varying *k*-mer length (`-k`), window size (`-w`), absolute match threshold (`-a`) and relative match threshold (`-r`) . Minimizer `k` and `w` are chosen at query index time, while the match thresholds can be chosen at filter time. Matching sequences are those that share enough distinct minimizers with the indexed query to exceed *both* the absolute threshold (`-a`, default 2 shared minimizers) and the relative threshold (`-r`, default 0.01 [1%] shared minimizers). For paired sequences, hits in either mate counts towards a single match threshold for the pair. Deacon reports filtering performance during execution and optionally writes a JSON `--summary` upon completion. Sequences can optionally be renamed using `--rename` for privacy and smaller file sizes. Deacon fully supports stdin, stdout and natively handles gz, zst and xz compression formats, detected by file extension.
+Default parameters are carefully chosen but easily changed. Classification sensitivity, specificity and memory requirements may be tuned by varying *k*-mer length, window size, absolute match threshold and relative match threshold. Minimizer `k` and `w` are chosen at query index time, while the match thresholds can be chosen at filter time. Matching sequences are those that share enough distinct minimizers with the indexed query to exceed *both* the absolute threshold (default 2 shared minimizers) and the relative threshold (default 0.01 [1%] shared minimizers). For paired sequences, hits in either mate counts towards a single match threshold for the pair. Deacon reports filtering performance during execution and optionally writes a JSON upon completion. Sequences can optionally be renamed for privacy and smaller file sizes. Deacon natively handles gz, zst and xz compression formats, detected by file extension.
 
 Benchmarks for panhuman host depletion of complex microbial metagenomes are described in a [preprint](https://www.biorxiv.org/content/10.1101/2025.06.09.658732v1). Deacon with the `panhuman-1` (*k*=31, w=15) index exhibited the highest balanced accuracy for both long and short simulated reads. Deacon was less specific only than Hostile for short reads.
 
@@ -19,13 +19,13 @@ Benchmarks for panhuman host depletion of complex microbial metagenomes are desc
 - Depletion of human or other host genome sequences in FASTQ reads or streams.
 - Ultrafast binary classification of genes, genomes or pangenomes in terabase genome catalogues like [AllTheBacteria](https://allthebacteria.org/) without tedious pre-indexing.
 
+## Note
+For use as a standalone CLI tool, please refer to the non-python package https://github.com/bede/deacon
+
 ## Install
 ```bash
 pip install deacon
 ```
-
-## Note
-For use as a standalone CLI tool, please refer to the non-python package https://github.com/bede/deacon
 
 ## Quickstart
 
@@ -34,7 +34,7 @@ For use as a standalone CLI tool, please refer to the non-python package https:/
 ```python
 import deacon
 
-# Download validated 3GB human pangenome index (version 0.13.0 or later)
+# Download validated 3GB human pangenome index to the current directory
 deacon.index_fetch()
 
 # Deplete long reads
@@ -48,7 +48,9 @@ deacon.filter("panhuman-1.k31w15.idx", "reads.r1.fq.gz", "filt.r1.fq.gz", input2
 
 ```python
 import deacon
-deacon.index_build(deacon.IndexConfig("amr-genes.fa", "amr-genes.idx"))
+
+deacon.index_build("amr-genes.fa", "amr-genes.idx")
+
 deacon.filter("amt-genes.idx", "AllTheBacteria.fa.zst", "hits.fa")
 ```
 
@@ -56,7 +58,7 @@ deacon.filter("amt-genes.idx", "AllTheBacteria.fa.zst", "hits.fa")
 
 ## Prebuilt indexes
 
-Prebuilt pangenome indexes are provided for human and mouse host classification and depletion. These can be downloaded using the links below, or with `deacon.index_fetch()`.
+Prebuilt pangenome indexes are provided for human and mouse host classification and depletion. These can be downloaded using the links below, or with `deacon.index_fetch(index_name="panhuman-1")`.
 
 |                          Name & URL                          |                         Composition                          | Minimizers  | Subtracted minimizers | Size  | Date    |
 | :----------------------------------------------------------: | :----------------------------------------------------------: | ----------- | --------------------- | ----- | ------- |
@@ -73,91 +75,76 @@ Prebuilt pangenome indexes are provided for human and mouse host classification 
 
 ## Usage
 
-### Filtering
-#TODO: finsh this
-The main command `deacon filter` accepts an index path followed by up to two FASTA/FASTQ file paths, depending on whether input sequences originate from stdin, a single file, or paired input files. Indexes are built with `deacon index build`.  Paired queries are supported as either separate files or interleaved stdin, and written interleaved to either stdout or file, or else to separate paired output files. For paired reads, distinct minimizer hits originating from either mate are counted. By default, input sequences must meet both an absolute threshold of 2 minimizer hits (`-a 2`) and a relative threshold of 1% of minimizers (`-r 0.01`) to pass the filter. Filtering can be inverted for e.g. host depletion using the `--deplete` (`-d`) flag. Gzip, Zstandard, and xz compression formats are detected automatically by file extension.
-
 #### Examples
 
-```bash
+```python
+import deacon
+
 # Keep only sequences matching a collection of genes
-deacon index build genes.fa > genes.idx
-deacon filter genes.idx sequences.fa.gz -o matches.fa.gz
+deacon.index_build("genes.fa", "genes.idx")
+deacon.filter("genes.idx", "sequences.fa.gz", "matches.fa.gz")
 
 # Host depletion using the panhuman-1 index
-deacon filter -d panhuman-1.k31w15.idx reads.fq.gz -o filt.fq.gz
+deacon.filter("panhuman-1.k31w15.idx", "reads.fq.gz", "filt.fq.gz", deplete=True)
 
 # High sensitivity host depletion with absolute threshold of 1 and no relative threshold
-deacon filter -d -a 1 -r 0 panhuman-1.k31w15.idx reads.fq.gz -o filt.fq.gz
+deacon.filter("panhuman-1.k31w15.idx", "reads.fq.gz", "filt.fq.gz", deplete=True, abs_threshold=1, rel_threshold=0)
 
 # High specificity 10% relative match threshold
-deacon filter -d -r 0.1 panhuman-1.k31w15.idx reads.fq.gz > filt.fq.gz
-
-# Stdin and stdout
-zcat reads.fq.gz | deacon filter -d panhuman-1.k31w15.idx > filt.fq
-
-# True multithreaded gzip decompression with rapidgzip
-rapidgzip -dc reads.fq.gz | deacon filter -d panhuman-1.k31w15.idx > filt.fq
+deacon.filter("panhuman-1.k31w15.idx", "reads.fq.gz", "filt.fq.gz", deplete=True, rel_threshold=0.1)
 
 # Zstandard compression
-deacon filter -d panhuman-1.k31w15.idx reads.fq.zst -o filt.fq.zst
-
-# Paired reads
-deacon filter -d panhuman-1.k31w15.idx r1.fq.gz r2.fq.gz > filt12.fq
-deacon filter -d panhuman-1.k31w15.idx r1.fq.gz r2.fq.gz -o filt.r1.fq.gz -O filt.r2.fq.gz
-zcat r12.fq.gz | deacon filter -d panhuman-1.k31w15.idx - - > filt12.fq
+deacon.filter("panhuman-1.k31w15.idx", "reads.fq.zst", "filt.fq.zst", deplete=True)
 
 # Save summary JSON
-deacon filter -d panhuman-1.k31w15.idx reads.fq.gz -o filt.fq.gz -s summary.json
+summary = deacon.filter("panhuman-1.k31w15.idx", "reads.fq.gz", "filt.fq.gz", deplete=True, summary_path="summary.json")
+# `deacon.filter` also returns a summary object
+print(summary.seqs_in, summary.seqs_out)
 
 # Replace read headers with incrementing integers
-deacon filter -d -R panhuman-1.k31w15.idx reads.fq.gz > filt.fq
+deacon.filter("panhuman-1.k31w15.idx", "reads.fq.gz", "filt.fq", deplete=True, rename=True)
 
 # Only look for minimizer hits inside the first 1000bp per record
-deacon filter -d -p 1000 panhuman-1.k31w15.idx reads.fq.gz > filt.fq
+deacon.filter("panhuman-1.k31w15.idx", "reads.fq.gz", "filt.fq", deplete=True, prefix_length=1000)
 
 # Output FASTA regardless of input format (discards quality scores)
-deacon filter -d -f panhuman-1.k31w15.idx reads.fq.gz > filt.fa
+deacon.filter("panhuman-1.k31w15.idx", "reads.fq.gz", "filt.fa", deplete=True, output_fasta=True)
 
 # Debug mode: see sequences with minimizer hits in stderr
-deacon filter -d --debug panhuman-1.k31w15.idx reads.fq.gz > filt.fq
+deacon.filter("panhuman-1.k31w15.idx", "reads.fq.gz", "filt.fq.gz", deplete=True, debug=True)
 ```
 
 > [!NOTE]
 >
-> `deacon filter` uses 8 threads by default. Using more threads (e.g.  `--threads 16`) can accelerate filtering given sufficient resources, especially with uncompressed sequences whose processing is not rate limited by decompression. Since version `0.13.0`, Deacon writes gzipped output files (e.g `-o out.fastq.gz`) in parallel, providing particular practical benefit for gzipped paired reads. If output file(s) ending in `.gz` are detected, total `--threads` are allocated 1:1 to compression and filtering tasks respectively. Gzip compression thread allocation can be overriden with `--compression-threads`.
+> `deacon.filter()` uses 8 threads by default. Using more threads (e.g.  `deacon.filter(..., threads=16)`) can accelerate filtering given sufficient resources, especially with uncompressed sequences whose processing is not rate limited by decompression. Since version `0.13.0`, Deacon writes gzipped output files in parallel, providing particular practical benefit for gzipped paired reads. If output file(s) ending in `.gz` are detected, total `threads` are allocated 1:1 to compression and filtering tasks respectively. Gzip compression thread allocation can be overriden with the `compression-threads` kwarg.
 
 ### Indexing
 
-```bash
+```python
 # Index one FASTA/FASTQ file
-deacon index build genome.fa.gz > genome.idx
-
-# Index many FASTA/FASTQ files using stdin
-zcat *.fa.gz | deacon index build - > genomes.idx
+import deacon
+deacon.index_build("genome.fa.gz", "genome.idx")
 ```
 
-`deacon index build` accepts either a FASTA/FASTQ file or a stdin stream (`-`), enabling convenient indexing of compressed sequences in one or many files with a single step. Indexing a human genome takes a few seconds. Indexing uses 2-4x as much RAM as filtering. For indexing large collections approaching terabase scale—such as mammalian pangenomes—it may be practical to index genomes individually in parallel and later combine them using the `deacon index union` set operation, described below.
+`deacon.index_build()` accepts either a FASTA or a FASTQ file enabling convenient indexing of compressed sequences in one or many files with a single step. Indexing a human genome takes a few seconds. Indexing uses 2-4x as much RAM as filtering. For indexing large collections approaching terabase scale—such as mammalian pangenomes—it may be practical to index genomes individually in parallel and later combine them using the `deacon.index_union()` set operation, described below.
 
 #### Set operations
 
-A differentiating feature of Deacon is the ease of combining, subtracting and intersecting minimizer indexes. For example, `deacon index diff`can be used to subtract shared minimizers between target and host genomes when building custom indexes for host depletion.
+A differentiating feature of Deacon is the ease of combining, subtracting and intersecting minimizer indexes. For example, `deacon.index_diff()`can be used to subtract shared minimizers between target and host genomes when building custom indexes for host depletion.
 
-- Use `deacon index union 1.idx 2.idx 3.idx… > 1+2+3.idx` to succinctly combine two or more indexes.
-- Use `deacon index diff 1.idx 2.idx > 1-2.idx` to subtract minimizers in 2.idx from 1.idx. Useful for masking out shared minimizer content between e.g. target and host genomes.
-  - `deacon index diff` also supports subtracting minimizers from an index using a fastx file or stream directly, e.g. `deacon index diff 1.idx 2.fa.gz > 1-2.idx` or `zcat *.fa.gz | deacon index diff 1.idx - > 1-2.idx`. This enables diffing with larger-than-memory sequence collections if desired.
-
-- Use `deacon index intersect 1.idx 2.idx… > 1∩2.idx` to find the intersection of minimizers in two or more indexes.
+- Use `deacon.index_union(["1.idx", "2.idx", "3.idx"], "1+2+3.idx")` to succinctly combine two or more indexes.
+- Use `deacon.index_diff("1.idx", "2.idx", "1-2.idx")` to subtract minimizers in 2.idx from 1.idx. Useful for masking out shared minimizer content between e.g. target and host genomes.
+- Use `deacon.index_intersect(["1.idx", "2.idx"], "1∩2.idx")` to find the intersection of minimizers in two or more indexes.
 
 #### Inspecting indexes
 
-- Use `deacon index info 1.idx` to display index information including minimizer *k* and *w* parameters, number of minimizers, and index format version.
-- Use `deacon index dump 1.idx > 1.fa` to dump a minimizer index to FASTA.
+- Use `deacon.index_info("1.idx")` to display index information including minimizer *k* and *w* parameters, number of minimizers, and index format version.
+- Use `deacon.index_dump("1.idx", "1.fa")` to dump a minimizer index to FASTA.
 
 
 ## Filtering summary statistics
 
-Use `-s summary.json` to save detailed filtering statistics:
+Use the `--summary_path=summary.json` flag on `deacon.filter()` to save detailed filtering statistics:
 ```json
 {
   "version": "deacon 0.9.0",
