@@ -248,7 +248,7 @@ fn get_writer(
 }
 
 // JSON summary struct
-#[pyclass]
+#[pyclass(get_all, set_all)]
 #[derive(Serialize, Deserialize)]
 pub struct FilterSummary {
     version: String,
