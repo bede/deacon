@@ -8,13 +8,13 @@ use paraseq::Record;
 use paraseq::fastx::Reader;
 use paraseq::parallel::{PairedParallelProcessor, ParallelProcessor, ParallelReader};
 use parking_lot::Mutex;
+use pyo3::prelude::*;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::sync::Arc;
 use std::time::Instant;
-use pyo3::prelude::*;
 
 const OUTPUT_BUFFER_SIZE: usize = 8 * 1024 * 1024; // Opt: 8MB output buffer
 const DEFAULT_BUFFER_SIZE: usize = 64 * 1024;
@@ -1106,39 +1106,39 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
 
     let seqs_out = total_seqs - filtered_seqs;
     let summary = FilterSummary {
-            version: tool_version,
-            index: config.minimizers_path.to_string_lossy().to_string(),
-            input: config.input_path.to_string(),
-            input2: config.input2_path.clone().map(|s| s.to_string()),
-            output: config
-                .output_path
-                .clone()
-                .map_or("-".to_string(), |p| p.display().to_string()),
-            output2: config.output2_path.clone().map(|s| s.to_string()),
-            k: kmer_length,
-            w: window_size,
-            abs_threshold: config.abs_threshold,
-            rel_threshold: config.rel_threshold,
-            prefix_length: config.prefix_length,
-            deplete: config.deplete,
-            rename: config.rename,
-            rename_random: config.rename_random,
-            seqs_in: total_seqs as u64,
-            seqs_out: seqs_out as u64,
-            seqs_out_proportion: output_seq_proportion,
-            seqs_removed: filtered_seqs as u64,
-            seqs_removed_proportion: filtered_proportion,
-            bp_in: total_bp as u64,
-            bp_out: output_bp as u64,
-            bp_out_proportion: output_bp_proportion,
-            bp_removed: filtered_bp as u64,
-            bp_removed_proportion: filtered_bp_proportion,
-            time: total_time.as_secs_f64(),
-            seqs_per_second: seqs_per_sec as u64,
-            bp_per_second: bp_per_sec as u64,
-            seqs_per_second_total: seqs_per_sec_total as u64,
-            bp_per_second_total: bp_per_sec_total as u64,
-        };
+        version: tool_version,
+        index: config.minimizers_path.to_string_lossy().to_string(),
+        input: config.input_path.to_string(),
+        input2: config.input2_path.clone().map(|s| s.to_string()),
+        output: config
+            .output_path
+            .clone()
+            .map_or("-".to_string(), |p| p.display().to_string()),
+        output2: config.output2_path.clone().map(|s| s.to_string()),
+        k: kmer_length,
+        w: window_size,
+        abs_threshold: config.abs_threshold,
+        rel_threshold: config.rel_threshold,
+        prefix_length: config.prefix_length,
+        deplete: config.deplete,
+        rename: config.rename,
+        rename_random: config.rename_random,
+        seqs_in: total_seqs as u64,
+        seqs_out: seqs_out as u64,
+        seqs_out_proportion: output_seq_proportion,
+        seqs_removed: filtered_seqs as u64,
+        seqs_removed_proportion: filtered_proportion,
+        bp_in: total_bp as u64,
+        bp_out: output_bp as u64,
+        bp_out_proportion: output_bp_proportion,
+        bp_removed: filtered_bp as u64,
+        bp_removed_proportion: filtered_bp_proportion,
+        time: total_time.as_secs_f64(),
+        seqs_per_second: seqs_per_sec as u64,
+        bp_per_second: bp_per_sec as u64,
+        seqs_per_second_total: seqs_per_sec_total as u64,
+        bp_per_second_total: bp_per_sec_total as u64,
+    };
 
     // Build and write JSON summary if path provided
     if let Some(summary_file) = &config.summary_path {
