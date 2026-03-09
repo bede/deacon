@@ -45,6 +45,7 @@ fn deacon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(index_info, m)?)?;
     m.add_function(wrap_pyfunction!(index_intersect, m)?)?;
     m.add_function(wrap_pyfunction!(index_union, m)?)?;
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 
     #[cfg(feature = "fetch")]
     m.add_function(wrap_pyfunction!(index_fetch, m)?)?;
