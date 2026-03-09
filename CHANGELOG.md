@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Bindings for a python library. Covers most functionality such as filtering and index manipulation.
+
+### Changed
+- Variety of minor type changes to ensure compatability with PyO3. Notably `&Path` --> `&PathBuf`, and `&str` --> `String` in several places. This is due to sizes needing to be known at compile time for PyO3. 
+- Similarly removal of the lifetime for filepath pointers in `FilterConfig` was required due to PyO3 requirements.
+- Index cache is now mutable, allowing different indicies to be cached upon request rather than requiring process restart. Without this, the python library would have been limited to a single index per program.
+
+
 ## [0.14.0] - 2026-02-25
 
 ### Added

@@ -369,7 +369,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                     .context("Failed to run index build command")?;
             }
             IndexCommands::Info { index } => {
-                index_info(index).context("Failed to run index info command")?;
+                index_info(index.to_path_buf()).context("Failed to run index info command")?;
             }
             #[cfg(feature = "fetch")]
             IndexCommands::Fetch {
@@ -378,15 +378,15 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 window_size,
                 output,
             } => {
-                index_fetch(index_name, *kmer_length, *window_size, output.as_deref())
+                index_fetch(index_name, *kmer_length, *window_size, output.clone())
                     .context("Failed to run index fetch command")?;
             }
             IndexCommands::Union { inputs, output } => {
-                index_union(inputs, output.as_deref())
+                index_union(inputs.clone(), output.clone())
                     .context("Failed to run index union command")?;
             }
             IndexCommands::Intersect { inputs, output } => {
-                index_intersect(inputs, output.as_deref())
+                index_intersect(inputs.clone(), output.clone())
                     .context("Failed to run index intersect command")?;
             }
             IndexCommands::Diff {
@@ -398,17 +398,18 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 threads,
             } => {
                 index_diff(
-                    first,
-                    second,
+                    first.to_path_buf(),
+                    second.to_path_buf(),
+                    output.clone(),
                     *kmer_length,
                     *window_size,
                     *threads,
-                    output.as_deref(),
                 )
                 .context("Failed to run index diff command")?;
             }
             IndexCommands::Dump { index, output } => {
-                index_dump(index, output.as_deref()).context("Failed to run index dump command")?;
+                index_dump(index.clone(), output.clone())
+                    .context("Failed to run index dump command")?;
             }
         },
         Commands::Filter {
@@ -439,15 +440,15 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             }
 
             let config = FilterConfig {
-                minimizers_path: minimizers,
-                input_path: input,
-                input2_path: input2.as_deref(),
-                output_path: output.as_ref().map(|p| p.as_path()),
-                output2_path: output2.as_deref(),
+                minimizers_path: minimizers.to_path_buf(),
+                input_path: input.to_string(),
+                input2_path: input2.clone(),
+                output_path: output.clone(),
+                output2_path: output2.clone(),
                 abs_threshold: *abs_threshold as usize,
                 rel_threshold: *rel_threshold,
                 prefix_length: *prefix_length,
-                summary_path: summary.as_ref(),
+                summary_path: summary.clone(),
                 deplete: *deplete,
                 rename: *rename,
                 rename_random: *rename_random,

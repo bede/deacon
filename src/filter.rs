@@ -8,6 +8,7 @@ use paraseq::Record;
 use paraseq::fastx::Reader;
 use paraseq::parallel::{PairedParallelProcessor, ParallelProcessor, ParallelReader};
 use parking_lot::Mutex;
+use pyo3::prelude::*;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
@@ -53,8 +54,8 @@ fn check_input_paths(config: &FilterConfig) -> Result<()> {
     }
 
     if config.input_path != "-"
-        && !is_special_input_path(config.input_path)
-        && !std::path::Path::new(config.input_path).exists()
+        && !is_special_input_path(&config.input_path)
+        && !std::path::Path::new(&config.input_path).exists()
     {
         return Err(anyhow::anyhow!(
             "Input file does not exist: {}",
@@ -62,10 +63,10 @@ fn check_input_paths(config: &FilterConfig) -> Result<()> {
         ));
     }
 
-    if let Some(input2_path) = config.input2_path {
+    if let Some(input2_path) = &config.input2_path {
         if input2_path != "-"
-            && !is_special_input_path(input2_path)
-            && !std::path::Path::new(input2_path).exists()
+            && !is_special_input_path(&input2_path)
+            && !std::path::Path::new(&input2_path).exists()
         {
             return Err(anyhow::anyhow!(
                 "Second input file does not exist: {}",
@@ -167,7 +168,7 @@ fn validate_compression_level(level: u8, min: u8, max: u8, format: &str) -> Resu
 }
 
 /// Check if a path requires gzip compression
-fn is_compressed_output(path: Option<&std::path::Path>) -> bool {
+fn is_compressed_output(path: Option<std::path::PathBuf>) -> bool {
     path.map(|p| p.to_string_lossy().ends_with(".gz"))
         .unwrap_or(false)
 }
@@ -175,11 +176,11 @@ fn is_compressed_output(path: Option<&std::path::Path>) -> bool {
 /// Number of compressed outputs from config (0, 1, or 2)
 fn count_compressed_outputs(config: &FilterConfig) -> u8 {
     let mut count = 0;
-    if is_compressed_output(config.output_path) {
+    if is_compressed_output(config.output_path.clone()) {
         count += 1;
     }
-    if let Some(output2) = config.output2_path {
-        if is_compressed_output(Some(std::path::Path::new(output2))) {
+    if let Some(output2) = &config.output2_path {
+        if is_compressed_output(Some(std::path::Path::new(&output2).to_path_buf())) {
             count += 1;
         }
     }
@@ -247,6 +248,7 @@ fn get_writer(
 }
 
 // JSON summary struct
+#[pyclass(get_all, set_all)]
 #[derive(Serialize, Deserialize)]
 pub struct FilterSummary {
     version: String,
@@ -311,14 +313,15 @@ struct FilterProcessor {
     filtering_start_time: Instant,
 }
 
+#[pyclass]
 #[derive(Clone, Default, Debug)]
 pub(crate) struct ProcessingStats {
     pub total_seqs: u64,
-    filtered_seqs: u64,
+    pub filtered_seqs: u64,
     pub total_bp: u64,
-    output_bp: u64,
-    filtered_bp: u64,
-    output_seq_counter: u64,
+    pub output_bp: u64,
+    pub filtered_bp: u64,
+    pub output_seq_counter: u64,
     pub last_reported: u64,
 }
 
@@ -781,7 +784,7 @@ impl<Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor {
     }
 }
 
-pub fn run(config: &FilterConfig) -> Result<()> {
+pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
     let tool_version = format!("deacon {}", version);
@@ -832,7 +835,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     let mut options = Vec::<String>::new();
     let paired_stdin = config.input_path == "-"
         && config.input2_path.is_some()
-        && config.input2_path.unwrap() == "-";
+        && config.input2_path.clone().unwrap() == "-";
     if paired_stdin {
         input_type.push_str("interleaved");
     } else if config.input2_path.is_some() {
@@ -881,7 +884,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     check_input_paths(config)?;
 
     // Load minimizers and parse header
-    let (minimizers, header) = load_minimizers_cached(&config.minimizers_path)?;
+    let (minimizers, header) = load_minimizers_cached(&config.minimizers_path.to_path_buf())?;
 
     let kmer_length = header.kmer_length();
     let window_size = header.window_size();
@@ -896,13 +899,15 @@ pub fn run(config: &FilterConfig) -> Result<()> {
 
     // Create appropriate writer(s) based on output path(s)
     let writer = get_writer(
-        config.output_path,
+        config.output_path.as_deref(),
         config.compression_level,
         compression_threads_per_output,
     )?;
-    let writer2 = if let (Some(output2), Some(_)) = (config.output2_path, config.input2_path) {
+    let writer2 = if let (Some(output2), Some(_)) =
+        (config.output2_path.clone(), config.input2_path.clone())
+    {
         Some(get_writer(
-            Some(std::path::Path::new(output2)),
+            Some(std::path::Path::new(&output2)),
             config.compression_level,
             compression_threads_per_output,
         )?)
@@ -949,10 +954,11 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     );
 
     // Check for empty files via metadata (fast path for uncompressed files <5 bytes)
-    let input1_empty = is_empty_file(config.input_path)?;
+    let input1_empty = is_empty_file(&config.input_path)?;
     let input2_empty = config
         .input2_path
-        .map(|p| is_empty_file(p))
+        .clone()
+        .map(|p| is_empty_file(&p))
         .transpose()?
         .unwrap_or(false);
 
@@ -963,7 +969,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         // Interleaved paired stdin - use interleaved processor
         let reader = create_paraseq_reader(Some("-"))?;
         reader.process_parallel_interleaved(&mut processor, num_threads)?;
-    } else if let Some(input2_path) = config.input2_path {
+    } else if let Some(input2_path) = &config.input2_path {
         // Paired files - both must be empty or both non-empty
         if input1_empty && input2_empty {
             if !quiet {
@@ -975,8 +981,8 @@ pub fn run(config: &FilterConfig) -> Result<()> {
             ));
         } else {
             // Try to create readers, catching empty compressed files
-            let r1_result = create_paraseq_reader(Some(config.input_path));
-            let r2_result = create_paraseq_reader(Some(input2_path));
+            let r1_result = create_paraseq_reader(Some(&config.input_path));
+            let r2_result = create_paraseq_reader(Some(&input2_path));
 
             match (r1_result, r2_result) {
                 (Ok(r1), Ok(r2)) => {
@@ -1009,7 +1015,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
             }
         } else {
             // Try to create reader, catching empty compressed files
-            match create_paraseq_reader(Some(config.input_path)) {
+            match create_paraseq_reader(Some(&config.input_path)) {
                 Ok(reader) => {
                     reader.process_parallel(&mut processor, num_threads)?;
                 }
@@ -1098,44 +1104,44 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         );
     }
 
+    let seqs_out = total_seqs - filtered_seqs;
+    let summary = FilterSummary {
+        version: tool_version,
+        index: config.minimizers_path.to_string_lossy().to_string(),
+        input: config.input_path.to_string(),
+        input2: config.input2_path.clone().map(|s| s.to_string()),
+        output: config
+            .output_path
+            .clone()
+            .map_or("-".to_string(), |p| p.display().to_string()),
+        output2: config.output2_path.clone().map(|s| s.to_string()),
+        k: kmer_length,
+        w: window_size,
+        abs_threshold: config.abs_threshold,
+        rel_threshold: config.rel_threshold,
+        prefix_length: config.prefix_length,
+        deplete: config.deplete,
+        rename: config.rename,
+        rename_random: config.rename_random,
+        seqs_in: total_seqs as u64,
+        seqs_out: seqs_out as u64,
+        seqs_out_proportion: output_seq_proportion,
+        seqs_removed: filtered_seqs as u64,
+        seqs_removed_proportion: filtered_proportion,
+        bp_in: total_bp as u64,
+        bp_out: output_bp as u64,
+        bp_out_proportion: output_bp_proportion,
+        bp_removed: filtered_bp as u64,
+        bp_removed_proportion: filtered_bp_proportion,
+        time: total_time.as_secs_f64(),
+        seqs_per_second: seqs_per_sec as u64,
+        bp_per_second: bp_per_sec as u64,
+        seqs_per_second_total: seqs_per_sec_total as u64,
+        bp_per_second_total: bp_per_sec_total as u64,
+    };
+
     // Build and write JSON summary if path provided
-    if let Some(summary_file) = config.summary_path {
-        let seqs_out = total_seqs - filtered_seqs;
-
-        let summary = FilterSummary {
-            version: tool_version,
-            index: config.minimizers_path.to_string_lossy().to_string(),
-            input: config.input_path.to_string(),
-            input2: config.input2_path.map(|s| s.to_string()),
-            output: config
-                .output_path
-                .map_or("-".to_string(), |p| p.display().to_string()),
-            output2: config.output2_path.map(|s| s.to_string()),
-            k: kmer_length,
-            w: window_size,
-            abs_threshold: config.abs_threshold,
-            rel_threshold: config.rel_threshold,
-            prefix_length: config.prefix_length,
-            deplete: config.deplete,
-            rename: config.rename,
-            rename_random: config.rename_random,
-            seqs_in: total_seqs as u64,
-            seqs_out: seqs_out as u64,
-            seqs_out_proportion: output_seq_proportion,
-            seqs_removed: filtered_seqs as u64,
-            seqs_removed_proportion: filtered_proportion,
-            bp_in: total_bp as u64,
-            bp_out: output_bp as u64,
-            bp_out_proportion: output_bp_proportion,
-            bp_removed: filtered_bp as u64,
-            bp_removed_proportion: filtered_bp_proportion,
-            time: total_time.as_secs_f64(),
-            seqs_per_second: seqs_per_sec as u64,
-            bp_per_second: bp_per_sec as u64,
-            seqs_per_second_total: seqs_per_sec_total as u64,
-            bp_per_second_total: bp_per_sec_total as u64,
-        };
-
+    if let Some(summary_file) = &config.summary_path {
         let file = File::create(summary_file)
             .context(format!("Failed to create summary: {:?}", summary_file))?;
         let writer = BufWriter::new(file);
@@ -1147,7 +1153,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok(summary)
 }
 
 #[cfg(test)]
