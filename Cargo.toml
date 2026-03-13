@@ -1,6 +1,6 @@
 [package]
 name = "deacon"
-version = "0.14.0"
+version = "0.15.0"
 description = "Accelerated DNA sequence search and [host] depletion using minimizers"
 authors = ["Bede Constantinides <b@bede.im>"]
 edition = "2024"

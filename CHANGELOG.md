@@ -7,11 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-03-13
+
+### Fixed
+
+- Fixed `--rename` counter across read batch boundaries
+- Fixed paired read renaming.
+
 ## [0.14.0] - 2026-02-25
 
 ### Added
 
-- `deacon filter` accepts `-f`/`--fasta` to force FASTA output regardless of input format.
+- `deacon filter` accepts `--fasta` (`-f`) to force FASTA-formatted output even if input is FASTQ. By default `deacon filter` outputs data in the same format as the input.
+- `deacon filter` accepts named pipes / process substitution as input files.
 
 ## [0.13.2] - 2025-11-21
 
