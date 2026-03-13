@@ -2039,3 +2039,426 @@ fn test_filter_with_named_pipe() {
         "Output should contain the sequence"
     );
 }
+
+#[test]
+fn test_rename_counter_continuity_across_batches() {
+    // Verify that rename counter does not reset between batches (749d1ad fix).
+    // Create many records to force multiple internal batches.
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output_path = temp_dir.path().join("filtered_renamed.fastq");
+
+    create_test_fasta(&fasta_path);
+
+    // Generate 500 records to ensure multiple batches are processed
+    let seq = "ACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA";
+    let qual = "~".repeat(seq.len());
+    let mut fastq_content = String::new();
+    for i in 0..500 {
+        fastq_content.push_str(&format!("@seq{}\n{}\n+\n{}\n", i, seq, qual));
+    }
+    fs::write(&fastq_path, fastq_content).unwrap();
+
+    build_index(&fasta_path, &bin_path);
+
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter")
+        .arg("--rename")
+        .arg("-a")
+        .arg("1")
+        .arg("-r")
+        .arg("0.0")
+        .arg("-t")
+        .arg("2")
+        .arg(&bin_path)
+        .arg(&fastq_path)
+        .arg("--output")
+        .arg(&output_path)
+        .assert()
+        .success();
+
+    let output_content = fs::read_to_string(&output_path).unwrap();
+    let mut seen_ids: Vec<u64> = Vec::new();
+    for line in output_content.lines() {
+        if let Some(id_str) = line.strip_prefix('@') {
+            if let Ok(id) = id_str.parse::<u64>() {
+                seen_ids.push(id);
+            }
+        }
+    }
+
+    assert!(!seen_ids.is_empty(), "Expected renamed sequences in output");
+
+    // Check all IDs are unique (no counter reset between batches)
+    let mut sorted = seen_ids.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(
+        seen_ids.len(),
+        sorted.len(),
+        "Duplicate rename IDs found — counter likely reset between batches"
+    );
+
+    // Check IDs are sequential starting from 1
+    for (i, &id) in sorted.iter().enumerate() {
+        assert_eq!(
+            id,
+            (i + 1) as u64,
+            "Expected sequential ID {} but got {}",
+            i + 1,
+            id
+        );
+    }
+}
+
+mod output2_rename_tests {
+    use super::*;
+
+    #[cfg(feature = "compression")]
+    #[test]
+    fn test_filter_paired_rename_with_output2() {
+        // Verify /1 and /2 suffixes work correctly with separate R1/R2 output files
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+
+        let temp_dir = tempdir().unwrap();
+        let fasta_path = temp_dir.path().join("ref.fasta");
+        let fastq_path1 = temp_dir.path().join("reads_1.fastq");
+        let fastq_path2 = temp_dir.path().join("reads_2.fastq");
+        let bin_path = temp_dir.path().join("ref.bin");
+        let output_path1 = temp_dir.path().join("filtered_1.fastq.gz");
+        let output_path2 = temp_dir.path().join("filtered_2.fastq.gz");
+
+        // Use the output2_tests helper functions' data inline
+        let fasta_content = ">seq1\nATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCTGTTCTCTAAA\n>seq2\nCGAACTTTAAAATCTGTGTGGCTGTCACTCGGCTGCATGCTTAGTGCACTCACGCAGTATAATTAATAAC\n";
+        fs::write(&fasta_path, fasta_content).unwrap();
+
+        let fastq_content1 = "@read1\nATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCTGTTCTCTAAA\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n@read2\nCGAACTTTAAAATCTGTGTGGCTGTCACTCGGCTGCATGCTTAGTGCACTCACGCAGTATAATTAATAAC\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
+        let fastq_content2 = "@read1\nTAATTACTGTCGTTGACAGGACACGAGTAACTCGTCTATCTTCTGCAGGCTGCTTACGGTTTCGTCCGTG\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n@read2\nTTGCAGCCGATCATCAGCACATCTAGGTTTCGTCCGGGTGTGACCGAAAGGTAAGATGGAGAGCCTTGTC\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
+        fs::write(&fastq_path1, fastq_content1).unwrap();
+        fs::write(&fastq_path2, fastq_content2).unwrap();
+
+        let output = StdCommand::new(cargo::cargo_bin!("deacon"))
+            .arg("index")
+            .arg("build")
+            .arg(&fasta_path)
+            .output()
+            .expect("Failed to execute command");
+        fs::write(&bin_path, output.stdout).expect("Failed to write index file");
+        assert!(output.status.success(), "Index build command failed");
+
+        let mut cmd = cargo::cargo_bin_cmd!("deacon");
+        cmd.arg("filter")
+            .arg("--rename")
+            .arg("-a")
+            .arg("1")
+            .arg("-r")
+            .arg("0.0")
+            .arg(&bin_path)
+            .arg(&fastq_path1)
+            .arg(&fastq_path2)
+            .arg("--output")
+            .arg(&output_path1)
+            .arg("--output2")
+            .arg(&output_path2)
+            .assert()
+            .success();
+
+        assert!(output_path1.exists(), "R1 output file wasn't created");
+        assert!(output_path2.exists(), "R2 output file wasn't created");
+
+        let file1 = File::open(&output_path1).unwrap();
+        let mut gz1 = GzDecoder::new(file1);
+        let mut contents1 = String::new();
+        gz1.read_to_string(&mut contents1).unwrap();
+
+        let file2 = File::open(&output_path2).unwrap();
+        let mut gz2 = GzDecoder::new(file2);
+        let mut contents2 = String::new();
+        gz2.read_to_string(&mut contents2).unwrap();
+
+        // R1 file should have /1 suffixes
+        for line in contents1.lines() {
+            if line.starts_with('@') {
+                assert!(
+                    line.contains("/1"),
+                    "R1 header should have /1 suffix, got: {}",
+                    line
+                );
+                assert!(
+                    !line.contains("/2"),
+                    "R1 header should not have /2 suffix, got: {}",
+                    line
+                );
+            }
+        }
+
+        // R2 file should have /2 suffixes
+        for line in contents2.lines() {
+            if line.starts_with('@') {
+                assert!(
+                    line.contains("/2"),
+                    "R2 header should have /2 suffix, got: {}",
+                    line
+                );
+                assert!(
+                    !line.contains("/1"),
+                    "R2 header should not have /1 suffix, got: {}",
+                    line
+                );
+            }
+        }
+
+        // Verify same counter values in both files
+        let r1_counters: Vec<&str> = contents1
+            .lines()
+            .filter(|l| l.starts_with('@'))
+            .map(|l| l.trim_start_matches('@').split(' ').next().unwrap())
+            .collect();
+        let r2_counters: Vec<&str> = contents2
+            .lines()
+            .filter(|l| l.starts_with('@'))
+            .map(|l| l.trim_start_matches('@').split(' ').next().unwrap())
+            .collect();
+        assert_eq!(
+            r1_counters, r2_counters,
+            "R1 and R2 should share the same counter values per pair"
+        );
+    }
+}
+
+#[test]
+fn test_filter_paired_rename_interleaved_stdin() {
+    // Verify rename with /1 /2 suffixes works for interleaved paired input
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output_path = temp_dir.path().join("filtered_interleaved.fastq");
+
+    create_test_fasta(&fasta_path);
+    build_index(&fasta_path, &bin_path);
+
+    // Create interleaved paired FASTQ content (R1, R2, R1, R2, ...)
+    let seq = "ACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA";
+    let qual = "~".repeat(seq.len());
+    let mut interleaved = String::new();
+    for i in 0..4 {
+        // R1
+        interleaved.push_str(&format!("@pair{}/1\n{}\n+\n{}\n", i, seq, qual));
+        // R2
+        interleaved.push_str(&format!("@pair{}/2\n{}\n+\n{}\n", i, seq, qual));
+    }
+
+    // Pass `-` `-` as input1 and input2 to trigger interleaved paired stdin mode
+    let output = StdCommand::new(cargo::cargo_bin!("deacon"))
+        .arg("filter")
+        .arg("--rename")
+        .arg("-a")
+        .arg("1")
+        .arg("-r")
+        .arg("0.0")
+        .arg(&bin_path)
+        .arg("-")
+        .arg("-")
+        .arg("--output")
+        .arg(&output_path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(interleaved.as_bytes())
+                .unwrap();
+            child.wait_with_output()
+        })
+        .expect("Failed to execute command");
+
+    assert!(
+        output.status.success(),
+        "Command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output_content = fs::read_to_string(&output_path).unwrap();
+    let headers: Vec<&str> = output_content
+        .lines()
+        .filter(|l| l.starts_with('@'))
+        .collect();
+
+    assert!(!headers.is_empty(), "Expected renamed interleaved output");
+
+    // Headers should alternate /1 and /2
+    for (i, header) in headers.iter().enumerate() {
+        if i % 2 == 0 {
+            assert!(
+                header.contains("/1"),
+                "Even header (R1) should have /1 suffix, got: {}",
+                header
+            );
+        } else {
+            assert!(
+                header.contains("/2"),
+                "Odd header (R2) should have /2 suffix, got: {}",
+                header
+            );
+        }
+    }
+
+    // Paired records should share the same counter
+    for chunk in headers.chunks(2) {
+        if chunk.len() == 2 {
+            let c1: &str = chunk[0].trim_start_matches('@').split(' ').next().unwrap();
+            let c2: &str = chunk[1].trim_start_matches('@').split(' ').next().unwrap();
+            assert_eq!(
+                c1, c2,
+                "Paired records should share counter: {} vs {}",
+                chunk[0], chunk[1]
+            );
+        }
+    }
+}
+
+#[test]
+fn test_filter_single_end_rename_no_read_suffix() {
+    // Verify that single-end rename does NOT produce /1 or /2 suffixes
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output_path = temp_dir.path().join("filtered_renamed.fastq");
+
+    create_test_fasta(&fasta_path);
+    create_test_fastq(&fastq_path);
+    build_index(&fasta_path, &bin_path);
+
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter")
+        .arg("--rename")
+        .arg("-a")
+        .arg("1")
+        .arg("-r")
+        .arg("0.0")
+        .arg(&bin_path)
+        .arg(&fastq_path)
+        .arg("--output")
+        .arg(&output_path)
+        .assert()
+        .success();
+
+    let output_content = fs::read_to_string(&output_path).unwrap();
+    assert!(!output_content.is_empty(), "Output should not be empty");
+
+    for line in output_content.lines() {
+        if line.starts_with('@') {
+            assert!(
+                !line.contains("/1") && !line.contains("/2"),
+                "Single-end rename should not contain /1 or /2 suffix, got: {}",
+                line
+            );
+        }
+    }
+
+    // Verify it still has renamed headers (just numbers)
+    assert!(
+        output_content.contains("@1\n") || output_content.contains("@2\n"),
+        "Output should contain renamed sequences"
+    );
+}
+
+#[test]
+fn test_filter_paired_deplete_with_rename() {
+    // Verify that --rename --deplete with paired input produces correct /1 /2 suffixes
+    // and sequential counters
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq_path1 = temp_dir.path().join("reads_1.fastq");
+    let fastq_path2 = temp_dir.path().join("reads_2.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output_path = temp_dir.path().join("filtered_deplete_renamed.fastq");
+
+    // Use a reference that won't match the reads so deplete keeps everything
+    let fasta_content = ">decoy\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n";
+    fs::write(&fasta_path, fasta_content).unwrap();
+    create_test_paired_fastq(&fastq_path1, &fastq_path2);
+    build_index(&fasta_path, &bin_path);
+
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter")
+        .arg("--rename")
+        .arg("--deplete")
+        .arg(&bin_path)
+        .arg(&fastq_path1)
+        .arg(&fastq_path2)
+        .arg("--output")
+        .arg(&output_path)
+        .assert()
+        .success();
+
+    let output_content = fs::read_to_string(&output_path).unwrap();
+    let headers: Vec<&str> = output_content
+        .lines()
+        .filter(|l| l.starts_with('@'))
+        .collect();
+
+    assert!(
+        !headers.is_empty(),
+        "Deplete with non-matching ref should produce output"
+    );
+
+    // All headers should have /1 or /2 suffixes
+    for header in &headers {
+        assert!(
+            header.contains("/1") || header.contains("/2"),
+            "Paired deplete+rename header should have /1 or /2 suffix, got: {}",
+            header
+        );
+    }
+
+    // Headers should alternate /1 and /2
+    for (i, header) in headers.iter().enumerate() {
+        if i % 2 == 0 {
+            assert!(
+                header.contains("/1"),
+                "Even header should have /1 suffix, got: {}",
+                header
+            );
+        } else {
+            assert!(
+                header.contains("/2"),
+                "Odd header should have /2 suffix, got: {}",
+                header
+            );
+        }
+    }
+
+    // Verify sequential counters
+    let counters: Vec<u64> = headers
+        .iter()
+        .filter(|h| h.contains("/1"))
+        .map(|h| {
+            h.trim_start_matches('@')
+                .split(' ')
+                .next()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+        })
+        .collect();
+
+    for (i, &c) in counters.iter().enumerate() {
+        assert_eq!(
+            c,
+            (i + 1) as u64,
+            "Expected sequential counter {} but got {}",
+            i + 1,
+            c
+        );
+    }
+}

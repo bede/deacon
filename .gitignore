@@ -1,4 +1,6 @@
 /target
 /data
 .DS_Store
-*DE.md
+*S.md
+plans/
+tests/data/
