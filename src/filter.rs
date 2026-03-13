@@ -116,6 +116,7 @@ fn format_record_to_buffer<R: Record>(
     counter: u64,
     rename: bool,
     rename_random: bool,
+    read_suffix: &[u8],
     output_fasta: bool,
     buffer: &mut Vec<u8>,
 ) -> Result<()> {
@@ -129,6 +130,10 @@ fn format_record_to_buffer<R: Record>(
             buffer.write_all(b"-")?;
             let random_suffix = rand::rng().random::<u64>();
             buffer.extend_from_slice(random_suffix.to_string().as_bytes());
+        }
+        if !read_suffix.is_empty() {
+            buffer.write_all(b" ")?;
+            buffer.write_all(read_suffix)?;
         }
     } else {
         buffer.extend_from_slice(record.id());
@@ -569,13 +574,20 @@ impl FilterProcessor {
         )
     }
 
-    fn write_record<Rf: Record>(&mut self, record: &Rf, seq: &[u8], counter: u64) -> Result<()> {
+    fn write_record<Rf: Record>(
+        &mut self,
+        record: &Rf,
+        seq: &[u8],
+        counter: u64,
+        read_suffix: &[u8],
+    ) -> Result<()> {
         format_record_to_buffer(
             record,
             seq,
             counter,
             self.rename,
             self.rename_random,
+            read_suffix,
             self.output_fasta,
             &mut self.local_buffer,
         )
@@ -586,6 +598,7 @@ impl FilterProcessor {
         record: &Rf,
         seq: &[u8],
         counter: u64,
+        read_suffix: &[u8],
     ) -> Result<()> {
         format_record_to_buffer(
             record,
@@ -593,6 +606,7 @@ impl FilterProcessor {
             counter,
             self.rename,
             self.rename_random,
+            read_suffix,
             self.output_fasta,
             &mut self.local_buffer2,
         )
@@ -661,7 +675,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for FilterProcessor {
             } else {
                 0
             };
-            self.write_record(&record, &seq, counter)?;
+            self.write_record(&record, &seq, counter, b"")?;
         } else {
             self.local_stats.filtered_seqs += 1;
             self.local_stats.filtered_bp += seq.len() as u64;
@@ -736,12 +750,12 @@ impl<Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor {
             // Write to appropriate writers
             if self.global_writer2.is_some() {
                 // Separate outputs
-                self.write_record(&record1, &seq1, counter)?;
-                self.write_record_to_buffer2(&record2, &seq2, counter)?;
+                self.write_record(&record1, &seq1, counter, b"/1")?;
+                self.write_record_to_buffer2(&record2, &seq2, counter, b"/2")?;
             } else {
                 // Interleaved output
-                self.write_record(&record1, &seq1, counter)?;
-                self.write_record(&record2, &seq2, counter)?;
+                self.write_record(&record1, &seq1, counter, b"/1")?;
+                self.write_record(&record2, &seq2, counter, b"/2")?;
             }
         } else {
             self.local_stats.filtered_seqs += 2;

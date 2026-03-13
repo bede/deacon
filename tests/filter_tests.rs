@@ -480,8 +480,8 @@ fn test_filter_paired_with_rename() {
 
     let output_content = fs::read_to_string(&output_path).unwrap();
     assert!(
-        output_content.contains("@1\n") && output_content.contains("@2\n"),
-        "Output does not contain renamed sequences"
+        output_content.contains("@1 /1\n") && output_content.contains("@1 /2\n"),
+        "Output does not contain renamed paired sequences with /1 /2 suffixes"
     );
 }
 
