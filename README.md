@@ -41,7 +41,7 @@ RUSTFLAGS="-C target-cpu=native" cargo install deacon
 Containers are available from the [BioContainers registry](https://biocontainers.pro/tools/deacon).
 
 ```bash
-docker pull quay.io/biocontainers/deacon:0.13.2--h7ef3eeb_0
+docker pull quay.io/biocontainers/deacon:0.15.0--hdd79491_0
 ```
 
 ## Quickstart
@@ -70,7 +70,7 @@ deacon filter amr-genes.idx AllTheBacteria.fa.zst > hits.fa
 
 ## Prebuilt indexes
 
-Prebuilt pangenome indexes are provided for human and mouse host classification and depletion. These can be downloaded using the links below, or with `deacon index fetch <name>`.
+Prebuilt pangenome indexes are provided. These can be downloaded using the links below, or with `deacon index fetch <name>`.  These may alternatively be reproduced using workflows in [deacon-indexes](https://github.com/bede/deacon-indexes). 
 
 |                          Name & URL                          |                         Composition                          | Minimizers  | Subtracted minimizers | Size  | Date    |
 | :----------------------------------------------------------: | :----------------------------------------------------------: | ----------- | --------------------- | ----- | ------- |
@@ -327,6 +327,8 @@ deacon --use-server server stop
 
 ### Galaxy
 Work in progress: https://github.com/galaxyproject/tools-iuc/pull/7473
+
+
 
 ## Citation
 
