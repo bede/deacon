@@ -287,8 +287,11 @@ pub struct FilterConfig<'a> {
     /// Path to input fastx file (or - for stdin)
     pub input_path: &'a str,
 
-    /// Path to optional second paired fastx file (or - for interleaved stdin)
+    /// Path to optional second paired fastx file
     pub input2_path: Option<&'a str>,
+
+    /// Treat input_path as an interleaved paired stream
+    pub interleaved: bool,
 
     /// Path to output fastx file (None for stdout; detects .gz and .zst)
     pub output_path: Option<&'a Path>,

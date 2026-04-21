@@ -29,6 +29,8 @@ pub struct FilterRunConfig {
     pub input_path: String,
     /// Path to optional second paired fastx file (or - for interleaved stdin)
     pub input2_path: Option<String>,
+    /// Treat input_path as an interleaved paired stream
+    pub interleaved: bool,
     /// Path to output fastx file (None for stdout; detects .gz/.zst/.xz)
     pub output_path: Option<PathBuf>,
     /// Path to optional second output fastx file for paired reads
@@ -660,6 +662,7 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
     let run_config = FilterRunConfig {
         input_path: config.input_path.to_string(),
         input2_path: config.input2_path.map(str::to_string),
+        interleaved: config.interleaved,
         output_path: config.output_path.map(|p| p.to_path_buf()),
         output2_path: config.output2_path.map(str::to_string),
         abs_threshold: config.abs_threshold,
@@ -778,8 +781,10 @@ pub fn run_with_index(
 
     let mut input_type = String::new();
     let mut options = Vec::<String>::new();
-    let paired_stdin = config.input_path == "-" && config.input2_path.as_deref() == Some("-");
-    if paired_stdin {
+    let interleaved_stdin =
+        config.input_path == "-" && config.input2_path.as_deref() == Some("-");
+    let interleaved_input = config.interleaved || interleaved_stdin;
+    if interleaved_input {
         input_type.push_str("interleaved");
     } else if config.input2_path.is_some() {
         input_type.push_str("paired");
@@ -830,15 +835,16 @@ pub fn run_with_index(
         config.compression_level,
         compression_threads_per_output,
     )?;
-    let writer2 = if let (Some(output2), Some(_)) = (
-        config.output2_path.as_deref(),
-        config.input2_path.as_deref(),
-    ) {
-        Some(get_writer(
-            Some(std::path::Path::new(output2)),
-            config.compression_level,
-            compression_threads_per_output,
-        )?)
+    let writer2 = if let Some(output2) = config.output2_path.as_deref() {
+        if config.input2_path.is_some() || interleaved_input {
+            Some(get_writer(
+                Some(std::path::Path::new(output2)),
+                config.compression_level,
+                compression_threads_per_output,
+            )?)
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -893,10 +899,25 @@ pub fn run_with_index(
     // Process based on input type - use filtering threads (already calculated above)
     let num_threads = filtering_threads;
 
-    if paired_stdin {
-        // Interleaved paired stdin - use interleaved processor
-        let reader = create_paraseq_reader(Some("-"))?;
-        reader.process_parallel_interleaved(&mut processor, num_threads)?;
+    if interleaved_input {
+        // Interleaved paired input from stdin or a file
+        if input1_empty {
+            if !quiet {
+                eprintln!("Empty input file(s) detected");
+            }
+        } else {
+            match create_paraseq_reader(Some(config.input_path.as_str())) {
+                Ok(reader) => {
+                    reader.process_parallel_interleaved(&mut processor, num_threads)?;
+                }
+                Err(e) if is_empty_input_error(&e) => {
+                    if !quiet {
+                        eprintln!("Empty input file(s) detected");
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
     } else if let Some(input2_path) = config.input2_path.as_deref() {
         // Paired files - both must be empty or both non-empty
         if input1_empty && input2_empty {
