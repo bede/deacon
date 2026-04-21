@@ -142,8 +142,11 @@ pub struct FilterConfig<'a> {
     /// Path to input fastx file (or - for stdin)
     pub input_path: &'a str,
 
-    /// Path to optional second paired fastx file (or - for interleaved stdin)
+    /// Path to optional second paired fastx file
     pub input2_path: Option<&'a str>,
+
+    /// Treat input_path as an interleaved paired stream
+    pub interleaved: bool,
 
     /// Path to output fastx file (None for stdout; detects .gz and .zst)
     pub output_path: Option<&'a Path>,
@@ -197,6 +200,7 @@ impl<'a> FilterConfig<'a> {
             minimizers_path,
             input_path: "-",
             input2_path: None,
+            interleaved: false,
             output_path: None,
             output2_path: None,
             abs_threshold: 2,
@@ -222,6 +226,11 @@ impl<'a> FilterConfig<'a> {
 
     pub fn with_input2(mut self, input2_path: &'a str) -> Self {
         self.input2_path = Some(input2_path);
+        self
+    }
+
+    pub fn with_interleaved(mut self, interleaved: bool) -> Self {
+        self.interleaved = interleaved;
         self
     }
 

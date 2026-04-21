@@ -31,6 +31,14 @@ fn create_test_paired_fastq(path1: &Path, path2: &Path) {
     fs::write(path2, fastq_content2).unwrap();
 }
 
+fn create_test_interleaved_fastq(path: &Path) {
+    let interleaved_content =
+        "@read1/1\nACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n@read1/2\nACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n"
+            .to_owned()
+            + "@read2/1\nTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n@read2/2\nTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
+    fs::write(path, interleaved_content).unwrap();
+}
+
 fn build_index(fasta_path: &Path, bin_path: &Path) {
     let output = StdCommand::new(cargo::cargo_bin!("deacon"))
         .arg("index")
@@ -529,11 +537,7 @@ fn test_interleaved_paired_reads_stdin() {
     // Create test files
     create_test_fasta(&fasta_path);
 
-    let interleaved_content =
-        "@read1/1\nACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n@read1/2\nACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n"
-            .to_owned()
-            + "@read2/1\nTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n@read2/2\nTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
-    fs::write(&interleaved_fastq_path, interleaved_content).unwrap();
+    create_test_interleaved_fastq(&interleaved_fastq_path);
 
     build_index(&fasta_path, &bin_path);
     assert!(bin_path.exists(), "Index file wasn't created");
@@ -575,11 +579,7 @@ fn test_interleaved_paired_reads_stdin_separate_out() {
     // Create test files
     create_test_fasta(&fasta_path);
 
-    let interleaved_content =
-        "@read1/1\nACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n@read1/2\nACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n"
-            .to_owned()
-            + "@read2/1\nTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n@read2/2\nTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
-    fs::write(&interleaved_fastq_path, interleaved_content).unwrap();
+    create_test_interleaved_fastq(&interleaved_fastq_path);
 
     build_index(&fasta_path, &bin_path);
     assert!(bin_path.exists(), "Index file wasn't created");
@@ -1208,6 +1208,105 @@ fn test_filter_proportional_paired() {
         output_path.exists(),
         "Output file with proportional threshold for paired reads wasn't created"
     );
+}
+
+#[test]
+fn test_interleaved_paired_reads_file() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let interleaved_fastq_path = temp_dir.path().join("interleaved_reads.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output_path = temp_dir.path().join("filtered.fastq");
+
+    create_test_fasta(&fasta_path);
+    create_test_interleaved_fastq(&interleaved_fastq_path);
+    build_index(&fasta_path, &bin_path);
+
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter")
+        .arg("--interleaved")
+        .arg("-a")
+        .arg("1")
+        .arg("-r")
+        .arg("0.0")
+        .arg(&bin_path)
+        .arg(&interleaved_fastq_path)
+        .arg("--output")
+        .arg(&output_path)
+        .assert()
+        .success();
+
+    let output_content = fs::read_to_string(&output_path).unwrap();
+    assert!(!output_content.is_empty(), "Output file is empty");
+}
+
+#[test]
+fn test_interleaved_paired_reads_file_separate_out() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let interleaved_fastq_path = temp_dir.path().join("interleaved_reads.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output_path1 = temp_dir.path().join("filtered_R1.fastq");
+    let output_path2 = temp_dir.path().join("filtered_R2.fastq");
+
+    create_test_fasta(&fasta_path);
+    create_test_interleaved_fastq(&interleaved_fastq_path);
+    build_index(&fasta_path, &bin_path);
+
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter")
+        .arg("--interleaved")
+        .arg("-a")
+        .arg("1")
+        .arg("-r")
+        .arg("0.0")
+        .arg(&bin_path)
+        .arg(&interleaved_fastq_path)
+        .arg("-o")
+        .arg(&output_path1)
+        .arg("-O")
+        .arg(&output_path2)
+        .assert()
+        .success();
+
+    let output1_content = fs::read_to_string(&output_path1).unwrap();
+    let output2_content = fs::read_to_string(&output_path2).unwrap();
+
+    assert!(output1_content.contains("/1"), "R1 output should contain /1 reads");
+    assert!(
+        !output1_content.contains("/2"),
+        "R1 output should not contain /2 reads"
+    );
+    assert!(output2_content.contains("/2"), "R2 output should contain /2 reads");
+    assert!(
+        !output2_content.contains("/1"),
+        "R2 output should not contain /1 reads"
+    );
+}
+
+#[test]
+fn test_interleaved_rejects_second_input() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq_path1 = temp_dir.path().join("reads_1.fastq");
+    let fastq_path2 = temp_dir.path().join("reads_2.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+
+    create_test_fasta(&fasta_path);
+    create_test_paired_fastq(&fastq_path1, &fastq_path2);
+    build_index(&fasta_path, &bin_path);
+
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter")
+        .arg("--interleaved")
+        .arg(&bin_path)
+        .arg(&fastq_path1)
+        .arg(&fastq_path2)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "--interleaved cannot be used with a second input file",
+        ));
 }
 
 #[test]

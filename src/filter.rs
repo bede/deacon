@@ -859,10 +859,11 @@ pub fn run(config: &FilterConfig) -> Result<()> {
 
     let mut input_type = String::new();
     let mut options = Vec::<String>::new();
-    let paired_stdin = config.input_path == "-"
+    let interleaved_stdin = config.input_path == "-"
         && config.input2_path.is_some()
         && config.input2_path.unwrap() == "-";
-    if paired_stdin {
+    let interleaved_input = config.interleaved || interleaved_stdin;
+    if interleaved_input {
         input_type.push_str("interleaved");
     } else if config.input2_path.is_some() {
         input_type.push_str("paired");
@@ -929,12 +930,16 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         config.compression_level,
         compression_threads_per_output,
     )?;
-    let writer2 = if let (Some(output2), Some(_)) = (config.output2_path, config.input2_path) {
-        Some(get_writer(
-            Some(std::path::Path::new(output2)),
-            config.compression_level,
-            compression_threads_per_output,
-        )?)
+    let writer2 = if let Some(output2) = config.output2_path {
+        if config.input2_path.is_some() || interleaved_input {
+            Some(get_writer(
+                Some(std::path::Path::new(output2)),
+                config.compression_level,
+                compression_threads_per_output,
+            )?)
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -988,9 +993,9 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     // Process based on input type - use filtering threads (already calculated above)
     let num_threads = filtering_threads;
 
-    if paired_stdin {
-        // Interleaved paired stdin - use interleaved processor
-        let reader = create_paraseq_reader(Some("-"))?;
+    if interleaved_input {
+        // Interleaved paired input from stdin or a file
+        let reader = create_paraseq_reader(Some(config.input_path))?;
         reader.process_parallel_interleaved(&mut processor, num_threads)?;
     } else if let Some(input2_path) = config.input2_path {
         // Paired files - both must be empty or both non-empty

@@ -37,8 +37,12 @@ enum Commands {
         #[arg(default_value = "-")]
         input: String,
 
-        /// Optional path to second paired fastx file (or - for interleaved stdin)
+        /// Optional path to second paired fastx file
         input2: Option<String>,
+
+        /// Treat INPUT as interleaved paired reads from a file or stdin
+        #[arg(long = "interleaved", default_value_t = false, conflicts_with = "input2")]
+        interleaved: bool,
 
         /// Minimum absolute number of minimizer hits for a match
         #[arg(short = 'a', long = "abs-threshold", default_value_t = 2, value_parser = clap::value_parser!(u16).range(1..))]
@@ -415,6 +419,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             index: minimizers,
             input,
             input2,
+            interleaved,
             output,
             output2,
             abs_threshold,
@@ -432,7 +437,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             quiet,
         } => {
             // Validate output2 usage
-            if output2.is_some() && input2.is_none() {
+            if output2.is_some() && input2.is_none() && !interleaved {
                 eprintln!(
                     "Warning: --output2 specified but no second input file provided. --output2 will be ignored."
                 );
@@ -442,6 +447,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 minimizers_path: minimizers,
                 input_path: input,
                 input2_path: input2.as_deref(),
+                interleaved: *interleaved,
                 output_path: output.as_ref().map(|p| p.as_path()),
                 output2_path: output2.as_deref(),
                 abs_threshold: *abs_threshold as usize,
