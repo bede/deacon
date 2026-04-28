@@ -3,3 +3,6 @@
 .DS_Store
 *DE.md
 dist
+*S.md
+plans/
+tests/data/
