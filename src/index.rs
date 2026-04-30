@@ -3,8 +3,8 @@ use crate::minimizers::KmerHasher;
 use crate::{FixedRapidHasher, IndexConfig, RapidHashSet};
 use anyhow::{Context, Result};
 use bincode::serde::{decode_from_std_read, encode_into_std_write};
-use paraseq::Record;
 use paraseq::prelude::{ParallelProcessor, ParallelReader};
+use paraseq::Record;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -128,7 +128,8 @@ pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)
 
     let minimizers = if header.kmer_length <= 32 {
         // Read as u64 with packed byte-aligned format
-        let mut set = RapidHashSet::<u64>::with_capacity_and_hasher(count, FixedRapidHasher);
+        let mut set = vec![];
+
         const B: usize = 16 * 1024;
         let mut buffer = vec![0u8; bytes_per_minimizer * B];
         for i in (0..count).step_by(B) {
@@ -146,9 +147,21 @@ pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)
                 let end = start + bytes_per_minimizer;
                 let mut minimizer_bytes = [0u8; 8];
                 minimizer_bytes[..bytes_per_minimizer].copy_from_slice(&batch[start..end]);
-                set.insert(u64::from_le_bytes(minimizer_bytes));
+                set.push(u64::from_le_bytes(minimizer_bytes));
             }
         }
+        set.sort_unstable();
+        set.dedup();
+
+        assert_eq!(set.len(), count);
+
+        eprintln!("Building set on {} keys", set.len());
+        // 0.043 lower bound * 1.5 + eps
+        let set =
+            static_hash_set::kphf_set::KphfSet::<kphf::KptrHash, 8>::try_new(0.7, 0.065, &set)
+                .unwrap();
+        assert_eq!(set.len(), count);
+        eprintln!("Building done!");
         crate::MinimizerSet::U64(set)
     } else {
         // Read as u128 with packed byte-aligned format
@@ -217,7 +230,7 @@ pub fn dump_minimizers(
     let bytes_per_minimizer = (header.kmer_length as usize).div_ceil(4);
     match minimizers {
         crate::MinimizerSet::U64(set) => {
-            for &val in set {
+            for val in set {
                 // Write only the required bytes (little-endian)
                 let bytes = val.to_le_bytes();
                 writer
@@ -255,7 +268,7 @@ pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
     let mut counter = 0;
     match minimizers {
         crate::MinimizerSet::U64(set) => {
-            for &minimizer in &set {
+            for minimizer in &set {
                 counter += 1;
                 let sequence = crate::minimizers::decode_u64(minimizer, header.kmer_length);
                 writeln!(writer, ">{}", counter)?;
@@ -445,10 +458,17 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     reader.process_parallel(&mut processor, config.threads as usize)?;
 
     let all_minimizers = if config.kmer_length <= 32 {
-        let set = Arc::try_unwrap(processor.global_minimizers_u64)
+        let set: Vec<u64> = Arc::try_unwrap(processor.global_minimizers_u64)
             .unwrap()
             .into_inner()
+            .unwrap()
+            .iter()
+            .copied()
+            .collect();
+        eprintln!("Building set on {} keys (B)", set.len());
+        let set = static_hash_set::kphf_set::KphfSet::<kphf::KptrHash, 8>::try_new(0.7, 0.1, &set)
             .unwrap();
+        eprintln!("Building done! (B)");
         crate::MinimizerSet::U64(set)
     } else {
         let set = Arc::try_unwrap(processor.global_minimizers_u128)
@@ -634,7 +654,8 @@ fn stream_diff_fastx(
     let initial_size = first_minimizers.len();
     let (mut processor, global_minimizers_u64, global_minimizers_u128) = match first_minimizers {
         crate::MinimizerSet::U64(set) => {
-            let moved_set = std::mem::take(set);
+            // let moved_set = std::mem::take(set);
+            let moved_set = todo!();
             let arc = Arc::new(Mutex::new(Some(moved_set)));
             (
                 DiffIndexProcessor {
@@ -682,7 +703,8 @@ fn stream_diff_fastx(
     // Extract results from Arc<Mutex<>> after processing completes
     let stats = processor.global_stats.lock().clone();
     *first_minimizers = if let Some(arc) = global_minimizers_u64 {
-        let set = arc.lock().take().unwrap();
+        // let set = arc.lock().take().unwrap();
+        let set = todo!();
         crate::MinimizerSet::U64(set)
     } else {
         let set = global_minimizers_u128.unwrap().lock().take().unwrap();

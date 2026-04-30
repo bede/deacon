@@ -13,15 +13,15 @@ pub mod index;
 pub mod minimizers;
 
 // Re-export the important structures and functions for library users
-pub use filter::{FilterSummary, run as run_filter};
+pub use filter::{run as run_filter, FilterSummary};
 #[cfg(feature = "fetch")]
 pub use index::fetch as index_fetch;
 pub use index::{
-    INDEX_FORMAT_VERSION, IndexHeader, build as index_build, diff as index_diff,
-    dump as index_dump, dump_minimizers, info as index_info, intersect as index_intersect,
-    load_minimizers, union as index_union,
+    build as index_build, diff as index_diff, dump as index_dump, dump_minimizers,
+    info as index_info, intersect as index_intersect, load_minimizers, union as index_union,
+    IndexHeader, INDEX_FORMAT_VERSION,
 };
-pub use minimizers::{DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, decode_u64, decode_u128};
+pub use minimizers::{decode_u128, decode_u64, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE};
 
 use anyhow::Result;
 use std::collections::HashSet;
@@ -45,7 +45,7 @@ pub type RapidHashSet<T> = HashSet<T, FixedRapidHasher>;
 
 /// Zero-cost (hopefully?) abstraction over u64 and u128 minimizer sets
 pub enum MinimizerSet {
-    U64(RapidHashSet<u64>),
+    U64(static_hash_set::kphf_set::KphfSet<kphf::KptrHash, 8>),
     U128(RapidHashSet<u128>),
 }
 
@@ -65,7 +65,7 @@ impl MinimizerSet {
     pub fn extend(&mut self, other: Self) {
         match (self, other) {
             (MinimizerSet::U64(self_set), MinimizerSet::U64(other_set)) => {
-                self_set.extend(other_set);
+                unimplemented!()
             }
             (MinimizerSet::U128(self_set), MinimizerSet::U128(other_set)) => {
                 self_set.extend(other_set);
@@ -79,7 +79,7 @@ impl MinimizerSet {
         match (self, other) {
             (MinimizerSet::U64(self_set), MinimizerSet::U64(other_set)) => {
                 for val in other_set {
-                    self_set.remove(val);
+                    unimplemented!()
                 }
             }
             (MinimizerSet::U128(self_set), MinimizerSet::U128(other_set)) => {
@@ -95,7 +95,7 @@ impl MinimizerSet {
     pub fn intersect(&mut self, other: &Self) {
         match (self, other) {
             (MinimizerSet::U64(self_set), MinimizerSet::U64(other_set)) => {
-                self_set.retain(|val| other_set.contains(val));
+                unimplemented!()
             }
             (MinimizerSet::U128(self_set), MinimizerSet::U128(other_set)) => {
                 self_set.retain(|val| other_set.contains(val));

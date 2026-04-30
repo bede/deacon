@@ -41,6 +41,8 @@ zstd = { version = "0.13", optional = true }
 gzp = { version = "2.0", default-features = false, features = ["deflate_rust"], optional = true }
 minreq = { version = "2", features = ["https-rustls-probe"], optional = true }
 ensure_simd = "0.1.0"
+kphf = { version = "0.1.0", path = "../static-hash-sets/kphf" }
+static_hash_set = { version = "0.1.0", path = "../static-hash-sets/static_hash_set" }
 
 [lints.clippy]
 too_many_arguments = "allow"
@@ -75,8 +77,8 @@ path = "tests/filter_tests.rs"
 
 [profile.release]
 opt-level = 3
-lto = true
-codegen-units = 1
+# lto = true
+# codegen-units = 1
 panic = "abort"
 strip = false
 debug = false

@@ -1,19 +1,19 @@
 use crate::index::load_minimizers_cached;
-use crate::minimizers::{KmerHasher, decode_u64, decode_u128};
+use crate::minimizers::{decode_u128, decode_u64, KmerHasher};
 use crate::{FilterConfig, MinimizerSet};
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use packed_seq::{PackedNSeqVec, SeqVec, u32x8};
-use paraseq::Record;
+use packed_seq::{u32x8, PackedNSeqVec, SeqVec};
 use paraseq::fastx::Reader;
 use paraseq::parallel::{PairedParallelProcessor, ParallelProcessor, ParallelReader};
+use paraseq::Record;
 use parking_lot::Mutex;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 const OUTPUT_BUFFER_SIZE: usize = 8 * 1024 * 1024; // Opt: 8MB output buffer
@@ -439,14 +439,34 @@ impl FilterProcessor {
             (crate::MinimizerVec::U64(vec), MinimizerSet::U64(set)) => {
                 let mut seen_hits = crate::RapidHashSet::default();
                 let mut hit_kmers = Vec::new();
-                for &minimizer in vec {
-                    if set.contains(&minimizer) && seen_hits.insert(minimizer) {
+
+                let mut tokens = [0; 32];
+                for (i, x) in vec.iter().take(32).enumerate() {
+                    tokens[i] = set.prefetch(*x);
+                }
+
+                for i in 0..vec.len() {
+                    let minimizer = vec[i];
+                    let token = tokens[i % 32];
+                    if set.contains_with_token(minimizer, token) && seen_hits.insert(minimizer) {
                         if self.debug {
                             let kmer = decode_u64(minimizer, self.kmer_length);
                             hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
                         }
                     }
+
+                    if i + 32 < vec.len() {
+                        tokens[i % 32] = set.prefetch(vec[i + 32]);
+                    }
                 }
+                // for &minimizer in vec {
+                //     if set.contains(minimizer) && seen_hits.insert(minimizer) {
+                //         if self.debug {
+                //             let kmer = decode_u64(minimizer, self.kmer_length);
+                //             hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
+                //         }
+                //     }
+                // }
                 (seen_hits.len(), hit_kmers)
             }
             (crate::MinimizerVec::U128(vec), MinimizerSet::U128(set)) => {
@@ -532,7 +552,7 @@ impl FilterProcessor {
                     if let crate::MinimizerVec::U64(vec) = &self.buffers.minimizers {
                         num_minimizers += vec.len();
                         for &minimizer in vec {
-                            if set.contains(&minimizer) && seen_hits.insert(minimizer) {
+                            if set.contains(minimizer) && seen_hits.insert(minimizer) {
                                 if self.debug {
                                     let kmer = decode_u64(minimizer, self.kmer_length);
                                     hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
