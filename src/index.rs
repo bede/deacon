@@ -434,7 +434,7 @@ pub fn freeze(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
     let (minimizers, header) =
         load_minimizers_from_path(index_path).context("Failed to load index")?;
 
-    // Collect unique u64 keys (fuse construction requires uniqueness)
+    // Collect unique u64 keys
     let keys: Vec<u64> = match minimizers {
         crate::MinimizerSet::U64(set) => set.into_iter().collect(),
         crate::MinimizerSet::U128(_) => {
