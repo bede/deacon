@@ -30,10 +30,8 @@ use indicatif::ProgressBar;
 /// Index format version
 pub const INDEX_FORMAT_VERSION: u8 = 3;
 
-/// BFF index magic bytes
-pub const BFF_MAGIC: [u8; 4] = *b"DBFF";
-
-/// BFF format version
+/// BFF format version. The on-disk magic is b"DBF" followed by the fingerprint
+/// width in bits (16 or 32), so 16-/32-bit indexes are distinguishable.
 pub const BFF_FORMAT_VERSION: u8 = 1;
 
 /// Serialisable header for the index file
@@ -92,10 +90,9 @@ impl IndexHeader {
 /// Serialisable header for the BFF index file
 #[derive(Serialize, Deserialize, Debug)]
 pub struct BffHeader {
+    /// b"DBF" prefix plus the fingerprint width in bits as the 4th byte
     pub magic: [u8; 4],
     pub format_version: u8,
-    /// Fingerprint width in bits (always 16)
-    pub filter_bits: u8,
     pub kmer_length: u8,
     pub window_size: u8,
     /// Distinct minimizers inserted (not BinaryFuse16::len())
@@ -103,20 +100,24 @@ pub struct BffHeader {
 }
 
 impl BffHeader {
-    pub fn new(kmer_length: u8, window_size: u8, key_count: u64) -> Self {
+    pub fn new(filter_bits: u8, kmer_length: u8, window_size: u8, key_count: u64) -> Self {
         BffHeader {
-            magic: BFF_MAGIC,
+            magic: [b'D', b'B', b'F', filter_bits],
             format_version: BFF_FORMAT_VERSION,
-            filter_bits: 16,
             kmer_length,
             window_size,
             key_count,
         }
     }
 
+    /// Fingerprint width in bits (16 or 32), encoded in the magic
+    pub fn filter_bits(&self) -> u8 {
+        self.magic[3]
+    }
+
     /// Validate BFF header
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.magic != BFF_MAGIC {
+        if !self.magic.starts_with(b"DBF") {
             return Err(anyhow::anyhow!("Not a BFF index (bad magic bytes)"));
         }
         if self.format_version != BFF_FORMAT_VERSION {
@@ -125,10 +126,10 @@ impl BffHeader {
                 self.format_version
             ));
         }
-        if self.filter_bits != 16 {
+        if !matches!(self.filter_bits(), 16 | 32) {
             return Err(anyhow::anyhow!(
-                "Unsupported BFF filter width: {} bits (only 16 is supported)",
-                self.filter_bits
+                "Unsupported BFF fingerprint width: {} bits (expected 16 or 32)",
+                self.filter_bits()
             ));
         }
         // BFF keys are raw u64 minimizers
@@ -280,6 +281,13 @@ pub fn load_bff(reader: &mut impl Read) -> Result<(crate::MinimizerSet, IndexHea
         decode_from_std_read(&mut reader, config).context("Failed to deserialise BFF header")?;
     header.validate()?;
 
+    // Only 16-bit filters are decodable for now; the magic still distinguishes 32-bit.
+    if header.filter_bits() != 16 {
+        return Err(anyhow::anyhow!(
+            "{}-bit binary fuse filter indexes are not yet supported",
+            header.filter_bits()
+        ));
+    }
     let filter: xorf::BinaryFuse16 = bincode::decode_from_std_read(&mut reader, config)
         .context("Failed to deserialise BFF filter, index may be corrupt")?;
 
@@ -299,7 +307,7 @@ pub fn load_index_auto(reader: &mut impl Read) -> Result<(crate::MinimizerSet, I
         .context("Failed to read index header, file may be empty or truncated")?;
     // Re-chain the consumed magic bytes ahead of the stream
     let mut combined = (&magic[..]).chain(reader);
-    if magic == BFF_MAGIC {
+    if magic.starts_with(b"DBF") {
         load_bff(&mut combined)
     } else {
         load_minimizers(&mut combined)
@@ -374,8 +382,21 @@ fn is_bff_file(path: &Path) -> bool {
     let mut magic = [0u8; 4];
     File::open(path)
         .ok()
-        .map(|mut f| f.read_exact(&mut magic).is_ok() && magic == BFF_MAGIC)
+        .map(|mut f| f.read_exact(&mut magic).is_ok() && magic.starts_with(b"DBF"))
         .unwrap_or(false)
+}
+
+/// Reject a binary fuse filter (.pidx) index for commands that require an exact (.idx) index
+#[cfg(feature = "cli")]
+fn reject_bff(path: &Path, operation: &str) -> Result<()> {
+    if is_bff_file(path) {
+        return Err(anyhow::anyhow!(
+            "{:?} is a binary fuse filter (.pidx) index; {} requires an exact (.idx) index",
+            path,
+            operation
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "cli")]
@@ -431,6 +452,8 @@ pub fn freeze(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
     let version: String = env!("CARGO_PKG_VERSION").to_string();
     eprintln!("Deacon v{}; mode: freeze", version);
 
+    reject_bff(index_path, "freeze")?;
+
     let (minimizers, header) =
         load_minimizers_from_path(index_path).context("Failed to load index")?;
 
@@ -457,7 +480,7 @@ pub fn freeze(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
     let filter = xorf::BinaryFuse16::try_from(&keys)
         .map_err(|e| anyhow::anyhow!("Failed to construct binary fuse filter: {}", e))?;
 
-    let bff_header = BffHeader::new(header.kmer_length, header.window_size, key_count as u64);
+    let bff_header = BffHeader::new(16, header.kmer_length, header.window_size, key_count as u64);
 
     // Header via serde, filter via native bincode
     let mut writer: BufWriter<Box<dyn Write>> = match output_path {
@@ -931,6 +954,9 @@ pub fn diff(
 ) -> Result<()> {
     let start_time = Instant::now();
 
+    reject_bff(first, "diff")?;
+    reject_bff(second, "diff")?;
+
     // Load first file (always an index)
     let (mut first_minimizers, header) = load_minimizers_from_path(first)?;
     eprintln!("First index: loaded {} minimizers", first_minimizers.len());
@@ -1052,7 +1078,7 @@ pub fn info(index_path: &Path) -> Result<()> {
         eprintln!("Index information:");
         eprintln!(
             "  Format: BFF (binary fuse filter, {}-bit fingerprints)",
-            header.filter_bits
+            header.filter_bits()
         );
         eprintln!("  Format version: {}", header.format_version);
         eprintln!("  K-mer length (k): {}", header.kmer_length);
@@ -1096,6 +1122,7 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     let mut headers_and_counts = Vec::new();
 
     for path in inputs {
+        reject_bff(path, "union")?;
         let (header, count) = load_header_and_count(path)?;
         headers_and_counts.push((header, count));
     }
@@ -1174,6 +1201,7 @@ pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     let mut headers_and_counts = Vec::new();
 
     for path in inputs {
+        reject_bff(path, "intersect")?;
         let (header, count) = load_header_and_count(path)?;
         headers_and_counts.push((header, count));
     }
@@ -1323,26 +1351,27 @@ mod tests {
 
     #[test]
     fn test_bff_header_validation() {
-        // Valid
-        assert!(BffHeader::new(31, 15, 100).validate().is_ok());
+        // Valid 16-bit; 32-bit is a recognised width even if not yet decodable
+        assert!(BffHeader::new(16, 31, 15, 100).validate().is_ok());
+        assert!(BffHeader::new(32, 31, 15, 100).validate().is_ok());
 
         // Bad magic
-        let mut bad_magic = BffHeader::new(31, 15, 100);
+        let mut bad_magic = BffHeader::new(16, 31, 15, 100);
         bad_magic.magic = *b"XXXX";
         assert!(bad_magic.validate().is_err());
 
         // Bad version
-        let mut bad_ver = BffHeader::new(31, 15, 100);
+        let mut bad_ver = BffHeader::new(16, 31, 15, 100);
         bad_ver.format_version = 99;
         assert!(bad_ver.validate().is_err());
 
         // Unsupported filter width
-        let mut bad_bits = BffHeader::new(31, 15, 100);
-        bad_bits.filter_bits = 8;
+        let mut bad_bits = BffHeader::new(16, 31, 15, 100);
+        bad_bits.magic[3] = 8;
         assert!(bad_bits.validate().is_err());
 
         // k > 32 is rejected (BFF keys on raw u64 minimizers)
-        assert!(BffHeader::new(41, 21, 100).validate().is_err());
+        assert!(BffHeader::new(16, 41, 21, 100).validate().is_err());
     }
 
     #[test]
@@ -1351,7 +1380,7 @@ mod tests {
             .map(|i| i.wrapping_mul(0x9E3779B97F4A7C15))
             .collect();
         let filter = xorf::BinaryFuse16::try_from(&keys).unwrap();
-        let header = BffHeader::new(31, 15, keys.len() as u64);
+        let header = BffHeader::new(16, 31, 15, keys.len() as u64);
 
         let config = bincode::config::standard().with_fixed_int_encoding();
         let mut buf = Vec::new();

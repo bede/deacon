@@ -477,7 +477,7 @@ fn test_index_freeze_and_info() {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("test.fasta");
     let idx_path = temp_dir.path().join("test.idx");
-    let bff_path = temp_dir.path().join("test.bff");
+    let bff_path = temp_dir.path().join("test.pidx");
 
     create_test_fasta(&fasta_path, 1);
     build_index(&fasta_path, &idx_path);
@@ -522,7 +522,7 @@ fn test_index_freeze_filter_parity() {
     let temp_dir = tempdir().unwrap();
     let ref_path = temp_dir.path().join("ref.fasta");
     let idx_path = temp_dir.path().join("ref.idx");
-    let bff_path = temp_dir.path().join("ref.bff");
+    let bff_path = temp_dir.path().join("ref.pidx");
     let reads_path = temp_dir.path().join("reads.fasta");
     let out_exact = temp_dir.path().join("exact.out");
     let out_bff = temp_dir.path().join("bff.out");
@@ -572,7 +572,7 @@ fn test_index_freeze_rejects_high_k() {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("test.fasta");
     let idx_path = temp_dir.path().join("test.idx");
-    let bff_path = temp_dir.path().join("test.bff");
+    let bff_path = temp_dir.path().join("test.pidx");
 
     create_test_fasta(&fasta_path, 1);
 
@@ -612,7 +612,7 @@ fn test_index_dump_rejects_bff() {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("test.fasta");
     let idx_path = temp_dir.path().join("test.idx");
-    let bff_path = temp_dir.path().join("test.bff");
+    let bff_path = temp_dir.path().join("test.pidx");
 
     create_test_fasta(&fasta_path, 1);
     build_index(&fasta_path, &idx_path);

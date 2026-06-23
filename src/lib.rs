@@ -19,9 +19,8 @@ pub use filter::{FilterSummary, run as run_filter};
 #[cfg(feature = "fetch")]
 pub use index::fetch as index_fetch;
 pub use index::{
-    BFF_FORMAT_VERSION, BFF_MAGIC, BffHeader, INDEX_FORMAT_VERSION, IndexHeader, dump_minimizers,
-    load_bff, load_index_auto, load_index_from_path_auto, load_minimizers,
-    load_minimizers_from_path,
+    BFF_FORMAT_VERSION, BffHeader, INDEX_FORMAT_VERSION, IndexHeader, dump_minimizers, load_bff,
+    load_index_auto, load_index_from_path_auto, load_minimizers, load_minimizers_from_path,
 };
 #[cfg(feature = "cli")]
 pub use index::{
