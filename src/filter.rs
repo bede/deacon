@@ -410,7 +410,6 @@ impl FilterProcessor {
         let debug = self.debug;
         let kmer_length = self.kmer_length;
         // Match width and index variant once, outside the hot loop
-        use xorf::Filter as _;
         let minimizers = &self.buffers.minimizers;
         let (hit_count, hit_kmers) = match (minimizers, set) {
             (crate::MinimizerVec::U64(vec), crate::MinimizerSet::U64(hs)) => {
@@ -424,11 +423,11 @@ impl FilterProcessor {
                 }
                 (seen_hits.len(), hit_kmers)
             }
-            (crate::MinimizerVec::U64(vec), crate::MinimizerSet::Fuse16(f)) => {
+            (crate::MinimizerVec::U64(vec), crate::MinimizerSet::Fuse(f)) => {
                 let mut seen_hits = crate::RapidHashSet::<u64>::default();
                 let mut hit_kmers = Vec::new();
                 for &minimizer in vec {
-                    if f.filter.contains(&minimizer) && seen_hits.insert(minimizer) && debug {
+                    if f.contains(minimizer) && seen_hits.insert(minimizer) && debug {
                         let kmer = decode_u64(minimizer, kmer_length);
                         hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
                     }
@@ -509,7 +508,6 @@ impl FilterProcessor {
         let debug = self.debug;
         let kmer_length = self.kmer_length;
         // Match the index variant once, outside the hot loop
-        use xorf::Filter as _;
         let (hit_count, num_minimizers, hit_kmers) = match set {
             crate::MinimizerSet::U64(hs) => {
                 let mut seen_hits = crate::RapidHashSet::<u64>::default();
@@ -529,7 +527,7 @@ impl FilterProcessor {
                 }
                 (seen_hits.len(), num_minimizers, hit_kmers)
             }
-            crate::MinimizerSet::Fuse16(f) => {
+            crate::MinimizerSet::Fuse(f) => {
                 let mut seen_hits = crate::RapidHashSet::<u64>::default();
                 let mut hit_kmers = Vec::new();
                 let mut num_minimizers = 0;
@@ -538,8 +536,7 @@ impl FilterProcessor {
                     if let crate::MinimizerVec::U64(vec) = &self.buffers.minimizers {
                         num_minimizers += vec.len();
                         for &minimizer in vec {
-                            if f.filter.contains(&minimizer) && seen_hits.insert(minimizer) && debug
-                            {
+                            if f.contains(minimizer) && seen_hits.insert(minimizer) && debug {
                                 let kmer = decode_u64(minimizer, kmer_length);
                                 hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
                             }

@@ -95,7 +95,7 @@ pub struct BffHeader {
     pub format_version: u8,
     pub kmer_length: u8,
     pub window_size: u8,
-    /// Distinct minimizers inserted (not BinaryFuse16::len())
+    /// Distinct minimizers inserted (not BinaryFuse32::len())
     pub key_count: u64,
 }
 
@@ -281,18 +281,26 @@ pub fn load_bff(reader: &mut impl Read) -> Result<(crate::MinimizerSet, IndexHea
         decode_from_std_read(&mut reader, config).context("Failed to deserialise BFF header")?;
     header.validate()?;
 
-    // Only 16-bit filters are decodable for now; the magic still distinguishes 32-bit.
-    if header.filter_bits() != 16 {
-        return Err(anyhow::anyhow!(
-            "{}-bit binary fuse filter indexes are not yet supported",
-            header.filter_bits()
-        ));
-    }
-    let filter: xorf::BinaryFuse16 = bincode::decode_from_std_read(&mut reader, config)
-        .context("Failed to deserialise BFF filter, index may be corrupt")?;
+    // Decode the filter at the width recorded in the magic
+    let filter = match header.filter_bits() {
+        16 => crate::FuseFilterKind::Bits16(
+            bincode::decode_from_std_read(&mut reader, config)
+                .context("Failed to deserialise BFF filter, index may be corrupt")?,
+        ),
+        32 => crate::FuseFilterKind::Bits32(
+            bincode::decode_from_std_read(&mut reader, config)
+                .context("Failed to deserialise BFF filter, index may be corrupt")?,
+        ),
+        bits => {
+            return Err(anyhow::anyhow!(
+                "Unsupported BFF fingerprint width: {} bits (expected 16 or 32)",
+                bits
+            ));
+        }
+    };
 
     let index_header = IndexHeader::new(header.kmer_length, header.window_size);
-    let set = crate::MinimizerSet::Fuse16(crate::FuseFilter {
+    let set = crate::MinimizerSet::Fuse(crate::FuseFilter {
         filter,
         key_count: header.key_count as usize,
     });
@@ -366,7 +374,7 @@ pub fn dump_minimizers(
                     .context("Failed to write minimizer")?;
             }
         }
-        crate::MinimizerSet::Fuse16(_) => {
+        crate::MinimizerSet::Fuse(_) => {
             return Err(anyhow::anyhow!(
                 "Cannot serialise a BFF index in the exact index format"
             ));
@@ -438,7 +446,7 @@ pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
                 writeln!(writer, "{}", String::from_utf8_lossy(&sequence))?;
             }
         }
-        crate::MinimizerSet::Fuse16(_) => unreachable!("BFF dump is rejected by is_bff_file above"),
+        crate::MinimizerSet::Fuse(_) => unreachable!("BFF dump is rejected by is_bff_file above"),
     }
 
     writer.flush()?;
@@ -447,10 +455,17 @@ pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
 
 /// Freeze an exact index into a BFF (binary fuse filter) index (k<=32)
 #[cfg(feature = "cli")]
-pub fn freeze(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
+pub fn freeze(index_path: &Path, output_path: Option<&Path>, bits: u8) -> Result<()> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
     eprintln!("Deacon v{}; mode: freeze", version);
+
+    if !matches!(bits, 16 | 32) {
+        return Err(anyhow::anyhow!(
+            "Unsupported BFF fingerprint width: {} bits (expected 16 or 32)",
+            bits
+        ));
+    }
 
     reject_bff(index_path, "freeze")?;
 
@@ -466,21 +481,23 @@ pub fn freeze(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
                 header.kmer_length
             ));
         }
-        crate::MinimizerSet::Fuse16(_) => {
+        crate::MinimizerSet::Fuse(_) => {
             return Err(anyhow::anyhow!("Input is already a BFF index"));
         }
     };
 
     let key_count = keys.len();
     eprintln!(
-        "Building 16-bit binary fuse filter from {} minimizers (k={}, w={})",
-        key_count, header.kmer_length, header.window_size
+        "Building {}-bit binary fuse filter from {} minimizers (k={}, w={})",
+        bits, key_count, header.kmer_length, header.window_size
     );
 
-    let filter = xorf::BinaryFuse16::try_from(&keys)
-        .map_err(|e| anyhow::anyhow!("Failed to construct binary fuse filter: {}", e))?;
-
-    let bff_header = BffHeader::new(16, header.kmer_length, header.window_size, key_count as u64);
+    let bff_header = BffHeader::new(
+        bits,
+        header.kmer_length,
+        header.window_size,
+        key_count as u64,
+    );
 
     // Header via serde, filter via native bincode
     let mut writer: BufWriter<Box<dyn Write>> = match output_path {
@@ -492,8 +509,22 @@ pub fn freeze(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
     let config = bincode::config::standard().with_fixed_int_encoding();
     encode_into_std_write(&bff_header, &mut writer, config)
         .context("Failed to serialise BFF header")?;
-    let filter_bytes = bincode::encode_into_std_write(&filter, &mut writer, config)
-        .context("Failed to serialise BFF filter")?;
+
+    // Construct and serialise the filter at the requested fingerprint width
+    let filter_bytes = match bits {
+        16 => {
+            let filter = xorf::BinaryFuse16::try_from(&keys)
+                .map_err(|e| anyhow::anyhow!("Failed to construct binary fuse filter: {}", e))?;
+            bincode::encode_into_std_write(&filter, &mut writer, config)
+                .context("Failed to serialise BFF filter")?
+        }
+        _ => {
+            let filter = xorf::BinaryFuse32::try_from(&keys)
+                .map_err(|e| anyhow::anyhow!("Failed to construct binary fuse filter: {}", e))?;
+            bincode::encode_into_std_write(&filter, &mut writer, config)
+                .context("Failed to serialise BFF filter")?
+        }
+    };
     writer.flush()?;
 
     let bits_per_key = if key_count > 0 {
@@ -501,9 +532,10 @@ pub fn freeze(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
     } else {
         0.0
     };
+    let fp_pct = 100.0 / 2f64.powi(bits as i32);
     eprintln!(
-        "Wrote BFF: {} keys, {} filter bytes ({:.2} bits/key); false-positive rate ~2^-16 (~0.0015%)",
-        key_count, filter_bytes, bits_per_key
+        "Wrote BFF: {} keys, {} filter bytes ({:.2} bits/key); false-positive rate ~2^-{} (~{:.2e}%)",
+        key_count, filter_bytes, bits_per_key, bits, fp_pct
     );
     eprintln!("Completed in {:.2?}", start_time.elapsed());
     Ok(())
@@ -919,7 +951,7 @@ fn stream_diff_fastx(
             )
         }
         // load_minimizers rejects BFF files, so this is unreachable
-        crate::MinimizerSet::Fuse16(_) => unreachable!("diff does not operate on BFF indexes"),
+        crate::MinimizerSet::Fuse(_) => unreachable!("diff does not operate on BFF indexes"),
     };
 
     reader.process_parallel(&mut processor, threads as usize)?;
@@ -1351,7 +1383,7 @@ mod tests {
 
     #[test]
     fn test_bff_header_validation() {
-        // Valid 16-bit; 32-bit is a recognised width even if not yet decodable
+        // Both 16- and 32-bit are valid widths
         assert!(BffHeader::new(16, 31, 15, 100).validate().is_ok());
         assert!(BffHeader::new(32, 31, 15, 100).validate().is_ok());
 
@@ -1379,8 +1411,8 @@ mod tests {
         let keys: Vec<u64> = (0..10_000u64)
             .map(|i| i.wrapping_mul(0x9E3779B97F4A7C15))
             .collect();
-        let filter = xorf::BinaryFuse16::try_from(&keys).unwrap();
-        let header = BffHeader::new(16, 31, 15, keys.len() as u64);
+        let filter = xorf::BinaryFuse32::try_from(&keys).unwrap();
+        let header = BffHeader::new(32, 31, 15, keys.len() as u64);
 
         let config = bincode::config::standard().with_fixed_int_encoding();
         let mut buf = Vec::new();
@@ -1401,7 +1433,7 @@ mod tests {
         // auto-detect dispatches to BFF
         let mut cursor2 = std::io::Cursor::new(&buf);
         let (set2, _) = load_index_auto(&mut cursor2).unwrap();
-        assert!(matches!(set2, crate::MinimizerSet::Fuse16(_)));
+        assert!(matches!(set2, crate::MinimizerSet::Fuse(_)));
     }
 }
 

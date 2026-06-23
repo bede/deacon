@@ -220,6 +220,10 @@ enum IndexCommands {
         /// Path to output file (stdout if not specified)
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
+
+        /// Fingerprint width in bits: 32 (FP ~2^-32, ~36 bits/key) or 16 (FP ~2^-16, ~18 bits/key)
+        #[arg(short = 'b', long = "bits", default_value_t = 32, value_parser = parse_fingerprint_bits)]
+        bits: u8,
     },
     /// Fetch a pre-built index from remote storage
     #[cfg(feature = "fetch")]
@@ -248,6 +252,15 @@ enum Message {
     Command(Commands),
     /// server -> client
     Done,
+}
+
+/// Parse and validate the BFF fingerprint width (16 or 32 bits)
+fn parse_fingerprint_bits(s: &str) -> Result<u8, String> {
+    match s {
+        "16" => Ok(16),
+        "32" => Ok(32),
+        _ => Err(format!("expected 16 or 32, got `{s}`")),
+    }
 }
 
 fn print_citation() {
@@ -419,8 +432,12 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             IndexCommands::Dump { index, output } => {
                 index_dump(index, output.as_deref()).context("Failed to run index dump command")?;
             }
-            IndexCommands::Freeze { index, output } => {
-                index_freeze(index, output.as_deref())
+            IndexCommands::Freeze {
+                index,
+                output,
+                bits,
+            } => {
+                index_freeze(index, output.as_deref(), *bits)
                     .context("Failed to run index freeze command")?;
             }
         },

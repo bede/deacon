@@ -51,18 +51,44 @@ impl BuildHasher for FixedRapidHasher {
 /// RapidHashSet using rapidhash with fixed seed for fast init
 pub type RapidHashSet<T> = HashSet<T, FixedRapidHasher>;
 
-/// 16-bit binary fuse filter index (BFF): ~18 bits/key, FP rate ~2^-16, no false negatives, k<=32
+/// Binary fuse filter (BFF) index: no false negatives, k<=32.
+/// 16-bit fingerprints use ~18 bits/key (FP rate ~2^-16); 32-bit use ~36 bits/key (FP rate ~2^-32).
+pub enum FuseFilterKind {
+    Bits16(xorf::BinaryFuse16),
+    Bits32(xorf::BinaryFuse32),
+}
+
 pub struct FuseFilter {
-    pub filter: xorf::BinaryFuse16,
-    /// Distinct minimizers inserted (not BinaryFuse16::len(), which is the fingerprint count)
+    pub filter: FuseFilterKind,
+    /// Distinct minimizers inserted (not the filter's fingerprint count)
     pub key_count: usize,
+}
+
+impl FuseFilter {
+    /// Fingerprint width in bits (16 or 32)
+    pub fn filter_bits(&self) -> u8 {
+        match &self.filter {
+            FuseFilterKind::Bits16(_) => 16,
+            FuseFilterKind::Bits32(_) => 32,
+        }
+    }
+
+    /// Test membership (may report false positives)
+    #[inline]
+    pub fn contains(&self, minimizer: u64) -> bool {
+        use xorf::Filter;
+        match &self.filter {
+            FuseFilterKind::Bits16(f) => f.contains(&minimizer),
+            FuseFilterKind::Bits32(f) => f.contains(&minimizer),
+        }
+    }
 }
 
 /// Zero-cost (hopefully?) abstraction over u64 and u128 minimizer sets and the BFF filter
 pub enum MinimizerSet {
     U64(RapidHashSet<u64>),
     U128(RapidHashSet<u128>),
-    Fuse16(FuseFilter),
+    Fuse(FuseFilter),
 }
 
 impl MinimizerSet {
@@ -70,22 +96,21 @@ impl MinimizerSet {
         match self {
             MinimizerSet::U64(set) => set.len(),
             MinimizerSet::U128(set) => set.len(),
-            MinimizerSet::Fuse16(f) => f.key_count,
+            MinimizerSet::Fuse(f) => f.key_count,
         }
     }
 
     pub fn is_u64(&self) -> bool {
         // BFF is k<=32, hence u64
-        matches!(self, MinimizerSet::U64(_) | MinimizerSet::Fuse16(_))
+        matches!(self, MinimizerSet::U64(_) | MinimizerSet::Fuse(_))
     }
 
     /// Test u64 membership (may report false positives for BFF)
     #[inline]
     pub fn contains_u64(&self, minimizer: u64) -> bool {
-        use xorf::Filter;
         match self {
             MinimizerSet::U64(set) => set.contains(&minimizer),
-            MinimizerSet::Fuse16(f) => f.filter.contains(&minimizer),
+            MinimizerSet::Fuse(f) => f.contains(minimizer),
             MinimizerSet::U128(_) => unreachable!("u64 minimizer queried against a u128 set"),
         }
     }
@@ -96,7 +121,7 @@ impl MinimizerSet {
         match self {
             MinimizerSet::U128(set) => set.contains(&minimizer),
             MinimizerSet::U64(_) => unreachable!("u128 minimizer queried against a u64 set"),
-            MinimizerSet::Fuse16(_) => {
+            MinimizerSet::Fuse(_) => {
                 unreachable!("u128 minimizer queried against a BFF (k <= 32)")
             }
         }
@@ -111,7 +136,7 @@ impl MinimizerSet {
             (MinimizerSet::U128(self_set), MinimizerSet::U128(other_set)) => {
                 self_set.extend(other_set);
             }
-            (MinimizerSet::Fuse16(_), _) | (_, MinimizerSet::Fuse16(_)) => {
+            (MinimizerSet::Fuse(_), _) | (_, MinimizerSet::Fuse(_)) => {
                 panic!("Set algebra is not supported on BFF indexes; use an exact index")
             }
             _ => panic!("Cannot extend U64 set with U128 set or vice versa"),
@@ -131,7 +156,7 @@ impl MinimizerSet {
                     self_set.remove(val);
                 }
             }
-            (MinimizerSet::Fuse16(_), _) | (_, MinimizerSet::Fuse16(_)) => {
+            (MinimizerSet::Fuse(_), _) | (_, MinimizerSet::Fuse(_)) => {
                 panic!("Set algebra is not supported on BFF indexes; use an exact index")
             }
             _ => panic!("Cannot remove U128 minimizers from U64 set or vice versa"),
@@ -147,7 +172,7 @@ impl MinimizerSet {
             (MinimizerSet::U128(self_set), MinimizerSet::U128(other_set)) => {
                 self_set.retain(|val| other_set.contains(val));
             }
-            (MinimizerSet::Fuse16(_), _) | (_, MinimizerSet::Fuse16(_)) => {
+            (MinimizerSet::Fuse(_), _) | (_, MinimizerSet::Fuse(_)) => {
                 panic!("Set algebra is not supported on BFF indexes; use an exact index")
             }
             _ => panic!("Cannot intersect U64 set with U128 set or vice versa"),
