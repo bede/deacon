@@ -30,6 +30,12 @@ use indicatif::ProgressBar;
 /// Index format version
 pub const INDEX_FORMAT_VERSION: u8 = 3;
 
+/// BFF index magic bytes
+pub const BFF_MAGIC: [u8; 4] = *b"DBFF";
+
+/// BFF format version
+pub const BFF_FORMAT_VERSION: u8 = 1;
+
 /// Serialisable header for the index file
 #[derive(Serialize, Deserialize, Debug)]
 pub struct IndexHeader {
@@ -83,6 +89,60 @@ impl IndexHeader {
     }
 }
 
+/// Serialisable header for the BFF index file
+#[derive(Serialize, Deserialize, Debug)]
+pub struct BffHeader {
+    pub magic: [u8; 4],
+    pub format_version: u8,
+    /// Fingerprint width in bits (always 16)
+    pub filter_bits: u8,
+    pub kmer_length: u8,
+    pub window_size: u8,
+    /// Distinct minimizers inserted (not BinaryFuse16::len())
+    pub key_count: u64,
+}
+
+impl BffHeader {
+    pub fn new(kmer_length: u8, window_size: u8, key_count: u64) -> Self {
+        BffHeader {
+            magic: BFF_MAGIC,
+            format_version: BFF_FORMAT_VERSION,
+            filter_bits: 16,
+            kmer_length,
+            window_size,
+            key_count,
+        }
+    }
+
+    /// Validate BFF header
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.magic != BFF_MAGIC {
+            return Err(anyhow::anyhow!("Not a BFF index (bad magic bytes)"));
+        }
+        if self.format_version != BFF_FORMAT_VERSION {
+            return Err(anyhow::anyhow!(
+                "Unsupported BFF format version: {}",
+                self.format_version
+            ));
+        }
+        if self.filter_bits != 16 {
+            return Err(anyhow::anyhow!(
+                "Unsupported BFF filter width: {} bits (only 16 is supported)",
+                self.filter_bits
+            ));
+        }
+        // BFF keys are raw u64 minimizers
+        if self.kmer_length > 32 {
+            return Err(anyhow::anyhow!(
+                "Invalid BFF k-mer length: k={} (BFF supports k <= 32)",
+                self.kmer_length
+            ));
+        }
+        // Reuse exact k/w constraints
+        IndexHeader::new(self.kmer_length, self.window_size).validate()
+    }
+}
+
 /// Load just the header and count from an index file
 pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, usize)> {
     let file = std::fs::File::open(path)
@@ -111,7 +171,8 @@ pub fn load_minimizers_cached(
     path: &Path,
 ) -> Result<(&'static crate::MinimizerSet, &'static IndexHeader)> {
     let (p, minimizers, header) = INDEX.get_or_init(|| {
-        let (m, h) = load_minimizers_from_path(path).unwrap();
+        // Auto-detect exact vs BFF format
+        let (m, h) = load_index_from_path_auto(path).unwrap();
         (path.to_owned(), m, h)
     });
     assert_eq!(
@@ -209,6 +270,49 @@ pub fn load_minimizers_from_path(path: &Path) -> Result<(crate::MinimizerSet, In
     load_minimizers(&mut file)
 }
 
+/// Load a BFF index from a reader (synthesizes an IndexHeader from k/w)
+pub fn load_bff(reader: &mut impl Read) -> Result<(crate::MinimizerSet, IndexHeader)> {
+    let mut reader = BufReader::with_capacity(1 << 20, reader);
+    let config = bincode::config::standard().with_fixed_int_encoding();
+
+    // Header via serde, filter via native bincode
+    let header: BffHeader =
+        decode_from_std_read(&mut reader, config).context("Failed to deserialise BFF header")?;
+    header.validate()?;
+
+    let filter: xorf::BinaryFuse16 = bincode::decode_from_std_read(&mut reader, config)
+        .context("Failed to deserialise BFF filter, index may be corrupt")?;
+
+    let index_header = IndexHeader::new(header.kmer_length, header.window_size);
+    let set = crate::MinimizerSet::Fuse16(crate::FuseFilter {
+        filter,
+        key_count: header.key_count as usize,
+    });
+    Ok((set, index_header))
+}
+
+/// Load an index from a reader, auto-detecting exact vs BFF format from the magic bytes
+pub fn load_index_auto(reader: &mut impl Read) -> Result<(crate::MinimizerSet, IndexHeader)> {
+    let mut magic = [0u8; 4];
+    reader
+        .read_exact(&mut magic)
+        .context("Failed to read index header, file may be empty or truncated")?;
+    // Re-chain the consumed magic bytes ahead of the stream
+    let mut combined = (&magic[..]).chain(reader);
+    if magic == BFF_MAGIC {
+        load_bff(&mut combined)
+    } else {
+        load_minimizers(&mut combined)
+    }
+}
+
+/// Load an index from a path, auto-detecting exact vs BFF format
+pub fn load_index_from_path_auto(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)> {
+    let mut file =
+        std::fs::File::open(path).context(format!("Failed to open index file {:?}", path))?;
+    load_index_auto(&mut file)
+}
+
 /// Helper function to write minimizers to output file or stdout
 pub fn dump_minimizers(
     minimizers: &crate::MinimizerSet,
@@ -254,13 +358,34 @@ pub fn dump_minimizers(
                     .context("Failed to write minimizer")?;
             }
         }
+        crate::MinimizerSet::Fuse16(_) => {
+            return Err(anyhow::anyhow!(
+                "Cannot serialise a BFF index in the exact index format"
+            ));
+        }
     }
     Ok(())
 }
 
 /// Dump indexed minimizers to FASTA
+/// Detect a BFF index by its magic bytes
+#[cfg(feature = "cli")]
+fn is_bff_file(path: &Path) -> bool {
+    let mut magic = [0u8; 4];
+    File::open(path)
+        .ok()
+        .map(|mut f| f.read_exact(&mut magic).is_ok() && magic == BFF_MAGIC)
+        .unwrap_or(false)
+}
+
 #[cfg(feature = "cli")]
 pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
+    if is_bff_file(index_path) {
+        return Err(anyhow::anyhow!(
+            "Cannot dump a BFF index: keys are not recoverable from a binary fuse filter"
+        ));
+    }
+
     // Load the index
     let (minimizers, header) =
         load_minimizers_from_path(index_path).context("Failed to load index")?;
@@ -292,9 +417,72 @@ pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
                 writeln!(writer, "{}", String::from_utf8_lossy(&sequence))?;
             }
         }
+        crate::MinimizerSet::Fuse16(_) => unreachable!("BFF dump is rejected by is_bff_file above"),
     }
 
     writer.flush()?;
+    Ok(())
+}
+
+/// Freeze an exact index into a BFF (binary fuse filter) index (k<=32)
+#[cfg(feature = "cli")]
+pub fn freeze(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
+    let start_time = Instant::now();
+    let version: String = env!("CARGO_PKG_VERSION").to_string();
+    eprintln!("Deacon v{}; mode: freeze", version);
+
+    let (minimizers, header) =
+        load_minimizers_from_path(index_path).context("Failed to load index")?;
+
+    // Collect unique u64 keys (fuse construction requires uniqueness)
+    let keys: Vec<u64> = match minimizers {
+        crate::MinimizerSet::U64(set) => set.into_iter().collect(),
+        crate::MinimizerSet::U128(_) => {
+            return Err(anyhow::anyhow!(
+                "BFF supports k <= 32 (u64 minimizers); got k={} (u128). Build a k<=32 index first.",
+                header.kmer_length
+            ));
+        }
+        crate::MinimizerSet::Fuse16(_) => {
+            return Err(anyhow::anyhow!("Input is already a BFF index"));
+        }
+    };
+
+    let key_count = keys.len();
+    eprintln!(
+        "Building 16-bit binary fuse filter from {} minimizers (k={}, w={})",
+        key_count, header.kmer_length, header.window_size
+    );
+
+    let filter = xorf::BinaryFuse16::try_from(&keys)
+        .map_err(|e| anyhow::anyhow!("Failed to construct binary fuse filter: {}", e))?;
+
+    let bff_header = BffHeader::new(header.kmer_length, header.window_size, key_count as u64);
+
+    // Header via serde, filter via native bincode
+    let mut writer: BufWriter<Box<dyn Write>> = match output_path {
+        Some(path) if path.as_os_str() != "-" => BufWriter::new(Box::new(
+            File::create(path).context("Failed to create output file")?,
+        )),
+        _ => BufWriter::new(Box::new(io::stdout())),
+    };
+    let config = bincode::config::standard().with_fixed_int_encoding();
+    encode_into_std_write(&bff_header, &mut writer, config)
+        .context("Failed to serialise BFF header")?;
+    let filter_bytes = bincode::encode_into_std_write(&filter, &mut writer, config)
+        .context("Failed to serialise BFF filter")?;
+    writer.flush()?;
+
+    let bits_per_key = if key_count > 0 {
+        (filter_bytes as f64 * 8.0) / key_count as f64
+    } else {
+        0.0
+    };
+    eprintln!(
+        "Wrote BFF: {} keys, {} filter bytes ({:.2} bits/key); false-positive rate ~2^-16 (~0.0015%)",
+        key_count, filter_bytes, bits_per_key
+    );
+    eprintln!("Completed in {:.2?}", start_time.elapsed());
     Ok(())
 }
 
@@ -707,6 +895,8 @@ fn stream_diff_fastx(
                 Some(arc),
             )
         }
+        // load_minimizers rejects BFF files, so this is unreachable
+        crate::MinimizerSet::Fuse16(_) => unreachable!("diff does not operate on BFF indexes"),
     };
 
     reader.process_parallel(&mut processor, threads as usize)?;
@@ -843,15 +1033,47 @@ pub fn diff(
 pub fn info(index_path: &Path) -> Result<()> {
     let start_time = Instant::now();
 
-    // Load index file
-    let (minimizers, header) = load_minimizers_from_path(index_path)?;
+    if is_bff_file(index_path) {
+        let file = File::open(index_path)
+            .context(format!("Failed to open index file {:?}", index_path))?;
+        let mut reader = BufReader::new(file);
+        let config = bincode::config::standard().with_fixed_int_encoding();
+        let header: BffHeader = decode_from_std_read(&mut reader, config)
+            .context("Failed to deserialise BFF header")?;
+        header.validate()?;
 
-    // Show index info
-    eprintln!("Index information:");
-    eprintln!("  Format version: {}", header.format_version);
-    eprintln!("  K-mer length (k): {}", header.kmer_length());
-    eprintln!("  Window size (w): {}", header.window_size());
-    eprintln!("  Distinct minimizer count: {}", minimizers.len());
+        let file_size = std::fs::metadata(index_path).map(|m| m.len()).unwrap_or(0);
+        let bits_per_key = if header.key_count > 0 {
+            (file_size as f64 * 8.0) / header.key_count as f64
+        } else {
+            0.0
+        };
+
+        eprintln!("Index information:");
+        eprintln!(
+            "  Format: BFF (binary fuse filter, {}-bit fingerprints)",
+            header.filter_bits
+        );
+        eprintln!("  Format version: {}", header.format_version);
+        eprintln!("  K-mer length (k): {}", header.kmer_length);
+        eprintln!("  Window size (w): {}", header.window_size);
+        eprintln!("  Key count: {}", header.key_count);
+        eprintln!(
+            "  File size: {} bytes (~{:.2} bits/key)",
+            file_size, bits_per_key
+        );
+        eprintln!("  False-positive rate: ~2^-16 (~0.0015%)");
+    } else {
+        // Load exact index file
+        let (minimizers, header) = load_minimizers_from_path(index_path)?;
+
+        eprintln!("Index information:");
+        eprintln!("  Format: exact (minimizer set)");
+        eprintln!("  Format version: {}", header.format_version);
+        eprintln!("  K-mer length (k): {}", header.kmer_length());
+        eprintln!("  Window size (w): {}", header.window_size());
+        eprintln!("  Distinct minimizer count: {}", minimizers.len());
+    }
 
     let total_time = start_time.elapsed();
     eprintln!("Loaded index info in {:.2?}", total_time);
@@ -1097,6 +1319,60 @@ mod tests {
             window_size: 15,
         };
         assert!(invalid_even.validate().is_err()); // k=30 is even
+    }
+
+    #[test]
+    fn test_bff_header_validation() {
+        // Valid
+        assert!(BffHeader::new(31, 15, 100).validate().is_ok());
+
+        // Bad magic
+        let mut bad_magic = BffHeader::new(31, 15, 100);
+        bad_magic.magic = *b"XXXX";
+        assert!(bad_magic.validate().is_err());
+
+        // Bad version
+        let mut bad_ver = BffHeader::new(31, 15, 100);
+        bad_ver.format_version = 99;
+        assert!(bad_ver.validate().is_err());
+
+        // Unsupported filter width
+        let mut bad_bits = BffHeader::new(31, 15, 100);
+        bad_bits.filter_bits = 8;
+        assert!(bad_bits.validate().is_err());
+
+        // k > 32 is rejected (BFF keys on raw u64 minimizers)
+        assert!(BffHeader::new(41, 21, 100).validate().is_err());
+    }
+
+    #[test]
+    fn test_bff_roundtrip_membership() {
+        let keys: Vec<u64> = (0..10_000u64)
+            .map(|i| i.wrapping_mul(0x9E3779B97F4A7C15))
+            .collect();
+        let filter = xorf::BinaryFuse16::try_from(&keys).unwrap();
+        let header = BffHeader::new(31, 15, keys.len() as u64);
+
+        let config = bincode::config::standard().with_fixed_int_encoding();
+        let mut buf = Vec::new();
+        encode_into_std_write(&header, &mut buf, config).unwrap();
+        bincode::encode_into_std_write(&filter, &mut buf, config).unwrap();
+
+        let mut cursor = std::io::Cursor::new(&buf);
+        let (set, idx_header) = load_bff(&mut cursor).unwrap();
+        assert_eq!(idx_header.kmer_length(), 31);
+        assert_eq!(idx_header.window_size(), 15);
+        assert_eq!(set.len(), keys.len());
+        assert!(set.is_u64());
+        // No false negatives
+        for &k in &keys {
+            assert!(set.contains_u64(k));
+        }
+
+        // auto-detect dispatches to BFF
+        let mut cursor2 = std::io::Cursor::new(&buf);
+        let (set2, _) = load_index_auto(&mut cursor2).unwrap();
+        assert!(matches!(set2, crate::MinimizerSet::Fuse16(_)));
     }
 }
 

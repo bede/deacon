@@ -29,8 +29,8 @@ fn main() {
     let t0 = Instant::now();
     let index_data = fs::read(index_path).expect("failed to read index file");
     let mut cursor = Cursor::new(&index_data);
-    let (minimizers, header) =
-        deacon::load_minimizers(&mut cursor).expect("failed to parse index");
+    // Auto-detect exact vs BFF format
+    let (minimizers, header) = deacon::load_index_auto(&mut cursor).expect("failed to parse index");
     eprintln!(
         "Index loaded in {:.2}s (k={}, w={}, {} minimizers)",
         t0.elapsed().as_secs_f64(),
@@ -58,7 +58,17 @@ fn main() {
 
     for i in 0..iterations {
         let t = Instant::now();
-        let stats = run_filter(&reads_data, chunk_size, &minimizers, k, w, true, 1, 0.0, gz_input);
+        let stats = run_filter(
+            &reads_data,
+            chunk_size,
+            &minimizers,
+            k,
+            w,
+            true,
+            1,
+            0.0,
+            gz_input,
+        );
         let secs = t.elapsed().as_secs_f64();
         let throughput = reads_mb / secs;
         times.push(secs);
@@ -537,45 +547,44 @@ impl SeqChunkParser {
         let mut records = Vec::new();
 
         loop {
-            let search_from =
-                if self.record_start == 0 && self.fasta_header.is_none() && !self.pending.is_empty()
-                {
-                    match self.pending.iter().position(|&b| b == b'>') {
-                        Some(pos) => pos,
-                        None => break,
-                    }
-                } else if self.fasta_header.is_some() {
-                    let start = self.record_start;
-                    let found = {
-                        let mut pos = start;
-                        loop {
-                            match memchr(b'>', &self.pending[pos..]) {
-                                Some(rel) => {
-                                    let abs = pos + rel;
-                                    if abs > 0 && self.pending[abs - 1] == b'\n' {
-                                        break Some(abs);
-                                    } else if abs == start
-                                        && (self.fasta_seq.len() > 0 || abs == 0)
-                                    {
-                                        break Some(abs);
-                                    } else {
-                                        pos = abs + 1;
-                                    }
+            let search_from = if self.record_start == 0
+                && self.fasta_header.is_none()
+                && !self.pending.is_empty()
+            {
+                match self.pending.iter().position(|&b| b == b'>') {
+                    Some(pos) => pos,
+                    None => break,
+                }
+            } else if self.fasta_header.is_some() {
+                let start = self.record_start;
+                let found = {
+                    let mut pos = start;
+                    loop {
+                        match memchr(b'>', &self.pending[pos..]) {
+                            Some(rel) => {
+                                let abs = pos + rel;
+                                if abs > 0 && self.pending[abs - 1] == b'\n' {
+                                    break Some(abs);
+                                } else if abs == start && (self.fasta_seq.len() > 0 || abs == 0) {
+                                    break Some(abs);
+                                } else {
+                                    pos = abs + 1;
                                 }
-                                None => break None,
                             }
-                        }
-                    };
-                    match found {
-                        Some(pos) => pos,
-                        None => {
-                            self.accumulate_fasta_seq();
-                            break;
+                            None => break None,
                         }
                     }
-                } else {
-                    break;
                 };
+                match found {
+                    Some(pos) => pos,
+                    None => {
+                        self.accumulate_fasta_seq();
+                        break;
+                    }
+                }
+            } else {
+                break;
+            };
 
             if self.fasta_header.is_some() {
                 let end = if search_from > self.record_start {
@@ -641,21 +650,26 @@ impl SeqChunkParser {
     }
 }
 
-fn count_hits_into(minimizers: &MinimizerVec, set: &MinimizerSet, seen: &mut MinimizerSet) -> usize {
-    match (minimizers, set, seen) {
-        (MinimizerVec::U64(vec), MinimizerSet::U64(s), MinimizerSet::U64(seen)) => {
+fn count_hits_into(
+    minimizers: &MinimizerVec,
+    set: &MinimizerSet,
+    seen: &mut MinimizerSet,
+) -> usize {
+    // Match read-side width; query via contains_u64/u128 (exact or BFF)
+    match (minimizers, seen) {
+        (MinimizerVec::U64(vec), MinimizerSet::U64(seen)) => {
             seen.clear();
             for &m in vec {
-                if s.contains(&m) {
+                if set.contains_u64(m) {
                     seen.insert(m);
                 }
             }
             seen.len()
         }
-        (MinimizerVec::U128(vec), MinimizerSet::U128(s), MinimizerSet::U128(seen)) => {
+        (MinimizerVec::U128(vec), MinimizerSet::U128(seen)) => {
             seen.clear();
             for &m in vec {
-                if s.contains(&m) {
+                if set.contains_u128(m) {
                     seen.insert(m);
                 }
             }

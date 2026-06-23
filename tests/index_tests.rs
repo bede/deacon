@@ -471,3 +471,172 @@ fn test_index_truncated() {
         stderr
     );
 }
+
+#[test]
+fn test_index_freeze_and_info() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("test.fasta");
+    let idx_path = temp_dir.path().join("test.idx");
+    let bff_path = temp_dir.path().join("test.bff");
+
+    create_test_fasta(&fasta_path, 1);
+    build_index(&fasta_path, &idx_path);
+
+    // Convert exact index -> BFF
+    cargo::cargo_bin_cmd!("deacon")
+        .arg("index")
+        .arg("freeze")
+        .arg(&idx_path)
+        .arg("-o")
+        .arg(&bff_path)
+        .assert()
+        .success();
+    assert!(bff_path.exists());
+    assert!(fs::metadata(&bff_path).unwrap().len() > 0);
+
+    // info should report the BFF format and the correct k/w
+    let output = cargo::cargo_bin_cmd!("deacon")
+        .arg("index")
+        .arg("info")
+        .arg(&bff_path)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("BFF (binary fuse filter"),
+        "info should report BFF format. Got: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("K-mer length (k): 31"),
+        "info should report k=31. Got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_index_freeze_filter_parity() {
+    // The BFF index should produce identical filter output to the exact index for typical inputs
+    // (false-positive rate ~2^-16 means no divergence on a small read set).
+    let temp_dir = tempdir().unwrap();
+    let ref_path = temp_dir.path().join("ref.fasta");
+    let idx_path = temp_dir.path().join("ref.idx");
+    let bff_path = temp_dir.path().join("ref.bff");
+    let reads_path = temp_dir.path().join("reads.fasta");
+    let out_exact = temp_dir.path().join("exact.out");
+    let out_bff = temp_dir.path().join("bff.out");
+
+    create_test_fasta(&ref_path, 1);
+    build_index(&ref_path, &idx_path);
+
+    cargo::cargo_bin_cmd!("deacon")
+        .arg("index")
+        .arg("freeze")
+        .arg(&idx_path)
+        .arg("-o")
+        .arg(&bff_path)
+        .assert()
+        .success();
+
+    // A mix of matching and non-matching reads
+    fs::write(
+        &reads_path,
+        ">r1\nACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT\n>r2\nTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\n",
+    )
+    .unwrap();
+
+    for (idx, out) in [(&idx_path, &out_exact), (&bff_path, &out_bff)] {
+        cargo::cargo_bin_cmd!("deacon")
+            .arg("filter")
+            .arg("-t")
+            .arg("1")
+            .arg(idx)
+            .arg(&reads_path)
+            .arg("-o")
+            .arg(out)
+            .assert()
+            .success();
+    }
+
+    let exact = fs::read(&out_exact).unwrap();
+    let bff = fs::read(&out_bff).unwrap();
+    assert_eq!(
+        exact, bff,
+        "BFF filter output should match exact index output"
+    );
+}
+
+#[test]
+fn test_index_freeze_rejects_high_k() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("test.fasta");
+    let idx_path = temp_dir.path().join("test.idx");
+    let bff_path = temp_dir.path().join("test.bff");
+
+    create_test_fasta(&fasta_path, 1);
+
+    // Build a k=41 (u128) index, which BFF cannot represent.
+    cargo::cargo_bin_cmd!("deacon")
+        .arg("index")
+        .arg("build")
+        .arg(&fasta_path)
+        .arg("-k")
+        .arg("41")
+        .arg("-w")
+        .arg("21")
+        .arg("-o")
+        .arg(&idx_path)
+        .assert()
+        .success();
+
+    let output = cargo::cargo_bin_cmd!("deacon")
+        .arg("index")
+        .arg("freeze")
+        .arg(&idx_path)
+        .arg("-o")
+        .arg(&bff_path)
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "freeze on k>32 should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("BFF supports k <= 32"),
+        "Error should explain the k<=32 restriction. Got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_index_dump_rejects_bff() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("test.fasta");
+    let idx_path = temp_dir.path().join("test.idx");
+    let bff_path = temp_dir.path().join("test.bff");
+
+    create_test_fasta(&fasta_path, 1);
+    build_index(&fasta_path, &idx_path);
+
+    cargo::cargo_bin_cmd!("deacon")
+        .arg("index")
+        .arg("freeze")
+        .arg(&idx_path)
+        .arg("-o")
+        .arg(&bff_path)
+        .assert()
+        .success();
+
+    let output = cargo::cargo_bin_cmd!("deacon")
+        .arg("index")
+        .arg("dump")
+        .arg(&bff_path)
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "dump on a BFF index should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Cannot dump a BFF index"),
+        "Error should explain BFF cannot be dumped. Got: {}",
+        stderr
+    );
+}

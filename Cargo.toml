@@ -21,6 +21,9 @@ thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 bincode = { version = "2.0", features = ["serde"] }
 rapidhash = "4.1.0"
+# Binary fuse filter for the memory-efficient probabilistic (BFF) index format.
+# Native bincode Encode/Decode (not serde) to avoid serde(flatten); wasm-safe (libm, no rand).
+xorf = { version = "0.12", default-features = false, features = ["binary-fuse", "bincode"] }
 
 packed-seq = "4.4.2"
 simd-minimizers = "2.3.1"

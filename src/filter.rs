@@ -406,13 +406,14 @@ impl FilterProcessor {
         let minimizers = &self.buffers.minimizers;
         let num_minimizers = minimizers.len();
 
-        // Count distinct minimizer hits based on variant
-        let (hit_count, hit_kmers) = match (minimizers, self.minimizers) {
-            (crate::MinimizerVec::U64(vec), MinimizerSet::U64(set)) => {
+        // Count distinct minimizer hits (works for exact or BFF index)
+        let set = self.minimizers;
+        let (hit_count, hit_kmers) = match minimizers {
+            crate::MinimizerVec::U64(vec) => {
                 let mut seen_hits = crate::RapidHashSet::default();
                 let mut hit_kmers = Vec::new();
                 for &minimizer in vec {
-                    if set.contains(&minimizer) && seen_hits.insert(minimizer) {
+                    if set.contains_u64(minimizer) && seen_hits.insert(minimizer) {
                         if self.debug {
                             let kmer = decode_u64(minimizer, self.kmer_length);
                             hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
@@ -421,11 +422,11 @@ impl FilterProcessor {
                 }
                 (seen_hits.len(), hit_kmers)
             }
-            (crate::MinimizerVec::U128(vec), MinimizerSet::U128(set)) => {
+            crate::MinimizerVec::U128(vec) => {
                 let mut seen_hits = crate::RapidHashSet::default();
                 let mut hit_kmers = Vec::new();
                 for &minimizer in vec {
-                    if set.contains(&minimizer) && seen_hits.insert(minimizer) {
+                    if set.contains_u128(minimizer) && seen_hits.insert(minimizer) {
                         if self.debug {
                             let kmer = decode_u128(minimizer, self.kmer_length);
                             hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
@@ -434,7 +435,6 @@ impl FilterProcessor {
                 }
                 (seen_hits.len(), hit_kmers)
             }
-            _ => panic!("Mismatch between MinimizerVec and MinimizerSet types"),
         };
 
         (
@@ -492,50 +492,48 @@ impl FilterProcessor {
     }
 
     fn should_keep_pair(&mut self, seq1: &[u8], seq2: &[u8]) -> (bool, usize, usize, Vec<String>) {
-        // Process both sequences and count distinct hits
-        let (hit_count, num_minimizers, hit_kmers) = match self.minimizers {
-            MinimizerSet::U64(set) => {
-                let mut seen_hits = crate::RapidHashSet::default();
-                let mut hit_kmers = Vec::new();
-                let mut num_minimizers = 0;
+        // Process both sequences and count distinct hits (works for exact or BFF index)
+        let set = self.minimizers;
+        let (hit_count, num_minimizers, hit_kmers) = if set.is_u64() {
+            let mut seen_hits: crate::RapidHashSet<u64> = crate::RapidHashSet::default();
+            let mut hit_kmers = Vec::new();
+            let mut num_minimizers = 0;
 
-                for seq in [seq1, seq2] {
-                    self.get_minimizer_positions_and_values(seq);
-                    if let crate::MinimizerVec::U64(vec) = &self.buffers.minimizers {
-                        num_minimizers += vec.len();
-                        for &minimizer in vec {
-                            if set.contains(&minimizer) && seen_hits.insert(minimizer) {
-                                if self.debug {
-                                    let kmer = decode_u64(minimizer, self.kmer_length);
-                                    hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
-                                }
+            for seq in [seq1, seq2] {
+                self.get_minimizer_positions_and_values(seq);
+                if let crate::MinimizerVec::U64(vec) = &self.buffers.minimizers {
+                    num_minimizers += vec.len();
+                    for &minimizer in vec {
+                        if set.contains_u64(minimizer) && seen_hits.insert(minimizer) {
+                            if self.debug {
+                                let kmer = decode_u64(minimizer, self.kmer_length);
+                                hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
                             }
                         }
                     }
                 }
-                (seen_hits.len(), num_minimizers, hit_kmers)
             }
-            MinimizerSet::U128(set) => {
-                let mut seen_hits = crate::RapidHashSet::default();
-                let mut hit_kmers = Vec::new();
-                let mut num_minimizers = 0;
+            (seen_hits.len(), num_minimizers, hit_kmers)
+        } else {
+            let mut seen_hits: crate::RapidHashSet<u128> = crate::RapidHashSet::default();
+            let mut hit_kmers = Vec::new();
+            let mut num_minimizers = 0;
 
-                for seq in [seq1, seq2] {
-                    self.get_minimizer_positions_and_values(seq);
-                    if let crate::MinimizerVec::U128(vec) = &self.buffers.minimizers {
-                        num_minimizers += vec.len();
-                        for &minimizer in vec {
-                            if set.contains(&minimizer) && seen_hits.insert(minimizer) {
-                                if self.debug {
-                                    let kmer = decode_u128(minimizer, self.kmer_length);
-                                    hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
-                                }
+            for seq in [seq1, seq2] {
+                self.get_minimizer_positions_and_values(seq);
+                if let crate::MinimizerVec::U128(vec) = &self.buffers.minimizers {
+                    num_minimizers += vec.len();
+                    for &minimizer in vec {
+                        if set.contains_u128(minimizer) && seen_hits.insert(minimizer) {
+                            if self.debug {
+                                let kmer = decode_u128(minimizer, self.kmer_length);
+                                hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
                             }
                         }
                     }
                 }
-                (seen_hits.len(), num_minimizers, hit_kmers)
             }
+            (seen_hits.len(), num_minimizers, hit_kmers)
         };
 
         (

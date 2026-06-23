@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use deacon::index_fetch;
 use deacon::{
     DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig, index_diff, index_dump,
-    index_info, index_intersect, index_union,
+    index_freeze, index_info, index_intersect, index_union,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -212,6 +212,15 @@ enum IndexCommands {
         /// Path to index file
         index: PathBuf,
     },
+    /// Freeze an index into a binary fuse filter (BFF) index (k<=32)
+    Freeze {
+        /// Path to input index file
+        index: PathBuf,
+
+        /// Path to output file (stdout if not specified)
+        #[arg(short = 'o', long = "output")]
+        output: Option<PathBuf>,
+    },
     /// Fetch a pre-built index from remote storage
     #[cfg(feature = "fetch")]
     Fetch {
@@ -409,6 +418,10 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             }
             IndexCommands::Dump { index, output } => {
                 index_dump(index, output.as_deref()).context("Failed to run index dump command")?;
+            }
+            IndexCommands::Freeze { index, output } => {
+                index_freeze(index, output.as_deref())
+                    .context("Failed to run index freeze command")?;
             }
         },
         Commands::Filter {

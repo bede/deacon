@@ -26,7 +26,8 @@ impl WasmIndex {
     pub fn new(data: &[u8]) -> Result<WasmIndex, JsValue> {
         console_error_panic_hook::set_once();
         let mut cursor = Cursor::new(data);
-        let (minimizers, header) = deacon::load_minimizers(&mut cursor)
+        // Auto-detect exact vs BFF format
+        let (minimizers, header) = deacon::load_index_auto(&mut cursor)
             .map_err(|e| JsValue::from_str(&format!("Failed to load index: {}", e)))?;
         Ok(WasmIndex {
             inner: Arc::new(WasmIndexInner { minimizers, header }),
@@ -661,20 +662,21 @@ fn count_hits_into(
     set: &MinimizerSet,
     seen: &mut MinimizerSet,
 ) -> usize {
-    match (minimizers, set, seen) {
-        (MinimizerVec::U64(vec), MinimizerSet::U64(s), MinimizerSet::U64(seen)) => {
+    // Match read-side width; query via contains_u64/u128 (exact or BFF)
+    match (minimizers, seen) {
+        (MinimizerVec::U64(vec), MinimizerSet::U64(seen)) => {
             seen.clear();
             for &m in vec {
-                if s.contains(&m) {
+                if set.contains_u64(m) {
                     seen.insert(m);
                 }
             }
             seen.len()
         }
-        (MinimizerVec::U128(vec), MinimizerSet::U128(s), MinimizerSet::U128(seen)) => {
+        (MinimizerVec::U128(vec), MinimizerSet::U128(seen)) => {
             seen.clear();
             for &m in vec {
-                if s.contains(&m) {
+                if set.contains_u128(m) {
                     seen.insert(m);
                 }
             }
