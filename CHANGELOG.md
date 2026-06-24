@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-06-24
+
+### Added
+
+- Support for filtering using smaller static fuse filter indexes (`.pidx`). These can be generated from standard Deacon indexes using `deacon index freeze`. Fuse filters reduce index size from ~64 bits/k-mer to ~36 bits/k-mer using default 32 bit fingerprints, or to ~18 bits/k-mer using 16 bit fingerprints. Default 32 bit fingerprints deliver a negligible false positive rate of ~2<sup>-32</sup>.
+- Browser-based streaming FASTA/FASTQ filtering with `deacon-wasm`.
+
 ## [0.15.0] - 2026-03-13
 
 ### Fixed
