@@ -200,7 +200,13 @@ impl MinimizerSet {
         invert: bool,
     ) {
         use crate::minimizers::{calculate_kdust, calculate_scaled_entropy};
-        let keep = |c: f32| if invert { c < threshold } else { c >= threshold };
+        let keep = |c: f32| {
+            if invert {
+                c < threshold
+            } else {
+                c >= threshold
+            }
+        };
         match self {
             MinimizerSet::U64(set) => set.retain(|&v| {
                 let c = match algorithm {

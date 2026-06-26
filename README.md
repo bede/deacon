@@ -160,6 +160,7 @@ A differentiating feature of Deacon is the ease of combining, subtracting and in
 - Use `deacon index union 1.idx 2.idx 3.idx… > 1+2+3.idx` to succinctly combine two or more indexes.
 - Use `deacon index diff 1.idx 2.idx > 1-2.idx` to subtract minimizers in 2.idx from 1.idx. Useful for masking out shared minimizer content between e.g. target and host genomes.
   - `deacon index diff` also supports subtracting minimizers from an index using a fastx file or stream directly, e.g. `deacon index diff 1.idx 2.fa.gz > 1-2.idx` or `zcat *.fa.gz | deacon index diff 1.idx - > 1-2.idx`. This enables diffing with larger-than-memory sequence collections if desired.
+  - A `w=1` source subtracts *every* k-mer it contains rather than a windowed minimizer subset, e.g. `deacon index diff 1.idx kmers.fa -k 31 -w 1`. Use this to subtract exact k-mers. Otherwise `k` and `w` must match the first index.
 
 - Use `deacon index intersect 1.idx 2.idx… > 1∩2.idx` to find the intersection of minimizers in two or more indexes.
 

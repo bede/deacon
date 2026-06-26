@@ -345,6 +345,162 @@ fn test_index_diff_auto_detect_parameters() {
     );
 }
 
+// Parse "Removed X minimizers, Y remaining" from diff stderr
+fn extract_remaining_count(stderr: &[u8]) -> usize {
+    let s = String::from_utf8_lossy(stderr);
+    for line in s.lines() {
+        if let Some((before, _)) = line.split_once("remaining") {
+            for word in before.split_whitespace().rev() {
+                if let Ok(count) = word.trim_end_matches(',').parse::<usize>() {
+                    return count;
+                }
+            }
+        }
+    }
+    panic!("Could not extract remaining count from stderr: {}", s);
+}
+
+// Parse "Distinct minimizer count: N" from index info stderr
+fn extract_distinct_count(stderr: &[u8]) -> usize {
+    let s = String::from_utf8_lossy(stderr);
+    for line in s.lines() {
+        if let Some((_, n)) = line.split_once("Distinct minimizer count:") {
+            return n.trim().parse::<usize>().unwrap();
+        }
+    }
+    panic!("Could not extract distinct count from stderr: {}", s);
+}
+
+// A w=1 index from length-k records has one minimizer per distinct record
+#[test]
+fn test_index_build_w1_exact_kmers() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("test.fasta");
+    let ref_path = temp_dir.path().join("ref.bin");
+    let kmers_fa = temp_dir.path().join("kmers.fa");
+    let kmers_idx = temp_dir.path().join("kmers.bin");
+
+    create_test_fasta(&fasta_path, 1);
+    build_index(&fasta_path, &ref_path);
+
+    // Dump the index minimizers as length-k (31bp) fasta records
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "dump", "-o"])
+        .arg(&kmers_fa)
+        .arg(&ref_path)
+        .assert()
+        .success();
+    let dumped = fs::read_to_string(&kmers_fa).unwrap();
+    let record_count = dumped.lines().filter(|l| l.starts_with('>')).count();
+    assert!(record_count > 0);
+
+    // Build a w=1 index from those length-k records
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "build", "-w", "1", "-o"])
+        .arg(&kmers_idx)
+        .arg(&kmers_fa)
+        .assert()
+        .success();
+
+    let info = cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "info"])
+        .arg(&kmers_idx)
+        .output()
+        .unwrap();
+    assert!(info.status.success());
+    assert_eq!(
+        extract_distinct_count(&info.stderr),
+        record_count,
+        "w=1 index should have one minimizer per length-k record"
+    );
+}
+
+// A w=1 source (fastx via -w 1, or a w=1 index) fully masks a w=15 index.
+#[test]
+fn test_index_diff_w1_exact_masking() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("test.fasta");
+    let ref_path = temp_dir.path().join("ref.bin");
+    let kmers_fa = temp_dir.path().join("kmers.fa");
+    let kmers_idx = temp_dir.path().join("kmers.bin");
+    let out_fa = temp_dir.path().join("out_fa.bin");
+    let out_idx = temp_dir.path().join("out_idx.bin");
+
+    create_test_fasta(&fasta_path, 1);
+    build_index(&fasta_path, &ref_path);
+
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "dump", "-o"])
+        .arg(&kmers_fa)
+        .arg(&ref_path)
+        .assert()
+        .success();
+
+    // Route 1: diff the fasta of k-mers directly with -w 1
+    let out1 = cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "diff", "-k", "31", "-w", "1", "-o"])
+        .arg(&out_fa)
+        .arg(&ref_path)
+        .arg(&kmers_fa)
+        .output()
+        .unwrap();
+    assert!(out1.status.success());
+    assert_eq!(
+        extract_remaining_count(&out1.stderr),
+        0,
+        "w=1 fastx diff should remove all minimizers"
+    );
+
+    // Route 2: pre-build a w=1 index and index-diff it
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "build", "-w", "1", "-o"])
+        .arg(&kmers_idx)
+        .arg(&kmers_fa)
+        .assert()
+        .success();
+    let out2 = cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "diff", "-o"])
+        .arg(&out_idx)
+        .arg(&ref_path)
+        .arg(&kmers_idx)
+        .output()
+        .unwrap();
+    assert!(out2.status.success());
+    assert_eq!(
+        extract_remaining_count(&out2.stderr),
+        0,
+        "w=1 index diff should remove all minimizers"
+    );
+}
+
+// A non-1 w mismatch between two indexes must still error.
+#[test]
+fn test_index_diff_w_mismatch_errors() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("test.fasta");
+    let w15_path = temp_dir.path().join("w15.bin");
+    let w21_path = temp_dir.path().join("w21.bin");
+    let out_path = temp_dir.path().join("out.bin");
+
+    create_test_fasta(&fasta_path, 1);
+    build_index(&fasta_path, &w15_path);
+
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "build", "-w", "21", "-o"])
+        .arg(&w21_path)
+        .arg(&fasta_path)
+        .assert()
+        .success();
+
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "diff", "-o"])
+        .arg(&out_path)
+        .arg(&w15_path)
+        .arg(&w21_path)
+        .assert()
+        .failure();
+}
+
 #[test]
 fn test_index_dump() {
     let temp_dir = tempdir().unwrap();
@@ -688,7 +844,14 @@ fn test_index_filter_complexity() {
     let (k, i) = (count(&kept), count(&inverted));
 
     assert!(k > 0, "high-complexity minimizers should be kept");
-    assert!(i > 0, "low-complexity minimizers should be dropped (and kept by -i)");
+    assert!(
+        i > 0,
+        "low-complexity minimizers should be dropped (and kept by -i)"
+    );
     assert!(k < total, "filtering should drop some minimizers");
-    assert_eq!(k + i, total, "filter and its inverse must partition the index");
+    assert_eq!(
+        k + i,
+        total,
+        "filter and its inverse must partition the index"
+    );
 }

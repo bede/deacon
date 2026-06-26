@@ -873,13 +873,18 @@ fn stream_diff_fastx(
     };
     temp_config.validate()?;
 
-    // Validate parameters match the first index
-    if kmer_length != first_header.kmer_length() || window_size != first_header.window_size() {
+    // k must match; w must match or be 1 (w=1 emits every k-mer, for exact masking)
+    if kmer_length != first_header.kmer_length() {
         return Err(anyhow::anyhow!(
-            "FASTX parameters (k={}, w={}) must match first index (k={}, w={})",
+            "FASTX k={} must match first index k={}",
             kmer_length,
+            first_header.kmer_length()
+        ));
+    }
+    if window_size != first_header.window_size() && window_size != 1 {
+        return Err(anyhow::anyhow!(
+            "FASTX w={} must match first index w={} or be 1 (for exact k-mer subtraction)",
             window_size,
-            first_header.kmer_length(),
             first_header.window_size()
         ));
     }
@@ -1021,12 +1026,13 @@ pub fn diff(
                 second_minimizers.len()
             );
 
-            // Validate compatible headers
+            // k must match; w must match or be 1 (w=1 means every k-mer)
             if second_header.kmer_length() != header.kmer_length()
-                || second_header.window_size() != header.window_size()
+                || (second_header.window_size() != header.window_size()
+                    && second_header.window_size() != 1)
             {
                 return Err(anyhow::anyhow!(
-                    "Incompatible headers: second index has k={}, w={}, but first index has k={}, w={}",
+                    "Incompatible headers: second index has k={}, w={}, but first index has k={}, w={} (w must match or second index must be w=1)",
                     second_header.kmer_length(),
                     second_header.window_size(),
                     header.kmer_length(),
