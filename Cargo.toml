@@ -15,6 +15,11 @@ exclude = ["bench/*", "data/*"]
 name = "deacon"
 path = "src/lib.rs"
 
+[[bin]]
+name = "deacon"
+path = "src/main.rs"
+required-features = ["cli"]
+
 [dependencies]
 anyhow = "1.0"
 thiserror = "2.0"

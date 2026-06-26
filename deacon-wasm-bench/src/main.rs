@@ -6,8 +6,7 @@ use flate2::Compression;
 use flate2::write::{GzEncoder, MultiGzDecoder};
 use memchr::memchr;
 
-use deacon::minimizers::{Buffers, KmerHasher};
-use deacon::{MinimizerSet, MinimizerVec, RapidHashSet};
+use deacon::{Buffers, KmerHasher, MinimizerSet, MinimizerVec, RapidHashSet};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -284,14 +283,7 @@ impl<'a> BenchFilterSession<'a> {
         let keep = if seq.len() < self.k as usize {
             self.deplete
         } else {
-            deacon::minimizers::fill_minimizers(
-                seq,
-                &self.hasher,
-                self.k,
-                self.w,
-                0.0,
-                &mut self.buffers,
-            );
+            deacon::fill_minimizers(seq, &self.hasher, self.k, self.w, &mut self.buffers);
             let num_minimizers = self.buffers.minimizers.len();
             let hit_count = count_hits_into(&self.buffers.minimizers, self.index, &mut self.seen);
             let rel_required = if num_minimizers == 0 {

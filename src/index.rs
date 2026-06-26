@@ -100,6 +100,7 @@ pub struct BffHeader {
 }
 
 impl BffHeader {
+    #[cfg(any(feature = "cli", test))]
     pub fn new(filter_bits: u8, kmer_length: u8, window_size: u8, key_count: u64) -> Self {
         BffHeader {
             magic: [b'D', b'B', b'F', filter_bits],
@@ -145,6 +146,7 @@ impl BffHeader {
 }
 
 /// Load just the header and count from an index file
+#[cfg(feature = "cli")]
 pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, usize)> {
     let file = std::fs::File::open(path)
         .context(format!("Failed to open index file {:?}", path.as_ref()))?;
@@ -582,8 +584,6 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
             &self.hasher,
             self.config.kmer_length,
             self.config.window_size,
-            self.config.entropy_threshold,
-            self.config.complexity_threshold,
             &mut self.buffers,
         );
 
@@ -782,8 +782,6 @@ impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor {
             &self.hasher,
             self.kmer_length,
             self.window_size,
-            0.0,
-            0.0,
             &mut self.buffers,
         );
 
@@ -872,8 +870,6 @@ fn stream_diff_fastx(
         output_path: None,
         threads: 0,
         quiet: false,
-        entropy_threshold: 0.0,
-        complexity_threshold: 0.0,
     };
     temp_config.validate()?;
 
@@ -1138,6 +1134,46 @@ pub fn info(index_path: &Path) -> Result<()> {
 
     let total_time = start_time.elapsed();
     eprintln!("Loaded index info in {:.2?}", total_time);
+
+    Ok(())
+}
+
+/// Discard minimizers below a complexity threshold (or keep only those below, if inverted)
+#[cfg(feature = "cli")]
+pub fn filter(
+    index_path: &Path,
+    output: Option<&Path>,
+    algorithm: crate::ComplexityAlgorithm,
+    threshold: f32,
+    invert: bool,
+) -> Result<()> {
+    let start_time = Instant::now();
+    reject_bff(index_path, "filter")?;
+
+    let (mut minimizers, header) = load_minimizers_from_path(index_path)?;
+    let before = minimizers.len();
+    eprintln!(
+        "Filtering index (k={}, w={}): {} minimizers, {:?} {} {}",
+        header.kmer_length(),
+        header.window_size(),
+        before,
+        algorithm,
+        if invert { "<" } else { ">=" },
+        threshold
+    );
+
+    minimizers.retain_complexity(header.kmer_length(), algorithm, threshold, invert);
+    let after = minimizers.len();
+
+    dump_minimizers(&minimizers, &header, output)?;
+
+    eprintln!(
+        "Kept {} of {} minimizers ({} removed) in {:.2?}",
+        after,
+        before,
+        before - after,
+        start_time.elapsed()
+    );
 
     Ok(())
 }

@@ -640,3 +640,55 @@ fn test_index_dump_rejects_bff() {
         stderr
     );
 }
+
+#[test]
+fn test_index_filter_complexity() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("mix.fasta");
+    let idx_path = temp_dir.path().join("mix.idx");
+
+    // High-complexity prefix then a homopolymer run, so the index holds
+    // minimizers spanning the complexity range.
+    fs::write(
+        &fasta_path,
+        ">mix\nGTCAGCATTGACCGGATACGTTAGCCAAGTGCATCGGATTCAGCTAACGGTCATGCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+    )
+    .unwrap();
+    build_index(&fasta_path, &idx_path);
+
+    let count = |p: &Path| deacon::load_minimizers_from_path(p).unwrap().0.len();
+    let total = count(&idx_path);
+    assert!(total > 0);
+
+    let run = |out: &Path, threshold: &str, invert: bool| {
+        let mut cmd = cargo::cargo_bin_cmd!("deacon");
+        cmd.arg("index")
+            .arg("filter")
+            .arg(&idx_path)
+            .arg("-c")
+            .arg(threshold)
+            .arg("-o")
+            .arg(out);
+        if invert {
+            cmd.arg("-i");
+        }
+        cmd.assert().success();
+    };
+
+    // -c 0.0 keeps everything (complexity is always >= 0)
+    let keep_all = temp_dir.path().join("all.idx");
+    run(&keep_all, "0.0", false);
+    assert_eq!(count(&keep_all), total);
+
+    // A mid threshold splits high- from low-complexity minimizers
+    let kept = temp_dir.path().join("kept.idx");
+    let inverted = temp_dir.path().join("inverted.idx");
+    run(&kept, "0.5", false);
+    run(&inverted, "0.5", true);
+    let (k, i) = (count(&kept), count(&inverted));
+
+    assert!(k > 0, "high-complexity minimizers should be kept");
+    assert!(i > 0, "low-complexity minimizers should be dropped (and kept by -i)");
+    assert!(k < total, "filtering should drop some minimizers");
+    assert_eq!(k + i, total, "filter and its inverse must partition the index");
+}

@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand};
 #[cfg(feature = "fetch")]
 use deacon::index_fetch;
 use deacon::{
-    DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig, index_diff, index_dump,
-    index_freeze, index_info, index_intersect, index_union,
+    ComplexityAlgorithm, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig,
+    index_diff, index_dump, index_filter, index_freeze, index_info, index_intersect, index_union,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -147,14 +147,6 @@ enum IndexCommands {
         /// Suppress sequence header output
         #[arg(short = 'q', long = "quiet")]
         quiet: bool,
-
-        /// Minimum scaled entropy threshold for k-mer filtering (0.0-1.0, 0.0 = disabled)
-        #[arg(short = 'e', long = "entropy-threshold", default_value = "0.0")]
-        entropy_threshold: f32,
-
-        /// Minimum kdust complexity threshold for k-mer filtering (0.0-1.0, 0.0 = disabled, ~0.9 recommended)
-        #[arg(short = 'c', long = "complexity-threshold", default_value = "0.0")]
-        complexity_threshold: f32,
     },
     /// Combine multiple minimizer indexes (A ∪ B…)
     Union {
@@ -206,6 +198,27 @@ enum IndexCommands {
     Dump {
         /// Path to index file
         index: PathBuf,
+
+        /// Path to output file (stdout if not specified)
+        #[arg(short = 'o', long = "output")]
+        output: Option<PathBuf>,
+    },
+    /// Discard minimizers below a complexity threshold
+    Filter {
+        /// Path to index file
+        index: PathBuf,
+
+        /// Complexity measure (~0.9 recommended for kdust)
+        #[arg(short = 'a', long = "algorithm", value_enum, default_value_t = ComplexityAlgorithm::Kdust)]
+        algorithm: ComplexityAlgorithm,
+
+        /// Discard minimizers with complexity below this threshold (0.0-1.0)
+        #[arg(short = 'c', long = "complexity-threshold")]
+        threshold: f32,
+
+        /// Invert: keep only minimizers below the threshold
+        #[arg(short = 'i', long = "invert")]
+        invert: bool,
 
         /// Path to output file (stdout if not specified)
         #[arg(short = 'o', long = "output")]
@@ -379,8 +392,6 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 output,
                 threads,
                 quiet,
-                entropy_threshold,
-                complexity_threshold,
             } => {
                 let config = IndexConfig {
                     input_path: input.clone(),
@@ -389,8 +400,6 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                     output_path: output.clone(),
                     threads: *threads,
                     quiet: *quiet,
-                    entropy_threshold: *entropy_threshold,
-                    complexity_threshold: *complexity_threshold,
                 };
                 config
                     .execute()
@@ -437,6 +446,16 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             }
             IndexCommands::Dump { index, output } => {
                 index_dump(index, output.as_deref()).context("Failed to run index dump command")?;
+            }
+            IndexCommands::Filter {
+                index,
+                algorithm,
+                threshold,
+                invert,
+                output,
+            } => {
+                index_filter(index, output.as_deref(), *algorithm, *threshold, *invert)
+                    .context("Failed to run index filter command")?;
             }
             IndexCommands::Freeze {
                 index,

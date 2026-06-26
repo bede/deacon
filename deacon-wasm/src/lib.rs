@@ -7,8 +7,7 @@ use flate2::write::{GzEncoder, MultiGzDecoder};
 use js_sys::{Object, Reflect};
 use wasm_bindgen::prelude::*;
 
-use deacon::minimizers::{Buffers, KmerHasher};
-use deacon::{MinimizerSet, MinimizerVec, RapidHashSet};
+use deacon::{Buffers, KmerHasher, MinimizerSet, MinimizerVec, RapidHashSet};
 
 struct WasmIndexInner {
     minimizers: MinimizerSet,
@@ -239,7 +238,7 @@ impl WasmFilterSession {
         let keep = if seq.len() < k as usize {
             self.deplete
         } else {
-            deacon::minimizers::fill_minimizers(seq, &self.hasher, k, w, 0.0, &mut self.buffers);
+            deacon::fill_minimizers(seq, &self.hasher, k, w, &mut self.buffers);
             let num_minimizers = self.buffers.minimizers.len();
             let hit_count = count_hits_into(
                 &self.buffers.minimizers,

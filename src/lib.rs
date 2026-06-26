@@ -9,25 +9,28 @@
 
 // Re-export public functionality
 #[cfg(feature = "cli")]
-pub mod filter;
-pub mod index;
-pub mod minimizers;
+mod filter;
+mod index;
+mod minimizers;
 
-// Re-export the important structures and functions for library users
+// Public API
 #[cfg(feature = "cli")]
 pub use filter::{FilterSummary, run as run_filter};
 #[cfg(feature = "fetch")]
 pub use index::fetch as index_fetch;
 pub use index::{
-    BFF_FORMAT_VERSION, BffHeader, INDEX_FORMAT_VERSION, IndexHeader, dump_minimizers, load_bff,
-    load_index_auto, load_index_from_path_auto, load_minimizers, load_minimizers_from_path,
+    IndexHeader, dump_minimizers, load_index_auto, load_index_from_path_auto,
+    load_minimizers_from_path,
 };
 #[cfg(feature = "cli")]
 pub use index::{
-    build as index_build, diff as index_diff, dump as index_dump, freeze as index_freeze,
-    info as index_info, intersect as index_intersect, union as index_union,
+    build as index_build, diff as index_diff, dump as index_dump, filter as index_filter,
+    freeze as index_freeze, info as index_info, intersect as index_intersect, union as index_union,
 };
-pub use minimizers::{DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, decode_u64, decode_u128};
+pub use minimizers::{
+    Buffers, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, KmerHasher, compute_minimizers, decode_u64,
+    decode_u128, fill_minimizers,
+};
 
 #[cfg(feature = "cli")]
 use anyhow::Result;
@@ -89,6 +92,15 @@ pub enum MinimizerSet {
     U64(RapidHashSet<u64>),
     U128(RapidHashSet<u128>),
     Fuse(FuseFilter),
+}
+
+/// Complexity measure used by `index filter`
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+pub enum ComplexityAlgorithm {
+    #[default]
+    Kdust,
+    Shannon,
 }
 
 impl MinimizerSet {
@@ -176,6 +188,41 @@ impl MinimizerSet {
                 panic!("Set algebra is not supported on BFF indexes; use an exact index")
             }
             _ => panic!("Cannot intersect U64 set with U128 set or vice versa"),
+        }
+    }
+
+    /// Keep minimizers with complexity >= threshold (or < if inverted)
+    pub fn retain_complexity(
+        &mut self,
+        kmer_length: u8,
+        algorithm: ComplexityAlgorithm,
+        threshold: f32,
+        invert: bool,
+    ) {
+        use crate::minimizers::{calculate_kdust, calculate_scaled_entropy};
+        let keep = |c: f32| if invert { c < threshold } else { c >= threshold };
+        match self {
+            MinimizerSet::U64(set) => set.retain(|&v| {
+                let c = match algorithm {
+                    ComplexityAlgorithm::Kdust => calculate_kdust(v as u128, kmer_length),
+                    ComplexityAlgorithm::Shannon => {
+                        calculate_scaled_entropy(&decode_u64(v, kmer_length), kmer_length)
+                    }
+                };
+                keep(c)
+            }),
+            MinimizerSet::U128(set) => set.retain(|&v| {
+                let c = match algorithm {
+                    ComplexityAlgorithm::Kdust => calculate_kdust(v, kmer_length),
+                    ComplexityAlgorithm::Shannon => {
+                        calculate_scaled_entropy(&decode_u128(v, kmer_length), kmer_length)
+                    }
+                };
+                keep(c)
+            }),
+            MinimizerSet::Fuse(_) => {
+                panic!("Complexity filtering is not supported on BFF indexes; use an exact index")
+            }
         }
     }
 }
@@ -268,110 +315,7 @@ pub struct FilterConfig<'a> {
 }
 
 #[cfg(feature = "cli")]
-impl<'a> FilterConfig<'a> {
-    pub fn new(minimizers_path: &'a Path) -> Self {
-        Self {
-            minimizers_path,
-            input_path: "-",
-            input2_path: None,
-            output_path: None,
-            output2_path: None,
-            abs_threshold: 2,
-            rel_threshold: 0.01,
-            prefix_length: 0,
-            summary_path: None,
-            deplete: false,
-            rename: false,
-            rename_random: false,
-            output_fasta: false,
-            threads: 0,             // Use all available threads by default
-            compression_level: 2,   // Default compression level
-            compression_threads: 0, // Auto-calculate as ceil(total/2)
-            debug: false,
-            quiet: false,
-        }
-    }
-
-    pub fn with_input(mut self, input_path: &'a str) -> Self {
-        self.input_path = input_path;
-        self
-    }
-
-    pub fn with_input2(mut self, input2_path: &'a str) -> Self {
-        self.input2_path = Some(input2_path);
-        self
-    }
-
-    pub fn with_output(mut self, output_path: &'a Path) -> Self {
-        self.output_path = Some(output_path);
-        self
-    }
-
-    pub fn with_output2(mut self, output2_path: &'a str) -> Self {
-        self.output2_path = Some(output2_path);
-        self
-    }
-
-    pub fn with_abs_threshold(mut self, abs_threshold: usize) -> Self {
-        self.abs_threshold = abs_threshold;
-        self
-    }
-
-    pub fn with_rel_threshold(mut self, rel_threshold: f64) -> Self {
-        self.rel_threshold = rel_threshold;
-        self
-    }
-
-    pub fn with_prefix_length(mut self, prefix_length: usize) -> Self {
-        self.prefix_length = prefix_length;
-        self
-    }
-
-    pub fn with_summary(mut self, summary_path: &'a PathBuf) -> Self {
-        self.summary_path = Some(summary_path);
-        self
-    }
-
-    pub fn with_deplete(mut self, deplete: bool) -> Self {
-        self.deplete = deplete;
-        self
-    }
-
-    pub fn with_rename(mut self, rename: bool) -> Self {
-        self.rename = rename;
-        self
-    }
-
-    pub fn with_rename_random(mut self, rename_random: bool) -> Self {
-        self.rename_random = rename_random;
-        self
-    }
-
-    pub fn with_threads(mut self, threads: u16) -> Self {
-        self.threads = threads;
-        self
-    }
-
-    pub fn with_compression_level(mut self, compression_level: u8) -> Self {
-        self.compression_level = compression_level;
-        self
-    }
-
-    pub fn with_compression_threads(mut self, compression_threads: u16) -> Self {
-        self.compression_threads = compression_threads;
-        self
-    }
-
-    pub fn with_debug(mut self, debug: bool) -> Self {
-        self.debug = debug;
-        self
-    }
-
-    pub fn with_quiet(mut self, quiet: bool) -> Self {
-        self.quiet = quiet;
-        self
-    }
-
+impl FilterConfig<'_> {
     /// Filter with this configuration
     pub fn execute(&self) -> Result<()> {
         filter::run(self)
@@ -397,30 +341,10 @@ pub struct IndexConfig {
 
     /// Suppress per-sequence progress output
     pub quiet: bool,
-
-    /// Minimum scaled entropy threshold for k-mer filtering (0.0-1.0, 0.0 = disabled)
-    pub entropy_threshold: f32,
-
-    /// Minimum kdust complexity threshold for k-mer filtering (0.0-1.0, 0.0 = disabled, ~0.9 recommended)
-    pub complexity_threshold: f32,
 }
 
 #[cfg(feature = "cli")]
 impl IndexConfig {
-    /// Create a new index configuration with the specified input path
-    pub fn new(input_path: PathBuf) -> Self {
-        Self {
-            input_path: input_path,
-            kmer_length: DEFAULT_KMER_LENGTH,
-            window_size: DEFAULT_WINDOW_SIZE,
-            output_path: None,
-            threads: 8,
-            quiet: false,
-            entropy_threshold: 0.0,
-            complexity_threshold: 0.0,
-        }
-    }
-
     /// Validate k-mer and window size constraints
     pub fn validate(&self) -> Result<()> {
         let k = self.kmer_length as usize;
@@ -437,48 +361,6 @@ impl IndexConfig {
         }
 
         Ok(())
-    }
-
-    /// Set k-mer length
-    pub fn with_kmer_length(mut self, kmer_length: u8) -> Self {
-        self.kmer_length = kmer_length;
-        self
-    }
-
-    /// Set window size
-    pub fn with_window_size(mut self, window_size: u8) -> Self {
-        self.window_size = window_size;
-        self
-    }
-
-    /// Set output path
-    pub fn with_output(mut self, output_path: PathBuf) -> Self {
-        self.output_path = Some(output_path);
-        self
-    }
-
-    /// Set threads
-    pub fn with_threads(mut self, threads: u16) -> Self {
-        self.threads = threads;
-        self
-    }
-
-    /// Set quiet mode
-    pub fn with_quiet(mut self, quiet: bool) -> Self {
-        self.quiet = quiet;
-        self
-    }
-
-    /// Set threshold for scaled entropy filtering at indexing time
-    pub fn with_entropy_threshold(mut self, threshold: f32) -> Self {
-        self.entropy_threshold = threshold;
-        self
-    }
-
-    /// Set threshold for kdust complexity filtering at indexing time
-    pub fn with_complexity_threshold(mut self, threshold: f32) -> Self {
-        self.complexity_threshold = threshold;
-        self
     }
 
     /// Execute index build with this configuration
