@@ -398,8 +398,11 @@ pub struct IndexConfig {
     /// Suppress per-sequence progress output
     pub quiet: bool,
 
-    /// Minimum scaled entropy threshold for k-mer filtering (0.0-1.0)
+    /// Minimum scaled entropy threshold for k-mer filtering (0.0-1.0, 0.0 = disabled)
     pub entropy_threshold: f32,
+
+    /// Minimum kdust complexity threshold for k-mer filtering (0.0-1.0, 0.0 = disabled, ~0.9 recommended)
+    pub complexity_threshold: f32,
 }
 
 #[cfg(feature = "cli")]
@@ -414,6 +417,7 @@ impl IndexConfig {
             threads: 8,
             quiet: false,
             entropy_threshold: 0.0,
+            complexity_threshold: 0.0,
         }
     }
 
@@ -468,6 +472,12 @@ impl IndexConfig {
     /// Set threshold for scaled entropy filtering at indexing time
     pub fn with_entropy_threshold(mut self, threshold: f32) -> Self {
         self.entropy_threshold = threshold;
+        self
+    }
+
+    /// Set threshold for kdust complexity filtering at indexing time
+    pub fn with_complexity_threshold(mut self, threshold: f32) -> Self {
+        self.complexity_threshold = threshold;
         self
     }
 

@@ -583,6 +583,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
             self.config.kmer_length,
             self.config.window_size,
             self.config.entropy_threshold,
+            self.config.complexity_threshold,
             &mut self.buffers,
         );
 
@@ -782,6 +783,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor {
             self.kmer_length,
             self.window_size,
             0.0,
+            0.0,
             &mut self.buffers,
         );
 
@@ -871,6 +873,7 @@ fn stream_diff_fastx(
         threads: 0,
         quiet: false,
         entropy_threshold: 0.0,
+        complexity_threshold: 0.0,
     };
     temp_config.validate()?;
 

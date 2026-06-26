@@ -68,6 +68,7 @@ pub fn compute_minimizers(
     kmer_length: u8,
     window_size: u8,
     entropy_threshold: f32,
+    complexity_threshold: f32,
 ) -> crate::MinimizerVec {
     let mut buffers = if kmer_length <= 32 {
         Buffers::new_u64()
@@ -80,6 +81,7 @@ pub fn compute_minimizers(
         kmer_length,
         window_size,
         entropy_threshold,
+        complexity_threshold,
         &mut buffers,
     );
     buffers.minimizers
@@ -138,14 +140,37 @@ fn calculate_scaled_entropy(kmer: &[u8], kmer_length: u8) -> f32 {
     entropy / 2.0
 }
 
-/// Fill a vector with minimizers, skipping k-mers with non-ACGT bases
-/// and optionally filtering by scaled entropy
+/// kdust complexity of a 2-bit packed minimizer: max-normalised DUST triplet
+/// score in [0,1] (1.0 = no repeated triplets, 0.0 = homopolymer).
+#[inline]
+fn calculate_kdust(code: u128, kmer_length: u8) -> f32 {
+    if kmer_length < 3 {
+        return 1.0;
+    }
+    let k = kmer_length as usize;
+    let mut counts = [0u8; 64];
+    let mut score = 0u32;
+    let mut tri = 0usize;
+    for i in 0..k {
+        tri = ((tri << 2) | ((code >> (2 * i)) & 0b11) as usize) & 0b11_1111;
+        if i >= 2 {
+            score += counts[tri] as u32;
+            counts[tri] += 1;
+        }
+    }
+    let l = (k - 2) as f32;
+    1.0 - score as f32 / (l * (l - 1.0) / 2.0)
+}
+
+/// Fill a vector with minimizers, skipping non-ACGT k-mers and optionally
+/// filtering by scaled entropy and/or kdust complexity
 pub fn fill_minimizers(
     seq: &[u8],
     hasher: &KmerHasher,
     kmer_length: u8,
     window_size: u8,
     entropy_threshold: f32,
+    complexity_threshold: f32,
     buffers: &mut Buffers,
 ) {
     let Buffers {
@@ -178,17 +203,15 @@ pub fn fill_minimizers(
         crate::MinimizerVec::U64(vec) => {
             vec.extend(
                 out.pos_and_values_u64()
-                    .filter(|&(pos, _val)| {
+                    .filter(|&(pos, val)| {
                         let pos_usize = pos as usize;
                         let kmer = &seq[pos_usize..pos_usize + kmer_length as usize];
 
-                        // Check scaled entropy constraint if threshold specified
-                        if entropy_threshold == 0.0 {
-                            true
-                        } else {
-                            let entropy = calculate_scaled_entropy(kmer, kmer_length);
-                            entropy >= entropy_threshold
-                        }
+                        let entropy_ok = entropy_threshold == 0.0
+                            || calculate_scaled_entropy(kmer, kmer_length) >= entropy_threshold;
+                        let complexity_ok = complexity_threshold == 0.0
+                            || calculate_kdust(val as u128, kmer_length) >= complexity_threshold;
+                        entropy_ok && complexity_ok
                     })
                     .map(|(_pos, val)| val),
             );
@@ -196,17 +219,15 @@ pub fn fill_minimizers(
         crate::MinimizerVec::U128(vec) => {
             vec.extend(
                 out.pos_and_values_u128()
-                    .filter(|&(pos, _val)| {
+                    .filter(|&(pos, val)| {
                         let pos_usize = pos as usize;
                         let kmer = &seq[pos_usize..pos_usize + kmer_length as usize];
 
-                        // Check scaled entropy constraint if threshold specified
-                        if entropy_threshold == 0.0 {
-                            true
-                        } else {
-                            let entropy = calculate_scaled_entropy(kmer, kmer_length);
-                            entropy >= entropy_threshold
-                        }
+                        let entropy_ok = entropy_threshold == 0.0
+                            || calculate_scaled_entropy(kmer, kmer_length) >= entropy_threshold;
+                        let complexity_ok = complexity_threshold == 0.0
+                            || calculate_kdust(val, kmer_length) >= complexity_threshold;
+                        entropy_ok && complexity_ok
                     })
                     .map(|(_pos, val)| val),
             );
@@ -225,14 +246,14 @@ mod tests {
         let k = 5;
         let w = 3;
         let hasher = KmerHasher::new(k as usize);
-        let minimizers = compute_minimizers(seq, &hasher, k, w, 0.0);
+        let minimizers = compute_minimizers(seq, &hasher, k, w, 0.0, 0.0);
 
         // We should have at least one minimizer
         assert!(!minimizers.is_empty());
 
         // Test with a sequence shorter than k
         let short_seq = b"ACGT";
-        let short_minimizers = compute_minimizers(short_seq, &hasher, k, w, 0.0);
+        let short_minimizers = compute_minimizers(short_seq, &hasher, k, w, 0.0, 0.0);
         assert!(short_minimizers.is_empty());
     }
 
@@ -401,7 +422,7 @@ mod tests {
         test_seq.extend_from_slice(b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"); // 31 As after
 
         let hasher = KmerHasher::new(k as usize);
-        let minimizers = compute_minimizers(&test_seq, &hasher, k as u8, w as u8, 0.0);
+        let minimizers = compute_minimizers(&test_seq, &hasher, k as u8, w as u8, 0.0, 0.0);
 
         assert!(!minimizers.is_empty(), "Should have at least one minimizer");
 
@@ -457,7 +478,7 @@ mod tests {
         test_seq.extend_from_slice(b"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC");
 
         let hasher = KmerHasher::new(k as usize);
-        let minimizers = compute_minimizers(&test_seq, &hasher, k as u8, w as u8, 0.0);
+        let minimizers = compute_minimizers(&test_seq, &hasher, k as u8, w as u8, 0.0, 0.0);
 
         assert!(!minimizers.is_empty(), "Should have at least one minimizer");
 
@@ -529,7 +550,7 @@ mod tests {
             test_seq.extend_from_slice(test_kmer);
             test_seq.extend_from_slice(b"NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN");
 
-            let minimizers = compute_minimizers(&test_seq, &hasher, k as u8, w as u8, 0.0);
+            let minimizers = compute_minimizers(&test_seq, &hasher, k as u8, w as u8, 0.0, 0.0);
 
             if minimizers.is_empty() {
                 continue; // Skip if no minimizers (e.g., all N's filtered)
@@ -571,7 +592,7 @@ mod tests {
         test_seq.extend_from_slice(b"TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT");
 
         let hasher = KmerHasher::new(k as usize);
-        let minimizers = compute_minimizers(&test_seq, &hasher, k as u8, w as u8, 0.0);
+        let minimizers = compute_minimizers(&test_seq, &hasher, k as u8, w as u8, 0.0, 0.0);
 
         assert!(!minimizers.is_empty(), "Should have at least one minimizer");
 

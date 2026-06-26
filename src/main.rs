@@ -148,9 +148,13 @@ enum IndexCommands {
         #[arg(short = 'q', long = "quiet")]
         quiet: bool,
 
-        /// Minimum scaled entropy threshold for k-mer filtering (0.0-1.0)
+        /// Minimum scaled entropy threshold for k-mer filtering (0.0-1.0, 0.0 = disabled)
         #[arg(short = 'e', long = "entropy-threshold", default_value = "0.0")]
         entropy_threshold: f32,
+
+        /// Minimum kdust complexity threshold for k-mer filtering (0.0-1.0, 0.0 = disabled, ~0.9 recommended)
+        #[arg(short = 'c', long = "complexity-threshold", default_value = "0.0")]
+        complexity_threshold: f32,
     },
     /// Combine multiple minimizer indexes (A ∪ B…)
     Union {
@@ -376,6 +380,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 threads,
                 quiet,
                 entropy_threshold,
+                complexity_threshold,
             } => {
                 let config = IndexConfig {
                     input_path: input.clone(),
@@ -385,6 +390,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                     threads: *threads,
                     quiet: *quiet,
                     entropy_threshold: *entropy_threshold,
+                    complexity_threshold: *complexity_threshold,
                 };
                 config
                     .execute()
