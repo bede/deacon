@@ -1,9 +1,7 @@
 use crate::index::load_minimizers_cached;
-use crate::minimizers::{Buffers, KmerHasher, decode_u64, decode_u128};
-use crate::{FilterConfig, MinimizerSet};
+use crate::{FilterConfig, FilterDecision, FilterKernel, FilterParams, MinimizerSet};
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use packed_seq::SeqVec;
 use paraseq::Record;
 use paraseq::fastx::Reader;
 use paraseq::parallel::{PairedParallelProcessor, ParallelProcessor, ParallelReader};
@@ -69,16 +67,15 @@ fn check_input_paths(config: &FilterConfig) -> Result<()> {
         ));
     }
 
-    if let Some(input2_path) = config.input2_path {
-        if input2_path != "-"
-            && !is_special_input_path(input2_path)
-            && !std::path::Path::new(input2_path).exists()
-        {
-            return Err(anyhow::anyhow!(
-                "Second input file does not exist: {}",
-                input2_path
-            ));
-        }
+    if let Some(input2_path) = config.input2_path
+        && input2_path != "-"
+        && !is_special_input_path(input2_path)
+        && !std::path::Path::new(input2_path).exists()
+    {
+        return Err(anyhow::anyhow!(
+            "Second input file does not exist: {}",
+            input2_path
+        ));
     }
 
     Ok(())
@@ -190,10 +187,10 @@ fn count_compressed_outputs(config: &FilterConfig) -> u8 {
     if is_compressed_output(config.output_path) {
         count += 1;
     }
-    if let Some(output2) = config.output2_path {
-        if is_compressed_output(Some(std::path::Path::new(output2))) {
-            count += 1;
-        }
+    if let Some(output2) = config.output2_path
+        && is_compressed_output(Some(std::path::Path::new(output2)))
+    {
+        count += 1;
     }
     count
 }
@@ -296,24 +293,16 @@ pub struct FilterSummary {
 struct FilterProcessor {
     // Minimizer matching parameters
     minimizers: &'static MinimizerSet,
-    kmer_length: u8,
-    window_size: u8,
-    abs_threshold: usize,
-    rel_threshold: f64,
-    prefix_length: usize,
-    deplete: bool,
     rename: bool,
     rename_random: bool,
     output_fasta: bool,
     debug: bool,
-
-    hasher: KmerHasher,
+    kernel: FilterKernel,
 
     // Local buffers
     local_buffer: Vec<u8>,
     local_buffer2: Vec<u8>, // Second buffer for paired output
     local_stats: ProcessingStats,
-    buffers: Buffers,
 
     // Shared atomic counter for seq renaming
     rename_counter: Arc<AtomicU64>,
@@ -337,26 +326,6 @@ pub(crate) struct ProcessingStats {
 }
 
 impl FilterProcessor {
-    /// Calculate required hits based on absolute and relative thresholds
-    fn calculate_required_hits(&self, total_minimizers: usize) -> usize {
-        let abs_required = self.abs_threshold;
-        let rel_required = if total_minimizers == 0 {
-            0
-        } else {
-            ((self.rel_threshold * total_minimizers as f64).round() as usize).max(1)
-        };
-        abs_required.max(rel_required)
-    }
-
-    /// Check if sequence meets filtering criteria
-    fn meets_filtering_criteria(&self, hit_count: usize, total_minimizers: usize) -> bool {
-        let required = self.calculate_required_hits(total_minimizers);
-        if self.deplete {
-            hit_count < required
-        } else {
-            hit_count >= required
-        }
-    }
     fn new(
         minimizers: &'static MinimizerSet,
         kmer_length: u8,
@@ -369,26 +338,24 @@ impl FilterProcessor {
     ) -> Self {
         Self {
             minimizers,
-            kmer_length,
-            window_size,
-            abs_threshold: config.abs_threshold,
-            rel_threshold: config.rel_threshold,
-            prefix_length: config.prefix_length,
-            deplete: config.deplete,
             rename: config.rename,
             rename_random: config.rename_random,
             output_fasta: config.output_fasta,
             debug: config.debug,
-            hasher: KmerHasher::new(kmer_length as usize),
+            kernel: FilterKernel::new(
+                kmer_length,
+                window_size,
+                FilterParams {
+                    deplete: config.deplete,
+                    abs_threshold: config.abs_threshold,
+                    rel_threshold: config.rel_threshold,
+                    prefix_length: config.prefix_length,
+                },
+            ),
             local_buffer: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
             local_buffer2: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
             rename_counter: Arc::new(AtomicU64::new(0)),
             local_stats: ProcessingStats::default(),
-            buffers: if kmer_length <= 32 {
-                Buffers::new_u64()
-            } else {
-                Buffers::new_u128()
-            },
             global_writer: Arc::new(Mutex::new(writer)),
             global_writer2: writer2.map(|w| Arc::new(Mutex::new(w))),
             global_stats: Arc::new(Mutex::new(ProcessingStats::default())),
@@ -397,180 +364,13 @@ impl FilterProcessor {
         }
     }
 
-    fn should_keep_sequence(&mut self, seq: &[u8]) -> (bool, usize, usize, Vec<String>) {
-        if seq.len() < self.kmer_length as usize {
-            return (self.deplete, 0, 0, Vec::new()); // If too short, keep if in deplete mode
-        }
-
-        self.get_minimizer_positions_and_values(seq);
-        let num_minimizers = self.buffers.minimizers.len();
-
-        // Count distinct minimizer hits (works for exact or BFF index)
-        let set = self.minimizers;
-        let debug = self.debug;
-        let kmer_length = self.kmer_length;
-        // Match width and index variant once, outside the hot loop
-        let minimizers = &self.buffers.minimizers;
-        let (hit_count, hit_kmers) = match (minimizers, set) {
-            (crate::MinimizerVec::U64(vec), crate::MinimizerSet::U64(hs)) => {
-                let mut seen_hits = crate::RapidHashSet::<u64>::default();
-                let mut hit_kmers = Vec::new();
-                for &minimizer in vec {
-                    if hs.contains(&minimizer) && seen_hits.insert(minimizer) && debug {
-                        let kmer = decode_u64(minimizer, kmer_length);
-                        hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
-                    }
-                }
-                (seen_hits.len(), hit_kmers)
-            }
-            (crate::MinimizerVec::U64(vec), crate::MinimizerSet::Fuse(f)) => {
-                let mut seen_hits = crate::RapidHashSet::<u64>::default();
-                let mut hit_kmers = Vec::new();
-                for &minimizer in vec {
-                    if f.contains(minimizer) && seen_hits.insert(minimizer) && debug {
-                        let kmer = decode_u64(minimizer, kmer_length);
-                        hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
-                    }
-                }
-                (seen_hits.len(), hit_kmers)
-            }
-            (crate::MinimizerVec::U128(vec), crate::MinimizerSet::U128(hs)) => {
-                let mut seen_hits = crate::RapidHashSet::<u128>::default();
-                let mut hit_kmers = Vec::new();
-                for &minimizer in vec {
-                    if hs.contains(&minimizer) && seen_hits.insert(minimizer) && debug {
-                        let kmer = decode_u128(minimizer, kmer_length);
-                        hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
-                    }
-                }
-                (seen_hits.len(), hit_kmers)
-            }
-            _ => unreachable!("minimizer width does not match index variant"),
-        };
-
-        (
-            self.meets_filtering_criteria(hit_count, num_minimizers),
-            hit_count,
-            num_minimizers,
-            hit_kmers,
-        )
+    fn should_keep_sequence(&mut self, seq: &[u8]) -> FilterDecision {
+        self.kernel.classify_read(self.minimizers, seq, self.debug)
     }
 
-    fn get_minimizer_positions_and_values<'s>(&mut self, seq: &'s [u8]) -> &'s [u8] {
-        // Apply prefix length limit if specified.
-        let seq = if self.prefix_length > 0 && seq.len() > self.prefix_length {
-            &seq[..self.prefix_length]
-        } else {
-            seq
-        };
-        // Drop trailing newline if present.
-        let seq = seq.strip_suffix(b"\n").unwrap_or(seq);
-
-        let Buffers {
-            packed_nseq,
-            positions,
-            minimizers,
-            cache,
-        } = &mut self.buffers;
-
-        packed_nseq.seq.clear();
-        packed_nseq.ambiguous.clear();
-        minimizers.clear();
-        positions.clear();
-
-        // Pack the sequence into 2-bit representation.
-        packed_nseq.seq.push_ascii(seq);
-        packed_nseq.ambiguous.push_ascii(seq);
-
-        // let mut positions = Vec::new();
-        let k = self.kmer_length as usize;
-        let w = self.window_size as usize;
-        let m = simd_minimizers::canonical_minimizers(k, w)
-            .hasher(&self.hasher)
-            .run_skip_ambiguous_windows_with_buf(packed_nseq.as_slice(), positions, cache);
-
-        // Store k-mer values directly based on variant
-        match minimizers {
-            crate::MinimizerVec::U64(vec) => {
-                vec.extend(m.pos_and_values_u64().map(|(_pos, val)| val));
-            }
-            crate::MinimizerVec::U128(vec) => {
-                vec.extend(m.pos_and_values_u128().map(|(_pos, val)| val));
-            }
-        }
-
-        seq
-    }
-
-    fn should_keep_pair(&mut self, seq1: &[u8], seq2: &[u8]) -> (bool, usize, usize, Vec<String>) {
-        // Process both sequences and count distinct hits (works for exact or BFF index)
-        let set = self.minimizers;
-        let debug = self.debug;
-        let kmer_length = self.kmer_length;
-        // Match the index variant once, outside the hot loop
-        let (hit_count, num_minimizers, hit_kmers) = match set {
-            crate::MinimizerSet::U64(hs) => {
-                let mut seen_hits = crate::RapidHashSet::<u64>::default();
-                let mut hit_kmers = Vec::new();
-                let mut num_minimizers = 0;
-                for seq in [seq1, seq2] {
-                    self.get_minimizer_positions_and_values(seq);
-                    if let crate::MinimizerVec::U64(vec) = &self.buffers.minimizers {
-                        num_minimizers += vec.len();
-                        for &minimizer in vec {
-                            if hs.contains(&minimizer) && seen_hits.insert(minimizer) && debug {
-                                let kmer = decode_u64(minimizer, kmer_length);
-                                hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
-                            }
-                        }
-                    }
-                }
-                (seen_hits.len(), num_minimizers, hit_kmers)
-            }
-            crate::MinimizerSet::Fuse(f) => {
-                let mut seen_hits = crate::RapidHashSet::<u64>::default();
-                let mut hit_kmers = Vec::new();
-                let mut num_minimizers = 0;
-                for seq in [seq1, seq2] {
-                    self.get_minimizer_positions_and_values(seq);
-                    if let crate::MinimizerVec::U64(vec) = &self.buffers.minimizers {
-                        num_minimizers += vec.len();
-                        for &minimizer in vec {
-                            if f.contains(minimizer) && seen_hits.insert(minimizer) && debug {
-                                let kmer = decode_u64(minimizer, kmer_length);
-                                hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
-                            }
-                        }
-                    }
-                }
-                (seen_hits.len(), num_minimizers, hit_kmers)
-            }
-            crate::MinimizerSet::U128(hs) => {
-                let mut seen_hits = crate::RapidHashSet::<u128>::default();
-                let mut hit_kmers = Vec::new();
-                let mut num_minimizers = 0;
-                for seq in [seq1, seq2] {
-                    self.get_minimizer_positions_and_values(seq);
-                    if let crate::MinimizerVec::U128(vec) = &self.buffers.minimizers {
-                        num_minimizers += vec.len();
-                        for &minimizer in vec {
-                            if hs.contains(&minimizer) && seen_hits.insert(minimizer) && debug {
-                                let kmer = decode_u128(minimizer, kmer_length);
-                                hit_kmers.push(String::from_utf8_lossy(&kmer).to_string());
-                            }
-                        }
-                    }
-                }
-                (seen_hits.len(), num_minimizers, hit_kmers)
-            }
-        };
-
-        (
-            self.meets_filtering_criteria(hit_count, num_minimizers),
-            hit_count,
-            num_minimizers,
-            hit_kmers,
-        )
+    fn should_keep_pair(&mut self, seq1: &[u8], seq2: &[u8]) -> FilterDecision {
+        self.kernel
+            .classify_pair(self.minimizers, seq1, seq2, self.debug)
     }
 
     fn write_record<Rf: Record>(
@@ -653,21 +453,21 @@ impl<Rf: Record> ParallelProcessor<Rf> for FilterProcessor {
         self.local_stats.total_seqs += 1;
         self.local_stats.total_bp += seq.len() as u64;
 
-        let (should_keep, hit_count, total_minimizers, hit_kmers) = self.should_keep_sequence(&seq);
+        let decision = self.should_keep_sequence(&seq);
 
         // Show debug info for sequences with hits
         if self.debug {
             eprintln!(
                 "DEBUG: {} hits={}/{} keep={} kmers=[{}]",
                 String::from_utf8_lossy(record.id()),
-                hit_count,
-                total_minimizers,
-                should_keep,
-                hit_kmers.join(",")
+                decision.hit_count,
+                decision.total_minimizers,
+                decision.keep,
+                decision.hit_kmers.join(",")
             );
         }
 
-        if should_keep {
+        if decision.keep {
             self.local_stats.output_bp += seq.len() as u64;
             let counter = if self.rename || self.rename_random {
                 self.rename_counter.fetch_add(1, Ordering::Relaxed) + 1
@@ -722,23 +522,22 @@ impl<Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor {
         self.local_stats.total_seqs += 2;
         self.local_stats.total_bp += (seq1.len() + seq2.len()) as u64;
 
-        let (should_keep, hit_count, total_minimizers, hit_kmers) =
-            self.should_keep_pair(&seq1, &seq2);
+        let decision = self.should_keep_pair(&seq1, &seq2);
 
         // Debug info for interleaved pairs
-        if self.debug && hit_count > 0 {
+        if self.debug && decision.hit_count > 0 {
             eprintln!(
                 "DEBUG: {}/{} hits={}/{} keep={} kmers=[{}]",
                 String::from_utf8_lossy(record1.id()),
                 String::from_utf8_lossy(record2.id()),
-                hit_count,
-                total_minimizers,
-                should_keep,
-                hit_kmers.join(",")
+                decision.hit_count,
+                decision.total_minimizers,
+                decision.keep,
+                decision.hit_kmers.join(",")
             );
         }
 
-        if should_keep {
+        if decision.keep {
             self.local_stats.output_bp += (seq1.len() + seq2.len()) as u64;
             let counter = if self.rename || self.rename_random {
                 self.rename_counter.fetch_add(1, Ordering::Relaxed) + 1
@@ -833,14 +632,13 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         let compression_threads_total = if config.compression_threads > 0 {
             config.compression_threads as usize
         } else {
-            (total_threads + 1) / 2 // Auto: ceil(total_threads / 2)
+            total_threads.div_ceil(2) // Auto: ceil(total_threads / 2)
         };
         let filtering_threads = total_threads
             .saturating_sub(compression_threads_total)
             .max(1);
         let output_count = compressed_output_count as usize;
-        let threads_per_output =
-            ((compression_threads_total + output_count - 1) / output_count).max(1);
+        let threads_per_output = compression_threads_total.div_ceil(output_count).max(1);
         (filtering_threads, threads_per_output)
     } else {
         (total_threads, 0)
@@ -909,7 +707,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     check_input_paths(config)?;
 
     // Load minimizers and parse header
-    let (minimizers, header) = load_minimizers_cached(&config.minimizers_path)?;
+    let (minimizers, header) = load_minimizers_cached(config.minimizers_path)?;
 
     let kmer_length = header.kmer_length();
     let window_size = header.window_size();
@@ -980,7 +778,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     let input1_empty = is_empty_file(config.input_path)?;
     let input2_empty = config
         .input2_path
-        .map(|p| is_empty_file(p))
+        .map(is_empty_file)
         .transpose()?
         .unwrap_or(false);
 

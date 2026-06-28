@@ -85,5 +85,6 @@ fn test_server_mode() {
         .unwrap();
 
     let _ = server.kill();
+    let _ = server.wait();
     let _ = fs::remove_file("deacon_server_socket");
 }

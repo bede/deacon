@@ -1,13 +1,14 @@
+use std::collections::VecDeque;
 use std::io::Cursor;
 use std::io::Write;
 use std::sync::Arc;
 
 use flate2::Compression;
 use flate2::write::{GzEncoder, MultiGzDecoder};
-use js_sys::{Object, Reflect};
+use js_sys::{Object, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 
-use deacon::{Buffers, KmerHasher, MinimizerSet, MinimizerVec, RapidHashSet};
+use deacon::{FilterKernel, FilterParams, MinimizerSet};
 
 struct WasmIndexInner {
     minimizers: MinimizerSet,
@@ -44,14 +45,9 @@ impl WasmIndex {
 }
 
 #[wasm_bindgen]
-pub struct WasmFilterSession {
+pub struct FilterSession {
     index: Arc<WasmIndexInner>,
-    deplete: bool,
-    abs_threshold: usize,
-    rel_threshold: f64,
-    hasher: KmerHasher,
-    buffers: Buffers,
-    seen: MinimizerSet,
+    kernel: FilterKernel,
     parser: SeqChunkParser,
     stats: FilterStats,
     gz_decoder: Option<MultiGzDecoder<Vec<u8>>>,
@@ -59,7 +55,7 @@ pub struct WasmFilterSession {
 }
 
 #[wasm_bindgen]
-impl WasmFilterSession {
+impl FilterSession {
     #[wasm_bindgen(constructor)]
     pub fn new(
         index: &WasmIndex,
@@ -68,20 +64,9 @@ impl WasmFilterSession {
         rel_threshold: f64,
         decompress_input: bool,
         compress_output: bool,
-    ) -> WasmFilterSession {
+    ) -> FilterSession {
         let k = index.inner.header.kmer_length();
-        let hasher = KmerHasher::new(k as usize);
-        let buffers = if k <= 32 {
-            Buffers::new_u64()
-        } else {
-            Buffers::new_u128()
-        };
-
-        let seen = if k <= 32 {
-            MinimizerSet::U64(RapidHashSet::default())
-        } else {
-            MinimizerSet::U128(RapidHashSet::default())
-        };
+        let w = index.inner.header.window_size();
 
         let gz_decoder = if decompress_input {
             Some(MultiGzDecoder::new(Vec::new()))
@@ -94,14 +79,18 @@ impl WasmFilterSession {
             None
         };
 
-        WasmFilterSession {
+        FilterSession {
             index: Arc::clone(&index.inner),
-            deplete,
-            abs_threshold,
-            rel_threshold,
-            hasher,
-            buffers,
-            seen,
+            kernel: FilterKernel::new(
+                k,
+                w,
+                FilterParams {
+                    deplete,
+                    abs_threshold,
+                    rel_threshold,
+                    prefix_length: 0,
+                },
+            ),
             parser: SeqChunkParser::new(),
             stats: FilterStats::default(),
             gz_decoder,
@@ -206,12 +195,7 @@ impl WasmFilterSession {
     }
 
     pub fn stats(&self) -> Result<JsValue, JsValue> {
-        let stats_obj = Object::new();
-        set_field(&stats_obj, "readsIn", self.stats.reads_in)?;
-        set_field(&stats_obj, "readsOut", self.stats.reads_out)?;
-        set_field(&stats_obj, "basesIn", self.stats.bases_in)?;
-        set_field(&stats_obj, "basesOut", self.stats.bases_out)?;
-        Ok(stats_obj.into())
+        stats_to_js(&self.stats)
     }
 
     pub fn pending_bytes(&self) -> usize {
@@ -229,36 +213,13 @@ impl WasmFilterSession {
         qual: Option<&[u8]>,
         output: &mut Vec<u8>,
     ) -> Result<(), JsValue> {
-        let k = self.index.header.kmer_length();
-        let w = self.index.header.window_size();
-
         self.stats.reads_in += 1;
         self.stats.bases_in += seq.len() as u64;
 
-        let keep = if seq.len() < k as usize {
-            self.deplete
-        } else {
-            deacon::fill_minimizers(seq, &self.hasher, k, w, &mut self.buffers);
-            let num_minimizers = self.buffers.minimizers.len();
-            let hit_count = count_hits_into(
-                &self.buffers.minimizers,
-                &self.index.minimizers,
-                &mut self.seen,
-            );
-            let rel_required = if num_minimizers == 0 {
-                0
-            } else {
-                ((self.rel_threshold * num_minimizers as f64).round() as usize).max(1)
-            };
-            let required = self.abs_threshold.max(rel_required);
-            if self.deplete {
-                hit_count < required
-            } else {
-                hit_count >= required
-            }
-        };
-
-        if keep {
+        let decision = self
+            .kernel
+            .classify_read(&self.index.minimizers, seq, false);
+        if decision.keep {
             self.stats.reads_out += 1;
             self.stats.bases_out += seq.len() as u64;
             write_record(output, header, seq, qual)
@@ -266,6 +227,213 @@ impl WasmFilterSession {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Default)]
+struct PairedOutput {
+    r1: Vec<u8>,
+    r2: Vec<u8>,
+}
+
+#[wasm_bindgen]
+pub struct PairedFilterSession {
+    index: Arc<WasmIndexInner>,
+    kernel: FilterKernel,
+    parser_r1: SeqChunkParser,
+    parser_r2: SeqChunkParser,
+    queue_r1: VecDeque<SeqRecord>,
+    queue_r2: VecDeque<SeqRecord>,
+    stats: FilterStats,
+    decoder_r1: Option<MultiGzDecoder<Vec<u8>>>,
+    decoder_r2: Option<MultiGzDecoder<Vec<u8>>>,
+    encoder_r1: Option<GzEncoder<Vec<u8>>>,
+    encoder_r2: Option<GzEncoder<Vec<u8>>>,
+    r1_finished: bool,
+    r2_finished: bool,
+}
+
+#[wasm_bindgen]
+impl PairedFilterSession {
+    // flat wasm-bindgen constructor so per-mate gz flags must be separate args
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        index: &WasmIndex,
+        deplete: bool,
+        abs_threshold: usize,
+        rel_threshold: f64,
+        decompress_r1: bool,
+        decompress_r2: bool,
+        compress_r1: bool,
+        compress_r2: bool,
+    ) -> PairedFilterSession {
+        let k = index.inner.header.kmer_length();
+        let w = index.inner.header.window_size();
+        PairedFilterSession {
+            index: Arc::clone(&index.inner),
+            kernel: FilterKernel::new(
+                k,
+                w,
+                FilterParams {
+                    deplete,
+                    abs_threshold,
+                    rel_threshold,
+                    prefix_length: 0,
+                },
+            ),
+            parser_r1: SeqChunkParser::new(),
+            parser_r2: SeqChunkParser::new(),
+            queue_r1: VecDeque::new(),
+            queue_r2: VecDeque::new(),
+            stats: FilterStats::default(),
+            decoder_r1: decompress_r1.then(|| MultiGzDecoder::new(Vec::new())),
+            decoder_r2: decompress_r2.then(|| MultiGzDecoder::new(Vec::new())),
+            encoder_r1: compress_r1.then(|| GzEncoder::new(Vec::new(), Compression::new(2))),
+            encoder_r2: compress_r2.then(|| GzEncoder::new(Vec::new(), Compression::new(2))),
+            r1_finished: false,
+            r2_finished: false,
+        }
+    }
+
+    pub fn push_r1(&mut self, chunk: &[u8]) -> Result<JsValue, JsValue> {
+        if self.r1_finished {
+            return Err(JsValue::from_str("R1 input was already finished"));
+        }
+        let input = decode_chunk(&mut self.decoder_r1, chunk, "R1")?;
+        let records = self
+            .parser_r1
+            .push_chunk(&input)
+            .map_err(|e| JsValue::from_str(&e))?;
+        self.queue_r1.extend(records);
+        let raw = self.drain_pairs()?;
+        output_to_js(self.encode_output(raw, false)?)
+    }
+
+    pub fn push_r2(&mut self, chunk: &[u8]) -> Result<JsValue, JsValue> {
+        if self.r2_finished {
+            return Err(JsValue::from_str("R2 input was already finished"));
+        }
+        let input = decode_chunk(&mut self.decoder_r2, chunk, "R2")?;
+        let records = self
+            .parser_r2
+            .push_chunk(&input)
+            .map_err(|e| JsValue::from_str(&e))?;
+        self.queue_r2.extend(records);
+        let raw = self.drain_pairs()?;
+        output_to_js(self.encode_output(raw, false)?)
+    }
+
+    pub fn finish_r1(&mut self) -> Result<JsValue, JsValue> {
+        if self.r1_finished {
+            return output_to_js(PairedOutput::default());
+        }
+        let remaining = finish_decoder(&mut self.decoder_r1, "R1")?;
+        if !remaining.is_empty() {
+            let records = self
+                .parser_r1
+                .push_chunk(&remaining)
+                .map_err(|e| JsValue::from_str(&e))?;
+            self.queue_r1.extend(records);
+        }
+        self.queue_r1
+            .extend(self.parser_r1.finish().map_err(|e| JsValue::from_str(&e))?);
+        self.r1_finished = true;
+        let raw = self.drain_pairs()?;
+        self.check_balanced()?;
+        let final_output = self.r1_finished && self.r2_finished;
+        output_to_js(self.encode_output(raw, final_output)?)
+    }
+
+    pub fn finish_r2(&mut self) -> Result<JsValue, JsValue> {
+        if self.r2_finished {
+            return output_to_js(PairedOutput::default());
+        }
+        let remaining = finish_decoder(&mut self.decoder_r2, "R2")?;
+        if !remaining.is_empty() {
+            let records = self
+                .parser_r2
+                .push_chunk(&remaining)
+                .map_err(|e| JsValue::from_str(&e))?;
+            self.queue_r2.extend(records);
+        }
+        self.queue_r2
+            .extend(self.parser_r2.finish().map_err(|e| JsValue::from_str(&e))?);
+        self.r2_finished = true;
+        let raw = self.drain_pairs()?;
+        self.check_balanced()?;
+        let final_output = self.r1_finished && self.r2_finished;
+        output_to_js(self.encode_output(raw, final_output)?)
+    }
+
+    pub fn stats(&self) -> Result<JsValue, JsValue> {
+        stats_to_js(&self.stats)
+    }
+
+    fn drain_pairs(&mut self) -> Result<PairedOutput, JsValue> {
+        let mut output = PairedOutput::default();
+        while !self.queue_r1.is_empty() && !self.queue_r2.is_empty() {
+            let record1 = self.queue_r1.pop_front().unwrap();
+            let record2 = self.queue_r2.pop_front().unwrap();
+            self.process_pair(record1, record2, &mut output)?;
+        }
+        Ok(output)
+    }
+
+    fn process_pair(
+        &mut self,
+        record1: SeqRecord,
+        record2: SeqRecord,
+        output: &mut PairedOutput,
+    ) -> Result<(), JsValue> {
+        self.stats.reads_in += 2;
+        self.stats.bases_in += (record1.seq.len() + record2.seq.len()) as u64;
+
+        let decision =
+            self.kernel
+                .classify_pair(&self.index.minimizers, &record1.seq, &record2.seq, false);
+        if decision.keep {
+            self.stats.reads_out += 2;
+            self.stats.bases_out += (record1.seq.len() + record2.seq.len()) as u64;
+            write_record(
+                &mut output.r1,
+                &record1.header,
+                &record1.seq,
+                record1.qual.as_deref(),
+            )
+            .map_err(|e| JsValue::from_str(&format!("R1 output write error: {}", e)))?;
+            write_record(
+                &mut output.r2,
+                &record2.header,
+                &record2.seq,
+                record2.qual.as_deref(),
+            )
+            .map_err(|e| JsValue::from_str(&format!("R2 output write error: {}", e)))?;
+        }
+        Ok(())
+    }
+
+    fn check_balanced(&self) -> Result<(), JsValue> {
+        if self.r1_finished
+            && self.r2_finished
+            && (!self.queue_r1.is_empty() || !self.queue_r2.is_empty())
+        {
+            return Err(JsValue::from_str(
+                "Paired input has different numbers of R1 and R2 records",
+            ));
+        }
+        Ok(())
+    }
+
+    fn encode_output(
+        &mut self,
+        raw: PairedOutput,
+        final_output: bool,
+    ) -> Result<PairedOutput, JsValue> {
+        Ok(PairedOutput {
+            r1: encode_mate(&mut self.encoder_r1, raw.r1, final_output, "R1")?,
+            r2: encode_mate(&mut self.encoder_r2, raw.r2, final_output, "R2")?,
+        })
     }
 }
 
@@ -480,11 +648,7 @@ impl SeqChunkParser {
 
         let line = |n: usize| -> &[u8] {
             let start = lines[n];
-            let mut end = if n + 1 <= li {
-                lines[n + 1] - 1
-            } else {
-                data.len()
-            };
+            let mut end = if n < li { lines[n + 1] - 1 } else { data.len() };
             // Strip \r
             if end > start && data[end - 1] == b'\r' {
                 end -= 1;
@@ -542,7 +706,7 @@ impl SeqChunkParser {
                                 // record_start after all preceding data was accumulated)
                                 if abs > 0 && self.pending[abs - 1] == b'\n' {
                                     break Some(abs);
-                                } else if abs == start && (self.fasta_seq.len() > 0 || abs == 0) {
+                                } else if abs == start && (!self.fasta_seq.is_empty() || abs == 0) {
                                     // > is right at record_start — previous data was already
                                     // accumulated (the \n was consumed/drained in a prior chunk)
                                     break Some(abs);
@@ -643,7 +807,7 @@ fn fmt_commas(n: usize) -> String {
     let s = n.to_string();
     let mut result = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(c);
@@ -656,32 +820,89 @@ fn set_field(obj: &Object, key: &str, value: u64) -> Result<(), JsValue> {
     Ok(())
 }
 
-fn count_hits_into(
-    minimizers: &MinimizerVec,
-    set: &MinimizerSet,
-    seen: &mut MinimizerSet,
-) -> usize {
-    // Match read-side width; query via contains_u64/u128 (exact or BFF)
-    match (minimizers, seen) {
-        (MinimizerVec::U64(vec), MinimizerSet::U64(seen)) => {
-            seen.clear();
-            for &m in vec {
-                if set.contains_u64(m) {
-                    seen.insert(m);
-                }
+fn stats_to_js(stats: &FilterStats) -> Result<JsValue, JsValue> {
+    let stats_obj = Object::new();
+    set_field(&stats_obj, "readsIn", stats.reads_in)?;
+    set_field(&stats_obj, "readsOut", stats.reads_out)?;
+    set_field(&stats_obj, "basesIn", stats.bases_in)?;
+    set_field(&stats_obj, "basesOut", stats.bases_out)?;
+    Ok(stats_obj.into())
+}
+
+fn output_to_js(output: PairedOutput) -> Result<JsValue, JsValue> {
+    let obj = Object::new();
+    Reflect::set(
+        &obj,
+        &"r1".into(),
+        &Uint8Array::from(output.r1.as_slice()).into(),
+    )?;
+    Reflect::set(
+        &obj,
+        &"r2".into(),
+        &Uint8Array::from(output.r2.as_slice()).into(),
+    )?;
+    Ok(obj.into())
+}
+
+fn decode_chunk(
+    decoder: &mut Option<MultiGzDecoder<Vec<u8>>>,
+    chunk: &[u8],
+    label: &str,
+) -> Result<Vec<u8>, JsValue> {
+    if let Some(decoder) = decoder {
+        decoder
+            .write_all(chunk)
+            .map_err(|e| JsValue::from_str(&format!("{} decompression error: {}", label, e)))?;
+        Ok(std::mem::take(decoder.get_mut()))
+    } else {
+        Ok(chunk.to_vec())
+    }
+}
+
+fn finish_decoder(
+    decoder: &mut Option<MultiGzDecoder<Vec<u8>>>,
+    label: &str,
+) -> Result<Vec<u8>, JsValue> {
+    if let Some(decoder) = decoder.take() {
+        decoder
+            .finish()
+            .map_err(|e| JsValue::from_str(&format!("{} decompression finish error: {}", label, e)))
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+fn encode_mate(
+    encoder: &mut Option<GzEncoder<Vec<u8>>>,
+    raw: Vec<u8>,
+    final_output: bool,
+    label: &str,
+) -> Result<Vec<u8>, JsValue> {
+    if final_output {
+        if let Some(mut encoder) = encoder.take() {
+            if !raw.is_empty() {
+                encoder.write_all(&raw).map_err(|e| {
+                    JsValue::from_str(&format!("{} compression error: {}", label, e))
+                })?;
             }
-            seen.len()
+            encoder.finish().map_err(|e| {
+                JsValue::from_str(&format!("{} compression finish error: {}", label, e))
+            })
+        } else {
+            Ok(raw)
         }
-        (MinimizerVec::U128(vec), MinimizerSet::U128(seen)) => {
-            seen.clear();
-            for &m in vec {
-                if set.contains_u128(m) {
-                    seen.insert(m);
-                }
-            }
-            seen.len()
+    } else if let Some(encoder) = encoder {
+        if !raw.is_empty() {
+            encoder
+                .write_all(&raw)
+                .map_err(|e| JsValue::from_str(&format!("{} compression error: {}", label, e)))?;
+            encoder.flush().map_err(|e| {
+                JsValue::from_str(&format!("{} compression flush error: {}", label, e))
+            })?;
         }
-        _ => 0,
+        Ok(std::mem::take(encoder.get_mut()))
+    } else {
+        Ok(raw)
     }
 }
 

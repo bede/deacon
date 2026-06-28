@@ -301,66 +301,66 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    if let Commands::Server { command } = &cli.command {
-        if !cli.use_server {
-            // Running server commands directly (not via --use-server)
-            match command {
-                ServerCommands::Start { threads } => {
-                    rayon::ThreadPoolBuilder::new()
-                        .num_threads(*threads as usize)
-                        .build_global()
-                        .context("Failed to initialize thread pool")?;
+    if let Commands::Server { command } = &cli.command
+        && !cli.use_server
+    {
+        // Running server commands directly (not via --use-server)
+        match command {
+            ServerCommands::Start { threads } => {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(*threads as usize)
+                    .build_global()
+                    .context("Failed to initialize thread pool")?;
 
-                    // Remove existing socket if present
-                    let _ = std::fs::remove_file("deacon_server_socket");
-                    let listener = UnixListener::bind("deacon_server_socket")?;
-                    for stream in listener.incoming() {
-                        let mut stream = stream.unwrap();
-                        let mut message = vec![];
-                        let mut buf = vec![0; 10000];
-                        loop {
-                            let len = stream.read(&mut buf)?;
-                            let buf = &buf[..len];
-                            message.extend_from_slice(buf);
-                            if buf.contains(&0) {
-                                assert_eq!(buf.last(), Some(&0));
-                                message.pop();
-                                break;
-                            }
-                        }
-                        let message: Message = serde_json::from_slice(&message).unwrap();
-                        match message {
-                            Message::Command(Commands::Server {
-                                command: ServerCommands::Stop,
-                            }) => {
-                                serde_json::to_writer(stream, &Message::Done)?;
-                                let _ = std::fs::remove_file("deacon_server_socket");
-                                break;
-                            }
-                            Message::Command(commands) => {
-                                process_command(&commands)?;
-                                serde_json::to_writer(stream, &Message::Done)?;
-                            }
-                            Message::Done => {
-                                unreachable!("Server should not receive `Done` messages.")
-                            }
+                // Remove existing socket if present
+                let _ = std::fs::remove_file("deacon_server_socket");
+                let listener = UnixListener::bind("deacon_server_socket")?;
+                for stream in listener.incoming() {
+                    let mut stream = stream.unwrap();
+                    let mut message = vec![];
+                    let mut buf = vec![0; 10000];
+                    loop {
+                        let len = stream.read(&mut buf)?;
+                        let buf = &buf[..len];
+                        message.extend_from_slice(buf);
+                        if buf.contains(&0) {
+                            assert_eq!(buf.last(), Some(&0));
+                            message.pop();
+                            break;
                         }
                     }
+                    let message: Message = serde_json::from_slice(&message).unwrap();
+                    match message {
+                        Message::Command(Commands::Server {
+                            command: ServerCommands::Stop,
+                        }) => {
+                            serde_json::to_writer(stream, &Message::Done)?;
+                            let _ = std::fs::remove_file("deacon_server_socket");
+                            break;
+                        }
+                        Message::Command(commands) => {
+                            process_command(&commands)?;
+                            serde_json::to_writer(stream, &Message::Done)?;
+                        }
+                        Message::Done => {
+                            unreachable!("Server should not receive `Done` messages.")
+                        }
+                    }
+                }
 
-                    return Ok(());
-                }
-                ServerCommands::Stop => {
-                    panic!("Use `deacon --use-server server stop` to stop the server.")
-                }
+                return Ok(());
+            }
+            ServerCommands::Stop => {
+                panic!("Use `deacon --use-server server stop` to stop the server.")
             }
         }
-        // If --use-server is set, fall through to client code below
     }
+    // If --use-server is set, fall through to client code below
 
     if cli.use_server {
         let mut stream = UnixStream::connect("deacon_server_socket")?;
         serde_json::to_writer(&stream, &Message::Command(cli.command))?;
-        stream.write(b"\0")?;
+        stream.write_all(b"\0")?;
         stream.flush()?;
         let message: Message = serde_json::from_reader(stream).unwrap();
         match message {

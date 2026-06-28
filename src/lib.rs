@@ -10,12 +10,14 @@
 // Re-export public functionality
 #[cfg(feature = "cli")]
 mod filter;
+mod filter_kernel;
 mod index;
 mod minimizers;
 
 // Public API
 #[cfg(feature = "cli")]
 pub use filter::{FilterSummary, run as run_filter};
+pub use filter_kernel::{FilterDecision, FilterKernel, FilterParams};
 #[cfg(feature = "fetch")]
 pub use index::fetch as index_fetch;
 pub use index::{
@@ -110,6 +112,10 @@ impl MinimizerSet {
             MinimizerSet::U128(set) => set.len(),
             MinimizerSet::Fuse(f) => f.key_count,
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn is_u64(&self) -> bool {
@@ -357,7 +363,7 @@ impl IndexConfig {
         let w = self.window_size as usize;
 
         // Check constraints: k <= 61, k+w <= 96, k+w even (ensures k odd and k+w-1 odd)
-        if k > 61 || k + w > 96 || (k + w) % 2 != 0 {
+        if k > 61 || k + w > 96 || !(k + w).is_multiple_of(2) {
             return Err(anyhow::anyhow!(
                 "Invalid k-w combination: k={}, w={}, k+w={} (constraints: k<=61, k+w<=96, k+w even)",
                 k,

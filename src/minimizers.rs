@@ -195,6 +195,47 @@ pub fn fill_minimizers(
     };
 }
 
+/// Fill minimizer buffers for a sequence already known to be at least `kmer_length`.
+///
+/// This avoids a redundant short-read branch in filtering hot paths that already
+/// handle short records before minimizer computation.
+#[inline]
+pub(crate) fn fill_minimizers_unchecked(
+    seq: &[u8],
+    hasher: &KmerHasher,
+    kmer_length: u8,
+    window_size: u8,
+    buffers: &mut Buffers,
+) {
+    let Buffers {
+        packed_nseq,
+        positions,
+        minimizers,
+        cache,
+    } = buffers;
+
+    packed_nseq.seq.clear();
+    packed_nseq.ambiguous.clear();
+    minimizers.clear();
+    positions.clear();
+
+    packed_nseq.seq.push_ascii(seq);
+    packed_nseq.ambiguous.push_ascii(seq);
+
+    let out = simd_minimizers::canonical_minimizers(kmer_length as usize, window_size as usize)
+        .hasher(hasher)
+        .run_skip_ambiguous_windows_with_buf(packed_nseq.as_slice(), positions, cache);
+
+    match minimizers {
+        crate::MinimizerVec::U64(vec) => {
+            vec.extend(out.pos_and_values_u64().map(|(_pos, val)| val));
+        }
+        crate::MinimizerVec::U128(vec) => {
+            vec.extend(out.pos_and_values_u128().map(|(_pos, val)| val));
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

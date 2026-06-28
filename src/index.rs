@@ -64,7 +64,7 @@ impl IndexHeader {
         let w = self.window_size as usize;
 
         // Check constraints: k <= 61, k+w <= 96, k+w even (ensures k odd and k+w-1 odd)
-        if k > 61 || k + w > 96 || (k + w) % 2 != 0 {
+        if k > 61 || k + w > 96 || !(k + w).is_multiple_of(2) {
             return Err(anyhow::anyhow!(
                 "Invalid k-w combination: k={}, w={}, k+w={} (constraints: k<=61, k+w<=96, k+w even)",
                 k,
@@ -1019,7 +1019,7 @@ pub fn diff(
         return Ok(());
     } else {
         // Try to load as index file first
-        if let Ok((second_minimizers, second_header)) = load_minimizers_from_path(&second) {
+        if let Ok((second_minimizers, second_header)) = load_minimizers_from_path(second) {
             // Second file is an index file
             eprintln!(
                 "Second index: loaded {} minimizers",
@@ -1051,7 +1051,7 @@ pub fn diff(
             let before_count = first_minimizers.len();
 
             let (_seq_count, _total_bp) =
-                stream_diff_fastx(&second, k, w, &header, threads, &mut first_minimizers)?;
+                stream_diff_fastx(second, k, w, &header, threads, &mut first_minimizers)?;
 
             // Report results
             eprintln!(
@@ -1342,6 +1342,60 @@ pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+/// Fetch a pre-built index from remote storage
+#[cfg(feature = "fetch")]
+pub fn fetch(
+    index_name: &str,
+    kmer_length: u8,
+    window_size: u8,
+    output: Option<&Path>,
+) -> Result<()> {
+    const DEFAULT_REPOSITORY_URL: &str =
+        "https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o";
+
+    let base_url = std::env::var("DEACON_REPOSITORY_URL")
+        .unwrap_or_else(|_| DEFAULT_REPOSITORY_URL.to_string());
+
+    let filename = format!("{}.k{}w{}.idx", index_name, kmer_length, window_size);
+    let url = format!("{}/deacon/{}/{}", base_url, INDEX_FORMAT_VERSION, filename);
+
+    eprintln!("Fetching {}", url);
+
+    let mut response = minreq::get(&url)
+        .send_lazy()
+        .context("Failed to download index")?;
+
+    if response.status_code != 200 {
+        anyhow::bail!("Failed to fetch index: HTTP {}", response.status_code);
+    }
+
+    let content_length = response
+        .headers
+        .get("content-length")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+
+    let pb = ProgressBar::new(content_length);
+
+    let output_path = output
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from(&filename));
+
+    let mut temp_path = output_path.clone();
+    temp_path.as_mut_os_string().push(".tmp");
+
+    let mut file = std::fs::File::create(&temp_path).context("Failed to create temporary file")?;
+    std::io::copy(&mut pb.wrap_read(&mut response), &mut file)
+        .context("Failed to write index to file")?;
+
+    std::fs::rename(&temp_path, &output_path).context("Failed to finalise index")?;
+
+    pb.finish_and_clear();
+    eprintln!("Index saved to: {}", output_path.display());
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1480,58 +1534,4 @@ mod tests {
         let (set2, _) = load_index_auto(&mut cursor2).unwrap();
         assert!(matches!(set2, crate::MinimizerSet::Fuse(_)));
     }
-}
-
-/// Fetch a pre-built index from remote storage
-#[cfg(feature = "fetch")]
-pub fn fetch(
-    index_name: &str,
-    kmer_length: u8,
-    window_size: u8,
-    output: Option<&Path>,
-) -> Result<()> {
-    const DEFAULT_REPOSITORY_URL: &str =
-        "https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o";
-
-    let base_url = std::env::var("DEACON_REPOSITORY_URL")
-        .unwrap_or_else(|_| DEFAULT_REPOSITORY_URL.to_string());
-
-    let filename = format!("{}.k{}w{}.idx", index_name, kmer_length, window_size);
-    let url = format!("{}/deacon/{}/{}", base_url, INDEX_FORMAT_VERSION, filename);
-
-    eprintln!("Fetching {}", url);
-
-    let mut response = minreq::get(&url)
-        .send_lazy()
-        .context("Failed to download index")?;
-
-    if response.status_code != 200 {
-        anyhow::bail!("Failed to fetch index: HTTP {}", response.status_code);
-    }
-
-    let content_length = response
-        .headers
-        .get("content-length")
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(0);
-
-    let pb = ProgressBar::new(content_length);
-
-    let output_path = output
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from(&filename));
-
-    let mut temp_path = output_path.clone();
-    temp_path.as_mut_os_string().push(".tmp");
-
-    let mut file = std::fs::File::create(&temp_path).context("Failed to create temporary file")?;
-    std::io::copy(&mut pb.wrap_read(&mut response), &mut file)
-        .context("Failed to write index to file")?;
-
-    std::fs::rename(&temp_path, &output_path).context("Failed to finalise index")?;
-
-    pb.finish_and_clear();
-    eprintln!("Index saved to: {}", output_path.display());
-
-    Ok(())
 }

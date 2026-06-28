@@ -2082,10 +2082,10 @@ fn test_rename_counter_continuity_across_batches() {
     let output_content = fs::read_to_string(&output_path).unwrap();
     let mut seen_ids: Vec<u64> = Vec::new();
     for line in output_content.lines() {
-        if let Some(id_str) = line.strip_prefix('@') {
-            if let Ok(id) = id_str.parse::<u64>() {
-                seen_ids.push(id);
-            }
+        if let Some(id_str) = line.strip_prefix('@')
+            && let Ok(id) = id_str.parse::<u64>()
+        {
+            seen_ids.push(id);
         }
     }
 

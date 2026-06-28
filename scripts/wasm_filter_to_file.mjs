@@ -49,7 +49,7 @@ if (typeof wasmModule.default === "function") {
 
 const indexBytes = await readFile(indexPath);
 const index = new wasmModule.WasmIndex(new Uint8Array(indexBytes));
-const session = new wasmModule.WasmFilterSession(
+const session = new wasmModule.FilterSession(
   index,
   false,
   2,
