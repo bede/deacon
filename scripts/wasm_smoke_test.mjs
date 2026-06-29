@@ -49,11 +49,13 @@ const [indexBytes, readsBytes] = await Promise.all([
 const index = new wasmModule.WasmIndex(new Uint8Array(indexBytes));
 const session = new wasmModule.FilterSession(
   index,
-  false,
-  2,
-  0.01,
-  false,
-  false,
+  false, // deplete
+  2,     // abs_threshold
+  0.01,  // rel_threshold
+  false, // decompress_input
+  false, // compress_output
+  false, // rename
+  false, // output_fasta
 );
 
 const outputChunks = [];

@@ -6,14 +6,24 @@ import { pathToFileURL } from "node:url";
 
 function parseArgs(argv) {
   const args = new Map();
-  for (let i = 0; i < argv.length; i += 2) {
+  const flags = new Set();
+  for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
-    const value = argv[i + 1];
-    if (!key?.startsWith("--") || value === undefined) {
+    if (!key?.startsWith("--")) {
       throw new Error(`Invalid arguments near: ${key ?? "<end>"}`);
     }
-    args.set(key.slice(2), value);
+    const name = key.slice(2);
+    if (name === "rename" || name === "fasta") {
+      flags.add(name);
+      continue;
+    }
+    const value = argv[++i];
+    if (value === undefined) {
+      throw new Error(`Invalid arguments near: ${key}`);
+    }
+    args.set(name, value);
   }
+  args.flags = flags;
   return args;
 }
 
@@ -39,6 +49,8 @@ const pkgDir = requireArg(args, "pkg");
 const indexPath = requireArg(args, "index");
 const readsPath = requireArg(args, "reads");
 const outputPath = requireArg(args, "output");
+const rename = args.flags.has("rename");
+const outputFasta = args.flags.has("fasta");
 
 const wasmModule = await import(pathToFileURL(path.join(pkgDir, "deacon_wasm.js")).href);
 
@@ -51,11 +63,13 @@ const indexBytes = await readFile(indexPath);
 const index = new wasmModule.WasmIndex(new Uint8Array(indexBytes));
 const session = new wasmModule.FilterSession(
   index,
-  false,
-  2,
-  0.01,
-  true,
-  false,
+  false, // deplete
+  2,     // abs_threshold
+  0.01,  // rel_threshold
+  true,  // decompress_input
+  false, // compress_output
+  rename,
+  outputFasta,
 );
 
 const input = createReadStream(readsPath, { highWaterMark: 256 * 1024 });

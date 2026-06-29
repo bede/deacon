@@ -33,7 +33,9 @@ async function streamFilterFile(file, opts) {
   const session = new wasm.FilterSession(
     index, deplete, absThreshold, relThreshold,
     isGz,  // decompress_input
-    isGz   // compress_output (match input format)
+    isGz,  // compress_output (match input format)
+    false, // rename
+    false  // output_fasta
   );
 
   const reader = file.stream().getReader();
@@ -128,8 +130,10 @@ async function streamFilterPairedFiles(file1, file2, opts) {
   const totalBytes = (file1.size || 0) + (file2.size || 0);
   const session = new wasm.PairedFilterSession(
     index, deplete, absThreshold, relThreshold,
-    r1Gz, r2Gz,
-    r1Gz, r2Gz
+    r1Gz, r2Gz, // decompress_r1, decompress_r2
+    r1Gz, r2Gz, // compress_r1, compress_r2
+    false, // rename
+    false  // output_fasta
   );
 
   const readerR1 = file1.stream().getReader();

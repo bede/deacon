@@ -48,6 +48,9 @@ impl WasmIndex {
 pub struct FilterSession {
     index: Arc<WasmIndexInner>,
     kernel: FilterKernel,
+    rename: bool,
+    output_fasta: bool,
+    rename_counter: u64,
     parser: SeqChunkParser,
     stats: FilterStats,
     gz_decoder: Option<MultiGzDecoder<Vec<u8>>>,
@@ -56,6 +59,7 @@ pub struct FilterSession {
 
 #[wasm_bindgen]
 impl FilterSession {
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(constructor)]
     pub fn new(
         index: &WasmIndex,
@@ -64,6 +68,8 @@ impl FilterSession {
         rel_threshold: f64,
         decompress_input: bool,
         compress_output: bool,
+        rename: bool,
+        output_fasta: bool,
     ) -> FilterSession {
         let k = index.inner.header.kmer_length();
         let w = index.inner.header.window_size();
@@ -91,6 +97,9 @@ impl FilterSession {
                     prefix_length: 0,
                 },
             ),
+            rename,
+            output_fasta,
+            rename_counter: 0,
             parser: SeqChunkParser::new(),
             stats: FilterStats::default(),
             gz_decoder,
@@ -222,8 +231,23 @@ impl FilterSession {
         if decision.keep {
             self.stats.reads_out += 1;
             self.stats.bases_out += seq.len() as u64;
-            write_record(output, header, seq, qual)
-                .map_err(|e| JsValue::from_str(&format!("Output write error: {}", e)))?;
+            let counter = if self.rename {
+                self.rename_counter += 1;
+                self.rename_counter
+            } else {
+                0
+            };
+            write_record(
+                output,
+                header,
+                seq,
+                qual,
+                self.output_fasta,
+                self.rename,
+                counter,
+                b"",
+            )
+            .map_err(|e| JsValue::from_str(&format!("Output write error: {}", e)))?;
         }
 
         Ok(())
@@ -240,6 +264,9 @@ struct PairedOutput {
 pub struct PairedFilterSession {
     index: Arc<WasmIndexInner>,
     kernel: FilterKernel,
+    rename: bool,
+    output_fasta: bool,
+    rename_counter: u64,
     parser_r1: SeqChunkParser,
     parser_r2: SeqChunkParser,
     queue_r1: VecDeque<SeqRecord>,
@@ -267,6 +294,8 @@ impl PairedFilterSession {
         decompress_r2: bool,
         compress_r1: bool,
         compress_r2: bool,
+        rename: bool,
+        output_fasta: bool,
     ) -> PairedFilterSession {
         let k = index.inner.header.kmer_length();
         let w = index.inner.header.window_size();
@@ -282,6 +311,9 @@ impl PairedFilterSession {
                     prefix_length: 0,
                 },
             ),
+            rename,
+            output_fasta,
+            rename_counter: 0,
             parser_r1: SeqChunkParser::new(),
             parser_r2: SeqChunkParser::new(),
             queue_r1: VecDeque::new(),
@@ -395,11 +427,21 @@ impl PairedFilterSession {
         if decision.keep {
             self.stats.reads_out += 2;
             self.stats.bases_out += (record1.seq.len() + record2.seq.len()) as u64;
+            let counter = if self.rename {
+                self.rename_counter += 1;
+                self.rename_counter
+            } else {
+                0
+            };
             write_record(
                 &mut output.r1,
                 &record1.header,
                 &record1.seq,
                 record1.qual.as_deref(),
+                self.output_fasta,
+                self.rename,
+                counter,
+                b"/1",
             )
             .map_err(|e| JsValue::from_str(&format!("R1 output write error: {}", e)))?;
             write_record(
@@ -407,6 +449,10 @@ impl PairedFilterSession {
                 &record2.header,
                 &record2.seq,
                 record2.qual.as_deref(),
+                self.output_fasta,
+                self.rename,
+                counter,
+                b"/2",
             )
             .map_err(|e| JsValue::from_str(&format!("R2 output write error: {}", e)))?;
         }
@@ -906,25 +952,37 @@ fn encode_mate(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_record(
     output: &mut impl Write,
     header: &[u8],
     seq: &[u8],
     qual: Option<&[u8]>,
+    output_fasta: bool,
+    rename: bool,
+    counter: u64,
+    read_suffix: &[u8],
 ) -> std::io::Result<()> {
-    if let Some(qual) = qual {
-        output.write_all(b"@")?;
+    let is_fasta = output_fasta || qual.is_none();
+    output.write_all(if is_fasta { b">" } else { b"@" })?;
+    if rename {
+        output.write_all(counter.to_string().as_bytes())?;
+        if !read_suffix.is_empty() {
+            output.write_all(b" ")?;
+            output.write_all(read_suffix)?;
+        }
+    } else {
         output.write_all(header)?;
-        output.write_all(b"\n")?;
-        output.write_all(seq)?;
-        output.write_all(b"\n+\n")?;
-        output.write_all(qual)?;
+    }
+    output.write_all(b"\n")?;
+    output.write_all(seq)?;
+    if is_fasta {
         output.write_all(b"\n")?;
     } else {
-        output.write_all(b">")?;
-        output.write_all(header)?;
-        output.write_all(b"\n")?;
-        output.write_all(seq)?;
+        output.write_all(b"\n+\n")?;
+        if let Some(qual) = qual {
+            output.write_all(qual)?;
+        }
         output.write_all(b"\n")?;
     }
     Ok(())

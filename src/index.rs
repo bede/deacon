@@ -534,12 +534,11 @@ pub fn freeze(index_path: &Path, output_path: Option<&Path>, bits: u8) -> Result
     } else {
         0.0
     };
-    let fp_pct = 100.0 / 2f64.powi(bits as i32);
     eprintln!(
-        "Wrote BFF: {} keys, {} filter bytes ({:.2} bits/key); false-positive rate ~2^-{} (~{:.2e}%)",
-        key_count, filter_bytes, bits_per_key, bits, fp_pct
+        "Wrote BFF: {} keys, {} filter bytes ({:.2} bits/key); false-positive rate ~2^-{}",
+        key_count, filter_bytes, bits_per_key, bits
     );
-    eprintln!("Completed in {:.2?}", start_time.elapsed());
+    eprintln!("Completed freeze in {:.2?}", start_time.elapsed());
     Ok(())
 }
 
@@ -747,7 +746,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     dump_minimizers(&all_minimizers, &header, config.output_path.as_deref())?;
 
     let total_time = start_time.elapsed();
-    eprintln!("Completed in {:.2?}", total_time);
+    eprintln!("Completed build in {:.2?}", total_time);
 
     Ok(())
 }
@@ -1014,7 +1013,7 @@ pub fn diff(
         dump_minimizers(&first_minimizers, &header, output)?;
 
         let total_time = start_time.elapsed();
-        eprintln!("Completed difference operation in {:.2?}", total_time);
+        eprintln!("Completed diff in {:.2?}", total_time);
 
         return Ok(());
     } else {
@@ -1063,7 +1062,7 @@ pub fn diff(
             dump_minimizers(&first_minimizers, &header, output)?;
 
             let total_time = start_time.elapsed();
-            eprintln!("Completed difference operation in {:.2?}", total_time);
+            eprintln!("Completed diff in {:.2?}", total_time);
 
             return Ok(());
         }
@@ -1086,7 +1085,7 @@ pub fn diff(
     dump_minimizers(&first_minimizers, &header, output)?;
 
     let total_time = start_time.elapsed();
-    eprintln!("Completed diff operation in {:.2?}", total_time);
+    eprintln!("Completed diff in {:.2?}", total_time);
 
     Ok(())
 }
