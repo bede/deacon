@@ -45,7 +45,7 @@ paraseq = { version = "0.4.3", default-features = false, features = ["anyhow", "
 ensure_simd = { version = "0.1.0", optional = true }
 
 # Compression deps (optional)
-liblzma = { version = "0.4", optional = true }
+liblzma = { version = "0.4", optional = true, features = ["static"] }
 flate2 = { version = "1.1", features = ["zlib-rs"], optional = true }
 zstd = { version = "0.13", optional = true }
 gzp = { version = "2.0", default-features = false, features = ["deflate_rust"], optional = true }
