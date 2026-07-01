@@ -132,68 +132,6 @@ impl Index {
     }
 }
 
-/// Module-level wrapper so `from deacon import filter` works: `filter(index, ...)`.
-#[pyfunction]
-#[pyo3(signature = (
-    index,
-    fastq,
-    fastq2=None,
-    deplete=false,
-    rename=false,
-    rename_random=false,
-    output=None,
-    output2=None,
-    abs_threshold=2,
-    rel_threshold=0.01,
-    prefix_length=0,
-    output_fasta=false,
-    threads=8,
-    compression_level=2,
-    compression_threads=0,
-    debug=false,
-    quiet=true,
-))]
-fn filter(
-    py: Python<'_>,
-    index: &Index,
-    fastq: String,
-    fastq2: Option<String>,
-    deplete: bool,
-    rename: bool,
-    rename_random: bool,
-    output: Option<String>,
-    output2: Option<String>,
-    abs_threshold: usize,
-    rel_threshold: f64,
-    prefix_length: usize,
-    output_fasta: bool,
-    threads: u16,
-    compression_level: u8,
-    compression_threads: u16,
-    debug: bool,
-    quiet: bool,
-) -> PyResult<Py<PyAny>> {
-    index.filter(
-        py,
-        fastq,
-        fastq2,
-        deplete,
-        rename,
-        rename_random,
-        output,
-        output2,
-        abs_threshold,
-        rel_threshold,
-        prefix_length,
-        output_fasta,
-        threads,
-        compression_level,
-        compression_threads,
-        debug,
-        quiet,
-    )
-}
-
 // Declarative module form so pyo3 introspection can link members (see scripts/gen-py-stubs.sh).
 #[pymodule]
 mod _deacon {
@@ -201,8 +139,6 @@ mod _deacon {
 
     #[pymodule_export]
     use super::Index;
-    #[pymodule_export]
-    use super::filter;
 
     #[pymodule_init]
     fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {

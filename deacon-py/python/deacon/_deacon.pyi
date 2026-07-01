@@ -18,9 +18,4 @@ class Index:
         Index metadata: k, w, format and minimizer/key count.
         """
 
-def filter(index: Index, fastq: str, fastq2: str |None = None, deplete: bool = False, rename: bool = False, rename_random: bool = False, output: str |None = None, output2: str |None = None, abs_threshold: int = 2, rel_threshold: float = 0.01, prefix_length: int = 0, output_fasta: bool = False, threads: int = 8, compression_level: int = 2, compression_threads: int = 0, debug: bool = False, quiet: bool = True) -> Any:
-    """
-    Module-level wrapper so `from deacon import filter` works: `filter(index, ...)`.
-    """
-
 def __getattr__(name: str) -> Incomplete: ...
