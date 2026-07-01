@@ -1,0 +1,22 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "deacon"
+description = "Fast DNA search and [host] depletion using minimizers"
+readme = "python/README.md"
+requires-python = ">=3.14"
+license = "MIT"
+classifiers = ["Programming Language :: Rust"]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/bede/deacon"
+Repository = "https://github.com/bede/deacon"
+
+[tool.maturin]
+bindings = "pyo3"
+python-source = "python"
+module-name = "deacon._deacon"
+profile = "pyext"

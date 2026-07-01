@@ -1,5 +1,5 @@
 use crate::index::load_minimizers_cached;
-use crate::{FilterConfig, FilterDecision, FilterKernel, FilterParams, MinimizerSet};
+use crate::{FilterConfig, FilterDecision, FilterKernel, FilterParams, IndexHeader, MinimizerSet};
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use paraseq::Record;
@@ -10,6 +10,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -18,6 +19,46 @@ const OUTPUT_BUFFER_SIZE: usize = 8 * 1024 * 1024; // Opt: 8MB output buffer
 const DEFAULT_BUFFER_SIZE: usize = 64 * 1024;
 
 type BoxedWriter = Box<dyn Write + Send>;
+
+/// Filtering config for an already-loaded index (no index path; see [`FilterConfig`]).
+pub struct FilterRunConfig {
+    /// Path to input fastx file (or - for stdin)
+    pub input_path: String,
+    /// Path to optional second paired fastx file (or - for interleaved stdin)
+    pub input2_path: Option<String>,
+    /// Path to output fastx file (None for stdout; detects .gz/.zst/.xz)
+    pub output_path: Option<PathBuf>,
+    /// Path to optional second output fastx file for paired reads
+    pub output2_path: Option<String>,
+    /// Absolute threshold for filtering sequences
+    pub abs_threshold: usize,
+    /// Relative threshold for filtering sequences (0.0-1.0)
+    pub rel_threshold: f64,
+    /// Consider only the first N nucleotides per sequence (0 = entire sequence)
+    pub prefix_length: usize,
+    /// Path to JSON summary file (None to skip writing one; stats are always returned)
+    pub summary_path: Option<PathBuf>,
+    /// Deplete mode (remove sequences WITH matches)
+    pub deplete: bool,
+    /// Replace sequence headers with sequential numbers
+    pub rename: bool,
+    /// Replace headers with sequential numbers followed by random u64
+    pub rename_random: bool,
+    /// Force FASTA output (discards quality scores)
+    pub output_fasta: bool,
+    /// Number of execution threads (0 = auto)
+    pub threads: u16,
+    /// Compression level for output files (1-22 for zst, 1-9 for gz)
+    pub compression_level: u8,
+    /// Number of threads for compression (0 = auto)
+    pub compression_threads: u16,
+    /// Debug mode: output sequences with minimizer hits to stderr
+    pub debug: bool,
+    /// Suppress progress reporting
+    pub quiet: bool,
+    /// Label recorded in the summary's `index` field (no filesystem check)
+    pub index_label: String,
+}
 
 /// Config for FilterProcessor
 struct FilterProcessorConfig {
@@ -48,18 +89,11 @@ fn is_special_input_path(_path: &str) -> bool {
     false
 }
 
-/// Check input file path(s) exist
-fn check_input_paths(config: &FilterConfig) -> Result<()> {
-    if !config.minimizers_path.exists() {
-        return Err(anyhow::anyhow!(
-            "Index file does not exist: {}",
-            config.minimizers_path.display()
-        ));
-    }
-
+/// Check input fastx file path(s) exist (the index is already loaded, so not checked here)
+fn check_input_paths(config: &FilterRunConfig) -> Result<()> {
     if config.input_path != "-"
-        && !is_special_input_path(config.input_path)
-        && !std::path::Path::new(config.input_path).exists()
+        && !is_special_input_path(&config.input_path)
+        && !std::path::Path::new(&config.input_path).exists()
     {
         return Err(anyhow::anyhow!(
             "Input file does not exist: {}",
@@ -67,7 +101,7 @@ fn check_input_paths(config: &FilterConfig) -> Result<()> {
         ));
     }
 
-    if let Some(input2_path) = config.input2_path
+    if let Some(input2_path) = &config.input2_path
         && input2_path != "-"
         && !is_special_input_path(input2_path)
         && !std::path::Path::new(input2_path).exists()
@@ -182,12 +216,12 @@ fn is_compressed_output(path: Option<&std::path::Path>) -> bool {
 }
 
 /// Number of compressed outputs from config (0, 1, or 2)
-fn count_compressed_outputs(config: &FilterConfig) -> u8 {
+fn count_compressed_outputs(config: &FilterRunConfig) -> u8 {
     let mut count = 0;
-    if is_compressed_output(config.output_path) {
+    if is_compressed_output(config.output_path.as_deref()) {
         count += 1;
     }
-    if let Some(output2) = config.output2_path
+    if let Some(output2) = &config.output2_path
         && is_compressed_output(Some(std::path::Path::new(output2)))
     {
         count += 1;
@@ -290,9 +324,9 @@ pub struct FilterSummary {
 }
 
 #[derive(Clone)]
-struct FilterProcessor {
+struct FilterProcessor<'a> {
     // Minimizer matching parameters
-    minimizers: &'static MinimizerSet,
+    minimizers: &'a MinimizerSet,
     rename: bool,
     rename_random: bool,
     output_fasta: bool,
@@ -325,9 +359,9 @@ pub(crate) struct ProcessingStats {
     pub last_reported: u64,
 }
 
-impl FilterProcessor {
+impl<'a> FilterProcessor<'a> {
     fn new(
-        minimizers: &'static MinimizerSet,
+        minimizers: &'a MinimizerSet,
         kmer_length: u8,
         window_size: u8,
         config: &FilterProcessorConfig,
@@ -447,7 +481,7 @@ impl FilterProcessor {
     }
 }
 
-impl<Rf: Record> ParallelProcessor<Rf> for FilterProcessor {
+impl<'a, Rf: Record> ParallelProcessor<Rf> for FilterProcessor<'a> {
     fn process_record(&mut self, record: Rf) -> paraseq::parallel::Result<()> {
         let seq = record.seq();
         self.local_stats.total_seqs += 1;
@@ -514,7 +548,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for FilterProcessor {
     }
 }
 
-impl<Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor {
+impl<'a, Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor<'a> {
     fn process_record_pair(&mut self, record1: Rf, record2: Rf) -> paraseq::parallel::Result<()> {
         let seq1 = record1.seq();
         let seq2 = record2.seq();
@@ -608,13 +642,67 @@ impl<Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor {
     }
 }
 
-pub fn run(config: &FilterConfig) -> Result<()> {
+pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
+    // Validate the index path once here; run_with_index never touches it again.
+    if !config.minimizers_path.exists() {
+        return Err(anyhow::anyhow!(
+            "Index file does not exist: {}",
+            config.minimizers_path.display()
+        ));
+    }
+
+    let load_start = Instant::now();
+    let (minimizers, header) = load_minimizers_cached(config.minimizers_path)?;
+    if !(config.quiet || config.debug) {
+        eprintln!(
+            "Loaded index (k={}, w={}) in {:.2?}",
+            header.kmer_length(),
+            header.window_size(),
+            load_start.elapsed()
+        );
+    }
+
+    let run_config = FilterRunConfig {
+        input_path: config.input_path.to_string(),
+        input2_path: config.input2_path.map(str::to_string),
+        output_path: config.output_path.map(|p| p.to_path_buf()),
+        output2_path: config.output2_path.map(str::to_string),
+        abs_threshold: config.abs_threshold,
+        rel_threshold: config.rel_threshold,
+        prefix_length: config.prefix_length,
+        summary_path: config.summary_path.cloned(),
+        deplete: config.deplete,
+        rename: config.rename,
+        rename_random: config.rename_random,
+        output_fasta: config.output_fasta,
+        threads: config.threads,
+        compression_level: config.compression_level,
+        compression_threads: config.compression_threads,
+        debug: config.debug,
+        quiet: config.quiet,
+        index_label: config.minimizers_path.to_string_lossy().into_owned(),
+    };
+
+    run_with_index(minimizers, header, &run_config)
+}
+
+/// Filter an already-loaded index against input fastx file(s), returning summary stats.
+///
+/// Reusable entry point behind the Python bindings... load the index once, call repeatedly.
+/// Does no index-path validation; the index is already in memory.
+pub fn run_with_index(
+    minimizers: &MinimizerSet,
+    header: &IndexHeader,
+    config: &FilterRunConfig,
+) -> Result<FilterSummary> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
     let tool_version = format!("deacon {}", version);
 
-    // Enable quiet mode when debug enabled
     let quiet = config.quiet || config.debug;
+
+    let kmer_length = header.kmer_length();
+    let window_size = header.window_size();
 
     let total_threads = if config.threads == 0 {
         std::thread::available_parallelism()
@@ -656,9 +744,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
 
     let mut input_type = String::new();
     let mut options = Vec::<String>::new();
-    let paired_stdin = config.input_path == "-"
-        && config.input2_path.is_some()
-        && config.input2_path.unwrap() == "-";
+    let paired_stdin = config.input_path == "-" && config.input2_path.as_deref() == Some("-");
     if paired_stdin {
         input_type.push_str("interleaved");
     } else if config.input2_path.is_some() {
@@ -703,30 +789,17 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         );
     }
 
-    // Check input files exist before making user wait for index loading
     check_input_paths(config)?;
 
-    // Load minimizers and parse header
-    let (minimizers, header) = load_minimizers_cached(config.minimizers_path)?;
-
-    let kmer_length = header.kmer_length();
-    let window_size = header.window_size();
-
-    let load_time = start_time.elapsed();
-    if !quiet {
-        eprintln!(
-            "Loaded index (k={}, w={}) in {:.2?}",
-            kmer_length, window_size, load_time
-        );
-    }
-
-    // Create appropriate writer(s) based on output path(s)
     let writer = get_writer(
-        config.output_path,
+        config.output_path.as_deref(),
         config.compression_level,
         compression_threads_per_output,
     )?;
-    let writer2 = if let (Some(output2), Some(_)) = (config.output2_path, config.input2_path) {
+    let writer2 = if let (Some(output2), Some(_)) = (
+        config.output2_path.as_deref(),
+        config.input2_path.as_deref(),
+    ) {
         Some(get_writer(
             Some(std::path::Path::new(output2)),
             config.compression_level,
@@ -775,9 +848,10 @@ pub fn run(config: &FilterConfig) -> Result<()> {
     );
 
     // Check for empty files via metadata (fast path for uncompressed files <5 bytes)
-    let input1_empty = is_empty_file(config.input_path)?;
+    let input1_empty = is_empty_file(&config.input_path)?;
     let input2_empty = config
         .input2_path
+        .as_deref()
         .map(is_empty_file)
         .transpose()?
         .unwrap_or(false);
@@ -789,7 +863,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         // Interleaved paired stdin - use interleaved processor
         let reader = create_paraseq_reader(Some("-"))?;
         reader.process_parallel_interleaved(&mut processor, num_threads)?;
-    } else if let Some(input2_path) = config.input2_path {
+    } else if let Some(input2_path) = config.input2_path.as_deref() {
         // Paired files - both must be empty or both non-empty
         if input1_empty && input2_empty {
             if !quiet {
@@ -801,7 +875,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
             ));
         } else {
             // Try to create readers, catching empty compressed files
-            let r1_result = create_paraseq_reader(Some(config.input_path));
+            let r1_result = create_paraseq_reader(Some(config.input_path.as_str()));
             let r2_result = create_paraseq_reader(Some(input2_path));
 
             match (r1_result, r2_result) {
@@ -835,7 +909,7 @@ pub fn run(config: &FilterConfig) -> Result<()> {
             }
         } else {
             // Try to create reader, catching empty compressed files
-            match create_paraseq_reader(Some(config.input_path)) {
+            match create_paraseq_reader(Some(config.input_path.as_str())) {
                 Ok(reader) => {
                     reader.process_parallel(&mut processor, num_threads)?;
                 }
@@ -924,56 +998,52 @@ pub fn run(config: &FilterConfig) -> Result<()> {
         );
     }
 
-    // Build and write JSON summary if path provided
-    if let Some(summary_file) = config.summary_path {
-        let seqs_out = total_seqs - filtered_seqs;
+    let summary = FilterSummary {
+        version: tool_version,
+        index: config.index_label.clone(),
+        input: config.input_path.clone(),
+        input2: config.input2_path.clone(),
+        output: config
+            .output_path
+            .as_deref()
+            .map_or("-".to_string(), |p| p.display().to_string()),
+        output2: config.output2_path.clone(),
+        k: kmer_length,
+        w: window_size,
+        abs_threshold: config.abs_threshold,
+        rel_threshold: config.rel_threshold,
+        prefix_length: config.prefix_length,
+        deplete: config.deplete,
+        rename: config.rename,
+        rename_random: config.rename_random,
+        seqs_in: total_seqs,
+        seqs_out: output_seqs,
+        seqs_out_proportion: output_seq_proportion,
+        seqs_removed: filtered_seqs,
+        seqs_removed_proportion: filtered_proportion,
+        bp_in: total_bp,
+        bp_out: output_bp,
+        bp_out_proportion: output_bp_proportion,
+        bp_removed: filtered_bp,
+        bp_removed_proportion: filtered_bp_proportion,
+        time: total_time.as_secs_f64(),
+        seqs_per_second: seqs_per_sec as u64,
+        bp_per_second: bp_per_sec as u64,
+        seqs_per_second_total: seqs_per_sec_total as u64,
+        bp_per_second_total: bp_per_sec_total as u64,
+    };
 
-        let summary = FilterSummary {
-            version: tool_version,
-            index: config.minimizers_path.to_string_lossy().to_string(),
-            input: config.input_path.to_string(),
-            input2: config.input2_path.map(|s| s.to_string()),
-            output: config
-                .output_path
-                .map_or("-".to_string(), |p| p.display().to_string()),
-            output2: config.output2_path.map(|s| s.to_string()),
-            k: kmer_length,
-            w: window_size,
-            abs_threshold: config.abs_threshold,
-            rel_threshold: config.rel_threshold,
-            prefix_length: config.prefix_length,
-            deplete: config.deplete,
-            rename: config.rename,
-            rename_random: config.rename_random,
-            seqs_in: total_seqs as u64,
-            seqs_out: seqs_out as u64,
-            seqs_out_proportion: output_seq_proportion,
-            seqs_removed: filtered_seqs as u64,
-            seqs_removed_proportion: filtered_proportion,
-            bp_in: total_bp as u64,
-            bp_out: output_bp as u64,
-            bp_out_proportion: output_bp_proportion,
-            bp_removed: filtered_bp as u64,
-            bp_removed_proportion: filtered_bp_proportion,
-            time: total_time.as_secs_f64(),
-            seqs_per_second: seqs_per_sec as u64,
-            bp_per_second: bp_per_sec as u64,
-            seqs_per_second_total: seqs_per_sec_total as u64,
-            bp_per_second_total: bp_per_sec_total as u64,
-        };
-
+    if let Some(summary_file) = &config.summary_path {
         let file = File::create(summary_file)
             .context(format!("Failed to create summary: {:?}", summary_file))?;
-        let writer = BufWriter::new(file);
-
-        serde_json::to_writer_pretty(writer, &summary).context("Failed to write summary")?;
-
+        serde_json::to_writer_pretty(BufWriter::new(file), &summary)
+            .context("Failed to write summary")?;
         if !quiet {
             eprintln!("Filter summary saved to {:?}", summary_file);
         }
     }
 
-    Ok(())
+    Ok(summary)
 }
 
 #[cfg(test)]

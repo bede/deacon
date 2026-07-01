@@ -16,7 +16,7 @@ mod minimizers;
 
 // Public API
 #[cfg(feature = "cli")]
-pub use filter::{FilterSummary, run as run_filter};
+pub use filter::{FilterRunConfig, FilterSummary, run as run_filter, run_with_index};
 pub use filter_kernel::{FilterDecision, FilterKernel, FilterParams};
 #[cfg(feature = "fetch")]
 pub use index::fetch as index_fetch;
@@ -330,7 +330,8 @@ pub struct FilterConfig<'a> {
 impl FilterConfig<'_> {
     /// Filter with this configuration
     pub fn execute(&self) -> Result<()> {
-        filter::run(self)
+        filter::run(self)?;
+        Ok(())
     }
 }
 

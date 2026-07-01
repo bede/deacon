@@ -1,0 +1,32 @@
+[package]
+name = "deacon-py"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+publish = false
+
+[lib]
+# name != "deacon" to avoid colliding with the deacon dependency (Python import name is set via maturin)
+name = "deacon_py"
+crate-type = ["cdylib"]
+
+# regenerates python/deacon/_deacon.pyi (see scripts/gen-py-stubs.sh)
+[[bin]]
+name = "gen_stubs"
+path = "src/bin/gen_stubs.rs"
+required-features = ["python-stubs"]
+
+[features]
+python-stubs = ["pyo3-introspection", "pyo3/experimental-inspect"]
+
+[dependencies]
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py314"] }
+pythonize = "0.29"
+ensure_simd = "0.1.0"
+anyhow = "1"
+pyo3-introspection = { version = "0.29", optional = true }
+deacon = { path = "..", default-features = false, features = [
+    "compression",
+    "fetch",
+    "cli",
+] }

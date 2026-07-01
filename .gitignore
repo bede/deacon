@@ -6,3 +6,8 @@ plans/
 tests/data/
 deacon-wasm/pkg/
 deacon-wasm/pkg-node/
+
+# maturin develop drops the compiled module into the source tree
+deacon-py/python/deacon/_deacon*.so
+deacon-py/python/deacon/__pycache__/
+__pycache__/

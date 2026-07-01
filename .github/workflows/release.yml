@@ -58,3 +58,16 @@ jobs:
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-crate:
+    needs: build
+    runs-on: ubuntu-latest
+    # Skip prerelease tags (SemVer prereleases contain a hyphen, e.g. 0.17.0-rc.1).
+    if: ${{ !contains(github.ref_name, '-') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish deacon to crates.io
+        run: cargo publish -p deacon
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
