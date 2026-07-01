@@ -1370,8 +1370,9 @@ pub fn fetch(
 
     let content_length = response
         .headers
-        .get("content-length")
-        .and_then(|v| v.parse::<u64>().ok())
+        .iter()
+        .find(|(name, _)| name == "content-length")
+        .and_then(|(_, value)| value.parse::<u64>().ok())
         .unwrap_or(0);
 
     let pb = ProgressBar::new(content_length);

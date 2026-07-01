@@ -1,6 +1,6 @@
 [package]
 name = "deacon-py"
-version.workspace = true
+version = "0.16.0-rc1"
 edition = "2024"
 license = "MIT"
 publish = false
@@ -20,7 +20,7 @@ required-features = ["python-stubs"]
 python-stubs = ["pyo3-introspection", "pyo3/experimental-inspect"]
 
 [dependencies]
-pyo3 = { version = "0.29", features = ["extension-module", "abi3-py314"] }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py312"] }
 pythonize = "0.29"
 ensure_simd = "0.1.0"
 anyhow = "1"

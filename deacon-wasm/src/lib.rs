@@ -753,7 +753,7 @@ impl SeqChunkParser {
                                 if abs > 0 && self.pending[abs - 1] == b'\n' {
                                     break Some(abs);
                                 } else if abs == start && (!self.fasta_seq.is_empty() || abs == 0) {
-                                    // > is right at record_start — previous data was already
+                                    // > is right at record_start: previous data was already
                                     // accumulated (the \n was consumed/drained in a prior chunk)
                                     break Some(abs);
                                 } else {
@@ -833,7 +833,7 @@ impl SeqChunkParser {
     /// Accumulate all complete lines from pending[record_start..] into fasta_seq,
     /// advancing record_start past consumed data.
     fn accumulate_fasta_seq(&mut self) {
-        // Find the last newline — only accumulate complete lines
+        // Only accumulate complete lines, up to the last newline
         let start = self.record_start;
         let last_nl = self.pending[start..].iter().rposition(|&b| b == b'\n');
         if let Some(last_nl) = last_nl {

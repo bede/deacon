@@ -6,9 +6,14 @@ build-backend = "maturin"
 name = "deacon"
 description = "Fast DNA search and [host] depletion using minimizers"
 readme = "python/README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 license = "MIT"
-classifiers = ["Programming Language :: Rust"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
 dynamic = ["version"]
 
 [project.urls]
