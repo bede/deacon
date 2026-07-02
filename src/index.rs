@@ -1158,7 +1158,7 @@ pub fn filter(
     let (mut minimizers, header) = load_minimizers_from_path(index_path)?;
     let before = minimizers.len();
     eprintln!(
-        "Filtering index (k={}, w={}): {} minimizers, {:?} {} {}",
+        "Filtering index (k={}, w={}): {} minimizers, {} {} {}",
         header.kmer_length(),
         header.window_size(),
         before,
