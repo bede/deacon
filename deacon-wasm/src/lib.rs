@@ -8,7 +8,7 @@ use flate2::write::{GzEncoder, MultiGzDecoder};
 use js_sys::{Object, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 
-use deacon::{FilterKernel, FilterParams, MinimizerSet};
+use deacon::{ComplexityAlgorithm, FilterKernel, FilterParams, MinimizerSet};
 
 struct WasmIndexInner {
     minimizers: MinimizerSet,
@@ -23,12 +23,26 @@ pub struct WasmIndex {
 #[wasm_bindgen]
 impl WasmIndex {
     #[wasm_bindgen(constructor)]
-    pub fn new(data: &[u8]) -> Result<WasmIndex, JsValue> {
+    pub fn new(data: &[u8], complexity_threshold: Option<f32>) -> Result<WasmIndex, JsValue> {
         console_error_panic_hook::set_once();
         let mut cursor = Cursor::new(data);
         // Auto-detect exact vs BFF format
-        let (minimizers, header) = deacon::load_index_auto(&mut cursor)
+        let (mut minimizers, header) = deacon::load_index_auto(&mut cursor)
             .map_err(|e| JsValue::from_str(&format!("Failed to load index: {}", e)))?;
+        // Discard low-complexity (kdust) minimizers once at load, mirroring the CLI
+        if let Some(threshold) = complexity_threshold {
+            if matches!(minimizers, MinimizerSet::Fuse(_)) {
+                return Err(JsValue::from_str(
+                    "Complexity filtering is not supported on BFF indexes; use an exact index",
+                ));
+            }
+            minimizers.retain_complexity(
+                header.kmer_length(),
+                ComplexityAlgorithm::Kdust,
+                threshold,
+                false,
+            );
+        }
         Ok(WasmIndex {
             inner: Arc::new(WasmIndexInner { minimizers, header }),
         })
