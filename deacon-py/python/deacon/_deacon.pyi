@@ -6,9 +6,9 @@ class Index:
     """
     A loaded minimizer index, reusable across many `filter` calls.
     """
-    def __new__(cls, /, path: str) -> Index: ...
+    def __new__(cls, /, path: str, complexity_threshold: float |None = None) -> Index: ...
     @staticmethod
-    def fetch(name: str = "panhuman-1", k: int = 31, w: int = 15, output: str |None = None) -> Index:
+    def fetch(name: str = "panhuman-1", k: int = 31, w: int = 15, output: str |None = None, complexity_threshold: float |None = None) -> Index:
         """
         Download a prebuilt index, then load and return it.
         """

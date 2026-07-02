@@ -191,6 +191,8 @@ Options:
           Minimum relative proportion (0.0-1.0) of minimizer hits for a match [default: 0.01]
   -p, --prefix-length <PREFIX_LENGTH>
           Search only the first N nucleotides per sequence (0 = entire sequence) [default: 0]
+  -c, --complexity-threshold <COMPLEXITY_THRESHOLD>
+          Ignore minimizers below this kdust complexity threshold (0.0-1.0)
   -d, --deplete
           Discard matching sequences (invert filtering behaviour)
   -R, --rename

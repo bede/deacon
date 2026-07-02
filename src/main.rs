@@ -52,6 +52,10 @@ enum Commands {
         #[arg(short = 'p', long = "prefix-length", default_value_t = 0)]
         prefix_length: usize,
 
+        /// Ignore minimizers below this kdust complexity threshold (0.0-1.0)
+        #[arg(short = 'c', long = "complexity-threshold")]
+        complexity_threshold: Option<f32>,
+
         /// Discard matching sequences (invert filtering behaviour)
         #[arg(short = 'd', long = "deplete", default_value_t = false)]
         deplete: bool,
@@ -475,6 +479,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
             abs_threshold,
             rel_threshold,
             prefix_length,
+            complexity_threshold,
             summary,
             deplete,
             rename,
@@ -502,6 +507,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 abs_threshold: *abs_threshold as usize,
                 rel_threshold: *rel_threshold,
                 prefix_length: *prefix_length,
+                complexity_threshold: *complexity_threshold,
                 summary_path: summary.as_ref(),
                 deplete: *deplete,
                 rename: *rename,

@@ -27,12 +27,18 @@ print(stats["seqs_in"], stats["seqs_out"])
 
 Load a minimizer index or probabilistic filter from disk. The resulting object may be reused across many `filter` calls.
 
+```python
+index = Index("panhuman-1.k31w15.idx", complexity_threshold=None)
+```
+
+Pass `complexity_threshold` (0.0–1.0, e.g. `0.9`) to discard low-complexity index minimizers once at load using kdust; the filtered set is then reused across all `filter` calls. Not supported for `bff` (binary fuse filter) indexes.
+
 ## `Index.fetch()`
 
 Download a prebuilt index, then load and return it (a static method, so `Index.fetch(...)` returns an `Index`). `output` is the local path to save to; when omitted it defaults to `"{name}.k{k}w{w}.idx"` in the working directory. The index is downloaded on every call — there is no local cache, so an existing file at that path is overwritten.
 
 ```python
-index = Index.fetch("panhuman-1", k=31, w=15, output=None)
+index = Index.fetch("panhuman-1", k=31, w=15, output=None, complexity_threshold=None)
 ```
 
 ## `Index.info()`

@@ -295,6 +295,9 @@ pub struct FilterConfig<'a> {
     /// Consider only the first N nucleotides per sequence (0 = entire sequence)
     pub prefix_length: usize,
 
+    /// Discard index minimizers below this kdust complexity threshold (None = disabled)
+    pub complexity_threshold: Option<f32>,
+
     /// Path to JSON summary file
     pub summary_path: Option<&'a PathBuf>,
 

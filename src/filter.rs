@@ -1,5 +1,8 @@
-use crate::index::load_minimizers_cached;
-use crate::{FilterConfig, FilterDecision, FilterKernel, FilterParams, IndexHeader, MinimizerSet};
+use crate::index::{load_index_from_path_auto, load_minimizers_cached};
+use crate::{
+    ComplexityAlgorithm, FilterConfig, FilterDecision, FilterKernel, FilterParams, IndexHeader,
+    MinimizerSet,
+};
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use paraseq::Record;
@@ -651,16 +654,8 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
         ));
     }
 
+    let quiet = config.quiet || config.debug;
     let load_start = Instant::now();
-    let (minimizers, header) = load_minimizers_cached(config.minimizers_path)?;
-    if !(config.quiet || config.debug) {
-        eprintln!(
-            "Loaded index (k={}, w={}) in {:.2?}",
-            header.kmer_length(),
-            header.window_size(),
-            load_start.elapsed()
-        );
-    }
 
     let run_config = FilterRunConfig {
         input_path: config.input_path.to_string(),
@@ -682,6 +677,45 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
         quiet: config.quiet,
         index_label: config.minimizers_path.to_string_lossy().into_owned(),
     };
+
+    // Discard low-complexity (kdust) index minimizers once at load
+    if let Some(threshold) = config.complexity_threshold {
+        let (mut minimizers, header) = load_index_from_path_auto(config.minimizers_path)?;
+        if matches!(minimizers, MinimizerSet::Fuse(_)) {
+            return Err(anyhow::anyhow!(
+                "Complexity filtering is not supported on BFF indexes; use an exact index"
+            ));
+        }
+        let before = minimizers.len();
+        minimizers.retain_complexity(
+            header.kmer_length(),
+            ComplexityAlgorithm::Kdust,
+            threshold,
+            false,
+        );
+        if !quiet {
+            eprintln!(
+                "Loaded index (k={}, w={}) in {:.2?}; kept {} of {} minimizers (kdust >= {})",
+                header.kmer_length(),
+                header.window_size(),
+                load_start.elapsed(),
+                minimizers.len(),
+                before,
+                threshold
+            );
+        }
+        return run_with_index(&minimizers, &header, &run_config);
+    }
+
+    let (minimizers, header) = load_minimizers_cached(config.minimizers_path)?;
+    if !quiet {
+        eprintln!(
+            "Loaded index (k={}, w={}) in {:.2?}",
+            header.kmer_length(),
+            header.window_size(),
+            load_start.elapsed()
+        );
+    }
 
     run_with_index(minimizers, header, &run_config)
 }

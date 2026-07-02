@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ::deacon::{
-    FilterRunConfig, IndexHeader, MinimizerSet, index_fetch, load_index_from_path_auto,
-    run_with_index,
+    ComplexityAlgorithm, FilterRunConfig, IndexHeader, MinimizerSet, index_fetch,
+    load_index_from_path_auto, run_with_index,
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -28,8 +28,24 @@ struct Index {
 #[pymethods]
 impl Index {
     #[new]
-    fn new(path: &str) -> PyResult<Self> {
-        let (minimizers, header) = load_index_from_path_auto(Path::new(path)).map_err(to_pyerr)?;
+    #[pyo3(signature = (path, complexity_threshold=None))]
+    fn new(path: &str, complexity_threshold: Option<f32>) -> PyResult<Self> {
+        let (mut minimizers, header) =
+            load_index_from_path_auto(Path::new(path)).map_err(to_pyerr)?;
+        // Discard low-complexity index minimizers once at load (kdust); reused across filters.
+        if let Some(threshold) = complexity_threshold {
+            if matches!(minimizers, MinimizerSet::Fuse(_)) {
+                return Err(PyRuntimeError::new_err(
+                    "complexity filtering is not supported on BFF indexes; use an exact index",
+                ));
+            }
+            minimizers.retain_complexity(
+                header.kmer_length(),
+                ComplexityAlgorithm::Kdust,
+                threshold,
+                false,
+            );
+        }
         Ok(Index {
             label: path.to_string(),
             k: header.kmer_length(),
@@ -40,13 +56,19 @@ impl Index {
 
     /// Download a prebuilt index, then load and return it.
     #[staticmethod]
-    #[pyo3(signature = (name="panhuman-1", k=31, w=15, output=None))]
-    fn fetch(name: &str, k: u8, w: u8, output: Option<String>) -> PyResult<Self> {
+    #[pyo3(signature = (name="panhuman-1", k=31, w=15, output=None, complexity_threshold=None))]
+    fn fetch(
+        name: &str,
+        k: u8,
+        w: u8,
+        output: Option<String>,
+        complexity_threshold: Option<f32>,
+    ) -> PyResult<Self> {
         let out_path = output
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(format!("{name}.k{k}w{w}.idx")));
         index_fetch(name, k, w, Some(&out_path)).map_err(to_pyerr)?;
-        Index::new(&out_path.to_string_lossy())
+        Index::new(&out_path.to_string_lossy(), complexity_threshold)
     }
 
     /// Index metadata: k, w, format and minimizer/key count.
