@@ -8,7 +8,7 @@ use ::deacon::{
     ComplexityAlgorithm, FilterRunConfig, IndexHeader, MinimizerSet, index_fetch,
     load_index_from_path_auto, run_with_index,
 };
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -89,6 +89,7 @@ impl Index {
     #[pyo3(signature = (
         fastq,
         fastq2=None,
+        interleaved=false,
         deplete=false,
         rename=false,
         rename_random=false,
@@ -109,6 +110,7 @@ impl Index {
         py: Python<'_>,
         fastq: String,
         fastq2: Option<String>,
+        interleaved: bool,
         deplete: bool,
         rename: bool,
         rename_random: bool,
@@ -124,9 +126,15 @@ impl Index {
         debug: bool,
         quiet: bool,
     ) -> PyResult<Py<PyAny>> {
+        if interleaved && fastq2.is_some() {
+            return Err(PyValueError::new_err(
+                "interleaved cannot be combined with fastq2 (interleaved input is a single file/stream)",
+            ));
+        }
         let cfg = FilterRunConfig {
             input_path: fastq,
             input2_path: fastq2,
+            interleaved,
             output_path: output.map(PathBuf::from),
             output2_path: output2,
             abs_threshold,

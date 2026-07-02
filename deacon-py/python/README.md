@@ -60,6 +60,7 @@ Filter a FASTA/FASTQ file or file pair against the index and return a `dict` of 
 def filter(
     fastq,                   # input path (FASTA/FASTQ, optionally .gz/.zst/.xz)
     fastq2=None,             # second mate for paired reads
+    interleaved=False,       # treat fastq as interleaved paired reads (cannot combine with fastq2)
     deplete=False,           # False = search (keep matches); True = deplete (remove matches)
     rename=False,            # replace read names with sequential integers
     rename_random=False,     # replace read names with random strings

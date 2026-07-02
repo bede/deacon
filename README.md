@@ -89,7 +89,7 @@ Prebuilt pangenome indexes are provided. These can be downloaded using the links
 
 ### Filtering
 
-The main command `deacon filter` accepts an index path followed by up to two FASTA/FASTQ file paths, depending on whether input sequences originate from stdin, a single file, or paired input files. Indexes are built with `deacon index build`.  Paired queries are supported as either separate files or interleaved stdin, and written interleaved to either stdout or file, or else to separate paired output files. For paired reads, distinct minimizer hits originating from either mate are counted. By default, input sequences must meet both an absolute threshold of 2 minimizer hits (`-a 2`) and a relative threshold of 1% of minimizers (`-r 0.01`) to pass the filter. Filtering can be inverted for e.g. host depletion using the `--deplete` (`-d`) flag. Gzip, Zstandard, and xz compression formats are detected automatically by file extension.
+The main command `deacon filter` accepts an index path followed by up to two FASTA/FASTQ file paths, depending on whether input sequences originate from stdin, a single file, or paired input files. Indexes are built with `deacon index build`.  Paired inputs are supported as either two separate or one interleaved file/stream when using `--interleaved`, and may be written either to separate paired output files or one interleaved file. For paired reads, distinct minimizer hits originating from either mate are counted. By default, input sequences must meet both an absolute threshold of 2 minimizer hits (`-a 2`) and a relative threshold of 1% of minimizers (`-r 0.01`) to pass the filter. Filtering can be inverted for e.g. host depletion using the `--deplete` (`-d`) flag. Gzip, Zstandard, and xz compression formats are detected automatically by file extension.
 
 #### Examples
 
@@ -119,6 +119,10 @@ deacon filter -d panhuman-1.k31w15.idx reads.fq.zst -o filt.fq.zst
 # Paired reads
 deacon filter -d panhuman-1.k31w15.idx r1.fq.gz r2.fq.gz > filt12.fq
 deacon filter -d panhuman-1.k31w15.idx r1.fq.gz r2.fq.gz -o filt.r1.fq.gz -O filt.r2.fq.gz
+
+# Interleaved paired reads (file or stdin)
+deacon filter -d --interleaved panhuman-1.k31w15.idx r12.fq.gz > filt12.fq
+zcat r12.fq.gz | deacon filter -d --interleaved panhuman-1.k31w15.idx > filt12.fq
 zcat r12.fq.gz | deacon filter -d panhuman-1.k31w15.idx - - > filt12.fq
 
 # Save summary JSON
@@ -182,7 +186,7 @@ Usage: deacon filter [OPTIONS] <INDEX> [INPUT] [INPUT2]
 Arguments:
   <INDEX>   Path to minimizer index file
   [INPUT]   Optional path to fastx file (or - for stdin) [default: -]
-  [INPUT2]  Optional path to second paired fastx file (or - for interleaved stdin)
+  [INPUT2]  Optional path to second paired fastx file
 
 Options:
   -a, --abs-threshold <ABS_THRESHOLD>
@@ -215,6 +219,8 @@ Options:
           Output compression level (1-9 for gz & xz; 1-22 for zstd) [default: 2]
       --debug
           Output sequences with minimizer hits to stderr
+      --interleaved
+          Treat INPUT as interleaved paired reads from a file or stdin
   -q, --quiet
           Suppress progress reporting
   -h, --help
@@ -235,7 +241,9 @@ Commands:
   intersect  Intersect multiple minimizer indexes (A ∩ B…)
   diff       Subtract minimizers in one index from another (A - B)
   dump       Dump minimizer index to fasta
+  filter     Discard minimizers below a complexity threshold
   info       Show index information
+  freeze     Freeze an index into a binary fuse filter (BFF) index (k<=32)
   fetch      Fetch a pre-built index from remote storage
   help       Print this message or the help of the given subcommand(s)
 
@@ -251,23 +259,15 @@ Index minimizers contained within a fastx file
 Usage: deacon index build [OPTIONS] <INPUT>
 
 Arguments:
-  <INPUT>  Path to input fastx file (supports gz, zst and xz compression)
+  <INPUT>  Path to input fastx file (or - for stdin; supports gz, zst and xz compression)
 
 Options:
-  -k <KMER_LENGTH>
-          K-mer length used for indexing (k+w-1 must be <= 96 and odd) [default: 31]
-  -w <WINDOW_SIZE>
-          Minimizer window size used for indexing [default: 15]
-  -o, --output <OUTPUT>
-          Path to output file (stdout if not specified)
-  -t, --threads <THREADS>
-          Number of execution threads (0 = auto) [default: 8]
-  -q, --quiet
-          Suppress sequence header output
-  -e, --entropy-threshold <ENTROPY_THRESHOLD>
-          Minimum scaled entropy threshold for k-mer filtering (0.0-1.0) [default: 0.0]
-  -h, --help
-          Print help
+  -k <KMER_LENGTH>         K-mer length used for indexing (k+w-1 must be <= 96 and odd) [default: 31]
+  -w <WINDOW_SIZE>         Minimizer window size used for indexing [default: 15]
+  -o, --output <OUTPUT>    Path to output file (stdout if not specified)
+  -t, --threads <THREADS>  Number of execution threads (0 = auto) [default: 8]
+  -q, --quiet              Suppress sequence header output
+  -h, --help               Print help
 ```
 
 
