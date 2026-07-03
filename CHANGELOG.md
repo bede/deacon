@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `deacon index filter` keeps or discards index minimizers based on a complexity threshold (`-c`), with a choice of `--algorithm` (`-a`).
+- `deacon filter --complexity-threshold` (`-c`) ignores minimizers below a kdust complexity threshold at filter time.
+- `deacon filter --interleaved` treats the input file/stream as interleaved pairs.
+- Python bindings published to PyPI as `deacon` (maturin/PyO3).
 - `deacon index diff` now accepts a `w=1` second source (fastx with `-w 1`, or a `w=1` index) for exact k-mer subtraction, removing every k-mer it contains from the first index regardless of the first index's window size.
 
 ## [0.16.0] - 2026-06-24
