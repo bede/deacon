@@ -7,4 +7,4 @@ rustflags = ["-C", "target-cpu=native"]
 rustflags = ["-C", "target-cpu=apple-m1"]
 
 [target.wasm32-unknown-unknown]
-rustflags = ["-C", "target-feature=+reference-types"]
+rustflags = ["-C", "target-feature=+reference-types,+simd128"]

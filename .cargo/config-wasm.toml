@@ -5,3 +5,6 @@
 #   cd deacon-wasm && wasm-pack build --target web
 [build]
 # No native CPU flags for WASM
+
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+reference-types,+simd128"]
