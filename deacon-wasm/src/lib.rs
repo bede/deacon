@@ -10,6 +10,11 @@ use wasm_bindgen::prelude::*;
 
 use deacon::{ComplexityAlgorithm, FilterKernel, FilterParams, MinimizerSet};
 
+// Flush the gzip encoder every ~this many output bytes, not per chunk: a
+// per-chunk sync-flush wastes CPU and hurts the ratio. deflate still emits full
+// blocks between flushes; finish() flushes the tail.
+const FLUSH_THRESHOLD_BYTES: usize = 256 * 1024;
+
 struct WasmIndexInner {
     minimizers: MinimizerSet,
     header: deacon::IndexHeader,
@@ -69,6 +74,7 @@ pub struct FilterSession {
     stats: FilterStats,
     gz_decoder: Option<MultiGzDecoder<Vec<u8>>>,
     gz_encoder: Option<GzEncoder<Vec<u8>>>,
+    bytes_since_flush: usize,
 }
 
 #[wasm_bindgen]
@@ -118,6 +124,7 @@ impl FilterSession {
             stats: FilterStats::default(),
             gz_decoder,
             gz_encoder,
+            bytes_since_flush: 0,
         }
     }
 
@@ -155,11 +162,13 @@ impl FilterSession {
                 encoder
                     .write_all(&raw_output)
                     .map_err(|e| JsValue::from_str(&format!("Compression error: {}", e)))?;
-                // Encourage incremental output so the browser doesn't receive one
-                // huge final chunk at finish.
-                encoder
-                    .flush()
-                    .map_err(|e| JsValue::from_str(&format!("Compression flush error: {}", e)))?;
+                self.bytes_since_flush += raw_output.len();
+                if self.bytes_since_flush >= FLUSH_THRESHOLD_BYTES {
+                    encoder.flush().map_err(|e| {
+                        JsValue::from_str(&format!("Compression flush error: {}", e))
+                    })?;
+                    self.bytes_since_flush = 0;
+                }
             }
             Ok(std::mem::take(encoder.get_mut()))
         } else {
@@ -290,6 +299,8 @@ pub struct PairedFilterSession {
     decoder_r2: Option<MultiGzDecoder<Vec<u8>>>,
     encoder_r1: Option<GzEncoder<Vec<u8>>>,
     encoder_r2: Option<GzEncoder<Vec<u8>>>,
+    bytes_since_flush_r1: usize,
+    bytes_since_flush_r2: usize,
     r1_finished: bool,
     r2_finished: bool,
 }
@@ -337,6 +348,8 @@ impl PairedFilterSession {
             decoder_r2: decompress_r2.then(|| MultiGzDecoder::new(Vec::new())),
             encoder_r1: compress_r1.then(|| GzEncoder::new(Vec::new(), Compression::new(2))),
             encoder_r2: compress_r2.then(|| GzEncoder::new(Vec::new(), Compression::new(2))),
+            bytes_since_flush_r1: 0,
+            bytes_since_flush_r2: 0,
             r1_finished: false,
             r2_finished: false,
         }
@@ -491,8 +504,20 @@ impl PairedFilterSession {
         final_output: bool,
     ) -> Result<PairedOutput, JsValue> {
         Ok(PairedOutput {
-            r1: encode_mate(&mut self.encoder_r1, raw.r1, final_output, "R1")?,
-            r2: encode_mate(&mut self.encoder_r2, raw.r2, final_output, "R2")?,
+            r1: encode_mate(
+                &mut self.encoder_r1,
+                &mut self.bytes_since_flush_r1,
+                raw.r1,
+                final_output,
+                "R1",
+            )?,
+            r2: encode_mate(
+                &mut self.encoder_r2,
+                &mut self.bytes_since_flush_r2,
+                raw.r2,
+                final_output,
+                "R2",
+            )?,
         })
     }
 }
@@ -934,6 +959,7 @@ fn finish_decoder(
 
 fn encode_mate(
     encoder: &mut Option<GzEncoder<Vec<u8>>>,
+    bytes_since_flush: &mut usize,
     raw: Vec<u8>,
     final_output: bool,
     label: &str,
@@ -956,9 +982,13 @@ fn encode_mate(
             encoder
                 .write_all(&raw)
                 .map_err(|e| JsValue::from_str(&format!("{} compression error: {}", label, e)))?;
-            encoder.flush().map_err(|e| {
-                JsValue::from_str(&format!("{} compression flush error: {}", label, e))
-            })?;
+            *bytes_since_flush += raw.len();
+            if *bytes_since_flush >= FLUSH_THRESHOLD_BYTES {
+                encoder.flush().map_err(|e| {
+                    JsValue::from_str(&format!("{} compression flush error: {}", label, e))
+                })?;
+                *bytes_since_flush = 0;
+            }
         }
         Ok(std::mem::take(encoder.get_mut()))
     } else {
