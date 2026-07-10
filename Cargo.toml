@@ -30,11 +30,11 @@ rapidhash = "4.1.0"
 # Native bincode Encode/Decode (not serde) to avoid serde(flatten); wasm-safe (libm, no rand).
 xorf = { version = "0.12", default-features = false, features = ["binary-fuse", "bincode"] }
 
-packed-seq = "4.4.2"
-simd-minimizers = "2.3.1"
+packed-seq = "5.0.0"
+simd-minimizers = "3.0.0"
 
 # CLI/platform-specific deps (optional for WASM builds)
-clap = { version = "4.5", features = ["derive"], optional = true }
+clap = { version = "4.6", features = ["derive"], optional = true }
 rayon = { version = "1", optional = true }
 parking_lot = { version = "0.12", optional = true }
 indicatif = { version = "0.18", optional = true }
