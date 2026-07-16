@@ -275,8 +275,10 @@ enum IndexCommands {
 enum Message {
     /// client -> server
     Command(Commands),
-    /// server -> client
+    /// server -> client: command completed successfully
     Done,
+    /// server -> client: command failed
+    Error(String),
 }
 
 /// Parse and validate the BFF fingerprint width (16 or 32 bits)
@@ -324,35 +326,20 @@ fn main() -> Result<()> {
                 let _ = std::fs::remove_file("deacon_server_socket");
                 let listener = UnixListener::bind("deacon_server_socket")?;
                 for stream in listener.incoming() {
-                    let mut stream = stream.unwrap();
-                    let mut message = vec![];
-                    let mut buf = vec![0; 10000];
-                    loop {
-                        let len = stream.read(&mut buf)?;
-                        let buf = &buf[..len];
-                        message.extend_from_slice(buf);
-                        if buf.contains(&0) {
-                            assert_eq!(buf.last(), Some(&0));
-                            message.pop();
-                            break;
+                    let stream = match stream {
+                        Ok(stream) => stream,
+                        Err(e) => {
+                            eprintln!("deacon server: failed to accept connection: {e}");
+                            continue;
                         }
-                    }
-                    let message: Message = serde_json::from_slice(&message).unwrap();
-                    match message {
-                        Message::Command(Commands::Server {
-                            command: ServerCommands::Stop,
-                        }) => {
-                            serde_json::to_writer(stream, &Message::Done)?;
-                            let _ = std::fs::remove_file("deacon_server_socket");
-                            break;
-                        }
-                        Message::Command(commands) => {
-                            process_command(&commands)?;
-                            serde_json::to_writer(stream, &Message::Done)?;
-                        }
-                        Message::Done => {
-                            unreachable!("Server should not receive `Done` messages.")
-                        }
+                    };
+                    // A single misbehaving/disconnecting client must never take down
+                    // the whole server, so connection handling errors are isolated
+                    // and logged rather than propagated out of this loop.
+                    match handle_connection(stream) {
+                        Ok(true) => break,
+                        Ok(false) => {}
+                        Err(e) => eprintln!("deacon server: error handling connection: {e:#}"),
                     }
                 }
 
@@ -366,14 +353,19 @@ fn main() -> Result<()> {
     // If --use-server is set, fall through to client code below
 
     if cli.use_server {
-        let mut stream = UnixStream::connect("deacon_server_socket")?;
+        let mut stream = UnixStream::connect("deacon_server_socket")
+            .context("Failed to connect to deacon server (is it running? `deacon server start`)")?;
         serde_json::to_writer(&stream, &Message::Command(cli.command))?;
         stream.write_all(b"\0")?;
         stream.flush()?;
-        let message: Message = serde_json::from_reader(stream).unwrap();
+        let message: Message = serde_json::from_reader(stream)
+            .context("Failed to read response from deacon server")?;
         match message {
             Message::Done => {}
-            _ => unreachable!("The client only expects to receive `Done` messages."),
+            Message::Error(e) => anyhow::bail!("deacon server error: {e}"),
+            Message::Command(_) => {
+                unreachable!("The client only expects to receive `Done` or `Error` messages.")
+            }
         }
 
         return Ok(());
@@ -382,6 +374,60 @@ fn main() -> Result<()> {
     process_command(&cli.command)?;
 
     Ok(())
+}
+
+/// Handles a single client connection to the server, from reading its
+/// request through to writing back a response. Returns `Ok(true)` if the
+/// client requested the server to stop.
+///
+/// Errors reading or parsing the request (e.g. a client that disconnects
+/// before sending a complete message) are returned to the caller so the
+/// server can log them and move on to the next connection, instead of
+/// tearing down the whole accept loop.
+fn handle_connection(mut stream: UnixStream) -> Result<bool> {
+    let mut message = vec![];
+    let mut buf = vec![0; 10000];
+    loop {
+        let len = stream
+            .read(&mut buf)
+            .context("Failed to read from client connection")?;
+        if len == 0 {
+            anyhow::bail!("Client disconnected before sending a complete request");
+        }
+        let chunk = &buf[..len];
+        if let Some(pos) = chunk.iter().position(|&b| b == 0) {
+            message.extend_from_slice(&chunk[..pos]);
+            break;
+        }
+        message.extend_from_slice(chunk);
+    }
+
+    let message: Message =
+        serde_json::from_slice(&message).context("Failed to parse client request")?;
+    let command = match message {
+        Message::Command(Commands::Server {
+            command: ServerCommands::Stop,
+        }) => {
+            serde_json::to_writer(&stream, &Message::Done)?;
+            let _ = std::fs::remove_file("deacon_server_socket");
+            return Ok(true);
+        }
+        Message::Command(commands) => commands,
+        Message::Done | Message::Error(_) => {
+            anyhow::bail!("Server should not receive `Done`/`Error` messages")
+        }
+    };
+
+    match process_command(&command) {
+        Ok(()) => serde_json::to_writer(&stream, &Message::Done)?,
+        Err(e) => {
+            // Best-effort: report the failure back to the client. If that also
+            // fails (e.g. the client already hung up), it's not fatal for the
+            // server -- just move on to the next connection.
+            let _ = serde_json::to_writer(&stream, &Message::Error(e.to_string()));
+        }
+    }
+    Ok(false)
 }
 
 fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
