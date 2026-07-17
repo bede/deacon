@@ -8,6 +8,24 @@ use std::path::Path;
 use std::process::Command as StdCommand;
 use tempfile::tempdir;
 
+#[cfg(feature = "compression")]
+fn decode_output(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let file = File::open(path)?;
+    let mut out = String::new();
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "gz" => flate2::read::MultiGzDecoder::new(file).read_to_string(&mut out)?,
+        "zst" => zstd::stream::read::Decoder::new(file)?.read_to_string(&mut out)?,
+        "xz" => liblzma::read::XzDecoder::new(file).read_to_string(&mut out)?,
+        _ => std::io::BufReader::new(file).read_to_string(&mut out)?,
+    };
+    Ok(out)
+}
+
+fn count_records(content: &str) -> usize {
+    content.lines().filter(|l| l.starts_with('@')).count()
+}
+
 fn create_test_fasta(path: &Path) {
     let fasta_content = ">seq1\nACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA\n>seq2\nTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATTGCAGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC\n";
     fs::write(path, fasta_content).unwrap();
@@ -138,20 +156,31 @@ fn test_filter_to_file() {
     );
 }
 
-#[test]
-fn test_filter_to_file_gzip() {
+#[cfg(feature = "compression")]
+#[rstest::rstest]
+#[case("gz", 2)]
+#[case("zst", 2)]
+#[case("xz", 2)]
+#[case("gz", 0)]
+#[case("zst", 0)]
+#[case("xz", 0)]
+fn test_filter_compressed_output_roundtrips(#[case] ext: &str, #[case] expected_records: usize) {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("ref.fasta");
     let fastq_path = temp_dir.path().join("reads.fastq");
     let bin_path = temp_dir.path().join("ref.bin");
-    let output_path = temp_dir.path().join("filtered.fastq.gz");
+    let output_path = temp_dir.path().join(format!("filtered.fastq.{ext}"));
 
-    create_test_fasta(&fasta_path);
+    if expected_records == 0 {
+        create_test_fasta_aaa(&fasta_path);
+    } else {
+        create_test_fasta(&fasta_path);
+    }
     create_test_fastq(&fastq_path);
     build_index(&fasta_path, &bin_path);
 
-    let mut cmd = cargo::cargo_bin_cmd!("deacon");
-    cmd.arg("filter")
+    cargo::cargo_bin_cmd!("deacon")
+        .arg("filter")
         .arg(&bin_path)
         .arg(&fastq_path)
         .arg("--output")
@@ -159,70 +188,9 @@ fn test_filter_to_file_gzip() {
         .assert()
         .success();
 
-    // Check gzipped output file creation
-    assert!(output_path.exists(), "Gzipped output file wasn't created");
-    assert!(
-        fs::metadata(&output_path).unwrap().len() > 0,
-        "Gzipped output file is empty"
-    );
-}
-
-#[test]
-fn test_filter_to_file_zstd() {
-    let temp_dir = tempdir().unwrap();
-    let fasta_path = temp_dir.path().join("ref.fasta");
-    let fastq_path = temp_dir.path().join("reads.fastq");
-    let bin_path = temp_dir.path().join("ref.bin");
-    let output_path = temp_dir.path().join("filtered.fastq.zst");
-
-    create_test_fasta(&fasta_path);
-    create_test_fastq(&fastq_path);
-    build_index(&fasta_path, &bin_path);
-
-    let mut cmd = cargo::cargo_bin_cmd!("deacon");
-    cmd.arg("filter")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
-
-    // Check that zstd output file was created
-    assert!(output_path.exists(), "Zstd output file wasn't created");
-    assert!(
-        fs::metadata(&output_path).unwrap().len() > 0,
-        "Zstd output file is empty"
-    );
-}
-
-#[test]
-fn test_filter_to_file_xz() {
-    let temp_dir = tempdir().unwrap();
-    let fasta_path = temp_dir.path().join("ref.fasta");
-    let fastq_path = temp_dir.path().join("reads.fastq");
-    let bin_path = temp_dir.path().join("ref.bin");
-    let output_path = temp_dir.path().join("filtered.fastq.xz");
-
-    create_test_fasta(&fasta_path);
-    create_test_fastq(&fastq_path);
-    build_index(&fasta_path, &bin_path);
-
-    let mut cmd = cargo::cargo_bin_cmd!("deacon");
-    cmd.arg("filter")
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success();
-
-    // Check that xz output file was created
-    assert!(output_path.exists(), "XZ output file wasn't created");
-    assert!(
-        fs::metadata(&output_path).unwrap().len() > 0,
-        "XZ output file is empty"
-    );
+    let decoded = decode_output(&output_path)
+        .unwrap_or_else(|e| panic!("{ext} output failed to decode: {e}"));
+    assert_eq!(count_records(&decoded), expected_records, "{ext} record count");
 }
 
 #[test]
@@ -885,25 +853,25 @@ mod output2_tests {
     }
 
     #[cfg(feature = "compression")]
-    #[test]
-    fn test_filter_paired_with_output2() {
+    #[rstest::rstest]
+    #[case("gz")]
+    #[case("zst")]
+    #[case("xz")]
+    fn test_filter_paired_output2_roundtrips(#[case] ext: &str) {
         let temp_dir = tempdir().unwrap();
         let fasta_path = temp_dir.path().join("ref.fasta");
         let fastq_path1 = temp_dir.path().join("reads_1.fastq");
         let fastq_path2 = temp_dir.path().join("reads_2.fastq");
         let bin_path = temp_dir.path().join("ref.bin");
-        let output_path1 = temp_dir.path().join("filtered_1.fastq.gz");
-        let output_path2 = temp_dir.path().join("filtered_2.fastq.gz");
+        let output_path1 = temp_dir.path().join(format!("filtered_1.fastq.{ext}"));
+        let output_path2 = temp_dir.path().join(format!("filtered_2.fastq.{ext}"));
 
         create_test_fasta(&fasta_path);
         create_test_paired_fastq(&fastq_path1, &fastq_path2);
-
         build_index(&fasta_path, &bin_path);
-        assert!(bin_path.exists(), "Index file wasn't created");
 
-        // Run filtering command with separate output files
-        let mut cmd = cargo::cargo_bin_cmd!("deacon");
-        cmd.arg("filter")
+        cargo::cargo_bin_cmd!("deacon")
+            .arg("filter")
             .arg(&bin_path)
             .arg(&fastq_path1)
             .arg(&fastq_path2)
@@ -914,124 +882,12 @@ mod output2_tests {
             .assert()
             .success();
 
-        // Check both output files were created
-        assert!(output_path1.exists(), "First output file wasn't created");
-        assert!(output_path2.exists(), "Second output file wasn't created");
-
-        // Validate output content
-        assert!(
-            fs::metadata(&output_path1).unwrap().len() > 0,
-            "First gzipped output file is empty"
-        );
-        assert!(
-            fs::metadata(&output_path2).unwrap().len() > 0,
-            "Second gzipped output file is empty"
-        );
-
-        // Actually decompress and check if there are reads
-        use flate2::read::GzDecoder;
-        use std::fs::File;
-        use std::io::Read;
-
-        let file1 = File::open(&output_path1).unwrap();
-        let mut gz1 = GzDecoder::new(file1);
-        let mut contents1 = String::new();
-        gz1.read_to_string(&mut contents1).unwrap();
-
-        let file2 = File::open(&output_path2).unwrap();
-        let mut gz2 = GzDecoder::new(file2);
-        let mut contents2 = String::new();
-        gz2.read_to_string(&mut contents2).unwrap();
-
-        println!(
-            "Output2 test - Output1 length: {}, Output2 length: {}",
-            contents1.len(),
-            contents2.len()
-        );
-        println!(
-            "Output2 test - Output1 preview: {:?}",
-            &contents1.chars().take(100).collect::<String>()
-        );
-        println!(
-            "Output2 test - Output2 preview: {:?}",
-            &contents2.chars().take(100).collect::<String>()
-        );
-    }
-
-    #[cfg(feature = "compression")]
-    #[test]
-    fn test_filter_paired_with_output2_gzip() {
-        let temp_dir = tempdir().unwrap();
-        let fasta_path = temp_dir.path().join("ref.fasta");
-        let fastq_path1 = temp_dir.path().join("reads_1.fastq");
-        let fastq_path2 = temp_dir.path().join("reads_2.fastq");
-        let bin_path = temp_dir.path().join("ref.bin");
-        let output_path1 = temp_dir.path().join("filtered_1.fastq.gz");
-        let output_path2 = temp_dir.path().join("filtered_2.fastq.gz");
-
-        create_test_fasta(&fasta_path);
-        create_test_paired_fastq(&fastq_path1, &fastq_path2);
-        build_index(&fasta_path, &bin_path);
-
-        let mut cmd = cargo::cargo_bin_cmd!("deacon");
-        cmd.arg("filter")
-            .arg(&bin_path)
-            .arg(&fastq_path1)
-            .arg(&fastq_path2)
-            .arg("--output")
-            .arg(&output_path1)
-            .arg("--output2")
-            .arg(&output_path2)
-            .assert()
-            .success();
-
-        // Check both gzipped output files were created
-        assert!(
-            output_path1.exists(),
-            "First gzipped output file wasn't created"
-        );
-        assert!(
-            output_path2.exists(),
-            "Second gzipped output file wasn't created"
-        );
-
-        assert!(
-            fs::metadata(&output_path1).unwrap().len() > 0,
-            "First gzipped output file is empty"
-        );
-        assert!(
-            fs::metadata(&output_path2).unwrap().len() > 0,
-            "Second gzipped output file is empty"
-        );
-
-        // Actually decompress and check if there are reads
-        use flate2::read::GzDecoder;
-        use std::fs::File;
-        use std::io::Read;
-
-        let file1 = File::open(&output_path1).unwrap();
-        let mut gz1 = GzDecoder::new(file1);
-        let mut contents1 = String::new();
-        gz1.read_to_string(&mut contents1).unwrap();
-
-        let file2 = File::open(&output_path2).unwrap();
-        let mut gz2 = GzDecoder::new(file2);
-        let mut contents2 = String::new();
-        gz2.read_to_string(&mut contents2).unwrap();
-
-        println!(
-            "Gzip test - Output1 length: {}, Output2 length: {}",
-            contents1.len(),
-            contents2.len()
-        );
-        println!(
-            "Gzip test - Output1 preview: {:?}",
-            &contents1.chars().take(100).collect::<String>()
-        );
-        println!(
-            "Gzip test - Output2 preview: {:?}",
-            &contents2.chars().take(100).collect::<String>()
-        );
+        let r1 = super::decode_output(&output_path1)
+            .unwrap_or_else(|e| panic!("{ext} R1 failed to decode: {e}"));
+        let r2 = super::decode_output(&output_path2)
+            .unwrap_or_else(|e| panic!("{ext} R2 failed to decode: {e}"));
+        assert_eq!(super::count_records(&r1), 2, "{ext} R1 record count");
+        assert_eq!(super::count_records(&r2), 2, "{ext} R2 record count");
     }
 
     #[test]
