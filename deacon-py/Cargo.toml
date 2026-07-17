@@ -18,9 +18,10 @@ required-features = ["python-stubs"]
 
 [features]
 python-stubs = ["pyo3-introspection", "pyo3/experimental-inspect"]
+extension-module = ["pyo3/extension-module"]
 
 [dependencies]
-pyo3 = { version = "0.29", features = ["extension-module", "abi3-py312"] }
+pyo3 = { version = "0.29", features = ["abi3-py312"] }
 pythonize = "0.29"
 ensure_simd = "0.1.0"
 anyhow = "1"

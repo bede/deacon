@@ -25,3 +25,4 @@ bindings = "pyo3"
 python-source = "python"
 module-name = "deacon._deacon"
 profile = "pyext"
+features = ["extension-module"]
