@@ -101,7 +101,11 @@ enum Commands {
         debug: bool,
 
         /// Treat INPUT as interleaved paired reads from a file or stdin
-        #[arg(long = "interleaved", default_value_t = false, conflicts_with = "input2")]
+        #[arg(
+            long = "interleaved",
+            default_value_t = false,
+            conflicts_with = "input2"
+        )]
         interleaved: bool,
 
         /// Suppress progress reporting

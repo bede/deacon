@@ -785,8 +785,7 @@ pub fn run_with_index(
 
     let mut input_type = String::new();
     let mut options = Vec::<String>::new();
-    let interleaved_stdin =
-        config.input_path == "-" && config.input2_path.as_deref() == Some("-");
+    let interleaved_stdin = config.input_path == "-" && config.input2_path.as_deref() == Some("-");
     let interleaved_input = config.interleaved || interleaved_stdin;
     if interleaved_input {
         input_type.push_str("interleaved");

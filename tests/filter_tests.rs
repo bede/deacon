@@ -23,7 +23,29 @@ fn decode_output(path: &Path) -> std::io::Result<String> {
 }
 
 fn count_records(content: &str) -> usize {
-    content.lines().filter(|l| l.starts_with('@')).count()
+    if content.is_empty() {
+        return 0;
+    }
+
+    let mut lines: Vec<&str> = content.split('\n').collect();
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+
+    assert_eq!(lines.len() % 4, 0, "truncated FASTQ: {} lines", lines.len());
+
+    for rec in lines.chunks(4) {
+        assert!(rec[0].starts_with('@'), "bad FASTQ header: {}", rec[0]);
+        assert!(rec[2].starts_with('+'), "bad FASTQ separator: {}", rec[2]);
+        assert_eq!(
+            rec[1].len(),
+            rec[3].len(),
+            "FASTQ length mismatch: {}",
+            rec[0]
+        );
+    }
+
+    lines.len() / 4
 }
 
 fn create_test_fasta(path: &Path) {
@@ -190,7 +212,11 @@ fn test_filter_compressed_output_roundtrips(#[case] ext: &str, #[case] expected_
 
     let decoded = decode_output(&output_path)
         .unwrap_or_else(|e| panic!("{ext} output failed to decode: {e}"));
-    assert_eq!(count_records(&decoded), expected_records, "{ext} record count");
+    assert_eq!(
+        count_records(&decoded),
+        expected_records,
+        "{ext} record count"
+    );
 }
 
 #[test]
@@ -1128,12 +1154,18 @@ fn test_interleaved_paired_reads_file_separate_out() {
     let output1_content = fs::read_to_string(&output_path1).unwrap();
     let output2_content = fs::read_to_string(&output_path2).unwrap();
 
-    assert!(output1_content.contains("/1"), "R1 output should contain /1 reads");
+    assert!(
+        output1_content.contains("/1"),
+        "R1 output should contain /1 reads"
+    );
     assert!(
         !output1_content.contains("/2"),
         "R1 output should not contain /2 reads"
     );
-    assert!(output2_content.contains("/2"), "R2 output should contain /2 reads");
+    assert!(
+        output2_content.contains("/2"),
+        "R2 output should contain /2 reads"
+    );
     assert!(
         !output2_content.contains("/1"),
         "R2 output should not contain /1 reads"
