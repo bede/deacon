@@ -277,10 +277,14 @@ fn get_writer(
         #[cfg(feature = "compression")]
         p if p.ends_with(".zst") => {
             validate_compression_level(compression_level, 1, 22, "zstd")?;
-            Ok(Box::new(zstd::stream::write::Encoder::new(
-                buffered_file,
-                compression_level as i32,
-            )?))
+            // `auto_finish()` yields a writer that writes the zstd frame
+            // epilogue on drop. Without it, dropping a bare `Encoder` closes
+            // the file without finalizing the frame, producing a truncated
+            // `.zst` stream (`zstd -t` reports "premature end").
+            Ok(Box::new(
+                zstd::stream::write::Encoder::new(buffered_file, compression_level as i32)?
+                    .auto_finish(),
+            ))
         }
         #[cfg(feature = "compression")]
         p if p.ends_with(".xz") => {
