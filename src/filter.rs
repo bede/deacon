@@ -1152,4 +1152,56 @@ mod tests {
         assert_eq!(parsed.output, "output.fastq");
         assert_eq!(parsed.output2, Some("output2.fastq".to_string()));
     }
+
+    // Decode a compressed file written by `get_writer`, picking the decoder from
+    // the extension. Returns an error (not a panic) on a truncated/invalid stream
+    // so the caller can assert a clean round-trip.
+    #[cfg(feature = "compression")]
+    fn decode_output(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+        use std::io::Read;
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let file = std::fs::File::open(path)?;
+        let mut out = Vec::new();
+        match ext {
+            "gz" => flate2::read::MultiGzDecoder::new(file).read_to_end(&mut out)?,
+            "zst" => zstd::stream::read::Decoder::new(file)?.read_to_end(&mut out)?,
+            "xz" => liblzma::read::XzDecoder::new(file).read_to_end(&mut out)?,
+            _ => std::io::BufReader::new(file).read_to_end(&mut out)?,
+        };
+        Ok(out)
+    }
+
+    // Every output writer must finalize its stream when dropped, so the file
+    // round-trips cleanly. Regression test for truncated `.zst` output, where a
+    // bare zstd `Encoder` was dropped without writing the frame epilogue:
+    // https://github.com/bede/deacon/issues/88. Covers gz/zst/xz and the plain
+    // (uncompressed) path, each with a normal and an empty payload — an empty
+    // output must still be a valid, complete stream.
+    #[cfg(feature = "compression")]
+    #[rstest::rstest]
+    #[case("out.fq.gz")]
+    #[case("out.fq.zst")]
+    #[case("out.fq.xz")]
+    #[case("out.fq")]
+    fn test_output_stream_is_finalized(#[case] filename: &str) {
+        for payload in [
+            b"@read0\nACGTACGTACGT\n+\nIIIIIIIIIIII\n".to_vec(),
+            Vec::new(),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(filename);
+
+            {
+                let mut writer = get_writer(Some(&path), 2, 1).unwrap();
+                writer.write_all(&payload).unwrap();
+                writer.flush().unwrap();
+                // `writer` dropped here: the stream must be finalized on drop.
+            }
+
+            let decoded = decode_output(&path).unwrap_or_else(|e| {
+                panic!("{filename} did not round-trip (truncated stream?): {e}")
+            });
+            assert_eq!(decoded, payload, "{filename} content mismatch");
+        }
+    }
 }
