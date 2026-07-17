@@ -1157,9 +1157,6 @@ mod tests {
         assert_eq!(parsed.output2, Some("output2.fastq".to_string()));
     }
 
-    // Decode a compressed file written by `get_writer`, picking the decoder from
-    // the extension. Returns an error (not a panic) on a truncated/invalid stream
-    // so the caller can assert a clean round-trip.
     #[cfg(feature = "compression")]
     fn decode_output(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
         use std::io::Read;
@@ -1175,12 +1172,7 @@ mod tests {
         Ok(out)
     }
 
-    // Every output writer must finalize its stream when dropped, so the file
-    // round-trips cleanly. Regression test for truncated `.zst` output, where a
-    // bare zstd `Encoder` was dropped without writing the frame epilogue:
-    // https://github.com/bede/deacon/issues/88. Covers gz/zst/xz and the plain
-    // (uncompressed) path, each with a normal and an empty payload — an empty
-    // output must still be a valid, complete stream.
+    // Test regression for #88: dropped writers must leave complete output.
     #[cfg(feature = "compression")]
     #[rstest::rstest]
     #[case("out.fq.gz")]
@@ -1199,7 +1191,6 @@ mod tests {
                 let mut writer = get_writer(Some(&path), 2, 1).unwrap();
                 writer.write_all(&payload).unwrap();
                 writer.flush().unwrap();
-                // `writer` dropped here: the stream must be finalized on drop.
             }
 
             let decoded = decode_output(&path).unwrap_or_else(|e| {
