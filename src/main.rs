@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand};
 #[cfg(feature = "fetch")]
 use deacon::index_fetch;
 use deacon::{
-    ComplexityAlgorithm, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig,
     index_diff, index_dump, index_filter, index_freeze, index_info, index_intersect, index_union,
+    ComplexityAlgorithm, FilterConfig, IndexConfig, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -15,18 +15,18 @@ use std::path::PathBuf;
 #[command(author, version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Command,
     #[arg(long)]
     /// Execute command using an existing server process
     use_server: bool,
 }
 
 #[derive(Subcommand, Serialize, Deserialize)]
-enum Commands {
+enum Command {
     /// Build, inspect, compose and fetch minimizer indexes
     Index {
         #[command(subcommand)]
-        command: IndexCommands,
+        command: IndexCommand,
     },
     /// Retain or deplete sequence records with sufficient minimizer hits to an indexed query
     Filter {
@@ -115,26 +115,28 @@ enum Commands {
     /// Start/stop a server process for reduced latency filtering
     Server {
         #[command(subcommand)]
-        command: ServerCommands,
+        command: ServerCommand,
     },
     /// Show citation information
     Cite,
 }
 
 #[derive(Subcommand, Serialize, Deserialize)]
-enum ServerCommands {
+enum ServerCommand {
     /// Start the server
     Start {
         /// Number of execution threads (0 = auto)
         #[arg(short = 't', long = "threads", default_value_t = 8)]
         threads: u16,
     },
+    /// Print whether a server is running and the current index.
+    Status,
     /// Stop the running server
     Stop,
 }
 
 #[derive(Subcommand, Serialize, Deserialize)]
-enum IndexCommands {
+enum IndexCommand {
     /// Index minimizers contained within a fastx file
     Build {
         /// Path to input fastx file (or - for stdin; supports gz, zst and xz compression)
@@ -275,11 +277,11 @@ enum IndexCommands {
     },
 }
 
+/// client -> server
 #[derive(Serialize, Deserialize)]
-enum Message {
-    /// client -> server
-    Command(Commands),
-    /// server -> client
+enum Reply {
+    /// Reply for `server status`.
+    IndexPath(Option<PathBuf>),
     Done,
 }
 
@@ -313,71 +315,92 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    if let Commands::Server { command } = &cli.command
-        && !cli.use_server
+    // Start the server if requested.
+    if let Command::Server {
+        command: ServerCommand::Start { threads },
+    } = &cli.command
     {
-        // Running server commands directly (not via --use-server)
-        match command {
-            ServerCommands::Start { threads } => {
-                rayon::ThreadPoolBuilder::new()
-                    .num_threads(*threads as usize)
-                    .build_global()
-                    .context("Failed to initialize thread pool")?;
+        // First try connecting to an existing server.
+        let connect = UnixStream::connect("deacon_server_socket");
+        if connect.is_ok() {
+            return Err(anyhow::anyhow!("Server is already running."));
+        }
 
-                // Remove existing socket if present
-                let _ = std::fs::remove_file("deacon_server_socket");
-                let listener = UnixListener::bind("deacon_server_socket")?;
-                for stream in listener.incoming() {
-                    let mut stream = stream.unwrap();
-                    let mut message = vec![];
-                    let mut buf = vec![0; 10000];
-                    loop {
-                        let len = stream.read(&mut buf)?;
-                        let buf = &buf[..len];
-                        message.extend_from_slice(buf);
-                        if buf.contains(&0) {
-                            assert_eq!(buf.last(), Some(&0));
-                            message.pop();
-                            break;
-                        }
-                    }
-                    let message: Message = serde_json::from_slice(&message).unwrap();
-                    match message {
-                        Message::Command(Commands::Server {
-                            command: ServerCommands::Stop,
-                        }) => {
-                            serde_json::to_writer(stream, &Message::Done)?;
-                            let _ = std::fs::remove_file("deacon_server_socket");
-                            break;
-                        }
-                        Message::Command(commands) => {
-                            process_command(&commands)?;
-                            serde_json::to_writer(stream, &Message::Done)?;
-                        }
-                        Message::Done => {
-                            unreachable!("Server should not receive `Done` messages.")
-                        }
-                    }
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(*threads as usize)
+            .build_global()
+            .context("Failed to initialize thread pool")?;
+
+        // Remove existing socket if present
+        let _ = std::fs::remove_file("deacon_server_socket");
+        let listener = UnixListener::bind("deacon_server_socket")?;
+        'stream: for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut message = vec![];
+            let mut buf = vec![0; 10000];
+            loop {
+                let len = stream.read(&mut buf)?;
+                if len == 0 {
+                    // drop this message
+                    continue 'stream;
                 }
-
-                return Ok(());
+                let buf = &buf[..len];
+                message.extend_from_slice(buf);
+                if buf.contains(&0) {
+                    assert_eq!(buf.last(), Some(&0));
+                    message.pop();
+                    break;
+                }
             }
-            ServerCommands::Stop => {
-                panic!("Use `deacon --use-server server stop` to stop the server.")
+            let message: Command = serde_json::from_slice(&message).unwrap();
+            match message {
+                Command::Server {
+                    command: ServerCommand::Start { .. },
+                } => {
+                    // just reply Done from already-started server.
+                    serde_json::to_writer(stream, &Reply::Done)?;
+                }
+                Command::Server {
+                    command: ServerCommand::Status,
+                } => {
+                    let reply = Reply::IndexPath(deacon::current_index_path());
+                    serde_json::to_writer(stream, &reply)?;
+                }
+                Command::Server {
+                    command: ServerCommand::Stop,
+                } => {
+                    eprintln!("stopping the server");
+                    serde_json::to_writer(stream, &Reply::Done)?;
+                    let _ = std::fs::remove_file("deacon_server_socket");
+                    break;
+                }
+                command => {
+                    process_command(&command)?;
+                    serde_json::to_writer(stream, &Reply::Done)?;
+                }
             }
         }
-    }
-    // If --use-server is set, fall through to client code below
 
-    if cli.use_server {
+        return Ok(());
+    }
+
+    // Send a command to the server.
+    if cli.use_server || matches!(cli.command, Command::Server { .. }) {
         let mut stream = UnixStream::connect("deacon_server_socket")?;
-        serde_json::to_writer(&stream, &Message::Command(cli.command))?;
+        serde_json::to_writer(&stream, &cli.command)?;
         stream.write_all(b"\0")?;
         stream.flush()?;
-        let message: Message = serde_json::from_reader(stream).unwrap();
+        let message: Reply = serde_json::from_reader(stream).unwrap();
         match message {
-            Message::Done => {}
-            _ => unreachable!("The client only expects to receive `Done` messages."),
+            Reply::IndexPath(index_path) => {
+                println!("Server is running.");
+                if let Some(index_path) = index_path {
+                    println!("Current index: {}", index_path.display());
+                } else {
+                    println!("No index is loaded yet.");
+                }
+            }
+            Reply::Done => {}
         }
 
         return Ok(());
@@ -388,16 +411,16 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
+fn process_command(command: &Command) -> Result<(), anyhow::Error> {
     match &command {
-        Commands::Cite => {
+        Command::Cite => {
             print_citation();
         }
-        Commands::Server { .. } => {
+        Command::Server { .. } => {
             unreachable!("Server commands are handled before this function is called")
         }
-        Commands::Index { command } => match command {
-            IndexCommands::Build {
+        Command::Index { command } => match command {
+            IndexCommand::Build {
                 input,
                 kmer_length,
                 window_size,
@@ -417,11 +440,11 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                     .execute()
                     .context("Failed to run index build command")?;
             }
-            IndexCommands::Info { index } => {
+            IndexCommand::Info { index } => {
                 index_info(index).context("Failed to run index info command")?;
             }
             #[cfg(feature = "fetch")]
-            IndexCommands::Fetch {
+            IndexCommand::Fetch {
                 index_name,
                 kmer_length,
                 window_size,
@@ -430,15 +453,15 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 index_fetch(index_name, *kmer_length, *window_size, output.as_deref())
                     .context("Failed to run index fetch command")?;
             }
-            IndexCommands::Union { inputs, output } => {
+            IndexCommand::Union { inputs, output } => {
                 index_union(inputs, output.as_deref())
                     .context("Failed to run index union command")?;
             }
-            IndexCommands::Intersect { inputs, output } => {
+            IndexCommand::Intersect { inputs, output } => {
                 index_intersect(inputs, output.as_deref())
                     .context("Failed to run index intersect command")?;
             }
-            IndexCommands::Diff {
+            IndexCommand::Diff {
                 first,
                 second,
                 kmer_length,
@@ -456,10 +479,10 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 )
                 .context("Failed to run index diff command")?;
             }
-            IndexCommands::Dump { index, output } => {
+            IndexCommand::Dump { index, output } => {
                 index_dump(index, output.as_deref()).context("Failed to run index dump command")?;
             }
-            IndexCommands::Filter {
+            IndexCommand::Filter {
                 index,
                 algorithm,
                 threshold,
@@ -469,7 +492,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                 index_filter(index, output.as_deref(), *algorithm, *threshold, *invert)
                     .context("Failed to run index filter command")?;
             }
-            IndexCommands::Freeze {
+            IndexCommand::Freeze {
                 index,
                 output,
                 bits,
@@ -478,7 +501,7 @@ fn process_command(command: &Commands) -> Result<(), anyhow::Error> {
                     .context("Failed to run index freeze command")?;
             }
         },
-        Commands::Filter {
+        Command::Filter {
             index: minimizers,
             input,
             input2,

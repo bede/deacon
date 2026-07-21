@@ -6,13 +6,13 @@ use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 #[cfg(feature = "cli")]
-use crate::IndexConfig;
-#[cfg(feature = "cli")]
 use crate::minimizers::{Buffers, KmerHasher};
 #[cfg(feature = "cli")]
-use paraseq::Record;
+use crate::IndexConfig;
 #[cfg(feature = "cli")]
 use paraseq::prelude::{ParallelProcessor, ParallelReader};
+#[cfg(feature = "cli")]
+use paraseq::Record;
 #[cfg(feature = "cli")]
 use parking_lot::Mutex;
 #[cfg(feature = "cli")]
@@ -168,6 +168,11 @@ pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, u
 
 #[cfg(feature = "cli")]
 static INDEX: OnceLock<(PathBuf, crate::MinimizerSet, IndexHeader)> = OnceLock::new();
+
+#[cfg(feature = "cli")]
+pub fn current_index_path() -> Option<PathBuf> {
+    INDEX.get().map(|(p, _m, _h)| p.clone())
+}
 
 #[cfg(feature = "cli")]
 pub fn load_minimizers_cached(
