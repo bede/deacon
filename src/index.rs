@@ -157,9 +157,12 @@ pub fn load_minimizers(path: &Path) -> Result<(crate::MinimizerSet, IndexHeader)
 
         eprintln!("Building set on {} keys", set.len());
         // 0.043 lower bound * 1.5 + eps
-        let set =
-            static_hash_set::kphf_set::KphfSet::<kphf::KptrHash, 8>::try_new(0.7, 0.065, &set)
-                .unwrap();
+        // let set =
+        //     static_hash_set::kphf_set::KphfSet::<kphf::KptrHash, 8>::try_new(0.7, 0.065, &set)
+        //         .unwrap();
+        let set = static_hash_set::phf_set::PhfSet::<static_hash_set::phf_trait::PtrHash>::new(
+            0.0, 0.0, &set,
+        );
         assert_eq!(set.len(), count);
         eprintln!("Building done!");
         crate::MinimizerSet::U64(set)
@@ -465,10 +468,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
             .iter()
             .copied()
             .collect();
-        eprintln!("Building set on {} keys (B)", set.len());
-        let set = static_hash_set::kphf_set::KphfSet::<kphf::KptrHash, 8>::try_new(0.7, 0.1, &set)
-            .unwrap();
-        eprintln!("Building done! (B)");
+        let set = todo!();
         crate::MinimizerSet::U64(set)
     } else {
         let set = Arc::try_unwrap(processor.global_minimizers_u128)

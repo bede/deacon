@@ -45,7 +45,8 @@ pub type RapidHashSet<T> = HashSet<T, FixedRapidHasher>;
 
 /// Zero-cost (hopefully?) abstraction over u64 and u128 minimizer sets
 pub enum MinimizerSet {
-    U64(static_hash_set::kphf_set::KphfSet<kphf::KptrHash, 8>),
+    // U64(static_hash_set::kphf_set::KphfSet<kphf::KptrHash, 8>),
+    U64(static_hash_set::phf_set::PhfSet<static_hash_set::phf_trait::PtrHash>),
     U128(RapidHashSet<u128>),
 }
 
