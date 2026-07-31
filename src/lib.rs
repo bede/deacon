@@ -294,6 +294,9 @@ pub struct FilterConfig<'a> {
     /// Treat input_path as an interleaved paired stream
     pub interleaved: bool,
 
+    /// Validate paired record names (Illumina CASAVA or /1 /2 suffixes)
+    pub check_pairs: bool,
+
     /// Path to output fastx file (None for stdout; detects .gz and .zst)
     pub output_path: Option<&'a Path>,
 

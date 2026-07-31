@@ -89,7 +89,7 @@ Prebuilt pangenome indexes are provided. These can be downloaded using the links
 
 ### Filtering
 
-The main command `deacon filter` accepts an index path followed by up to two FASTA/FASTQ file paths, depending on whether input sequences originate from stdin, a single file, or paired input files. Indexes are built with `deacon index build`.  Paired inputs are supported as either two separate or one interleaved file/stream when using `--interleaved`, and may be written either to separate paired output files or one interleaved file. For paired reads, distinct minimizer hits originating from either mate are counted. By default, input sequences must meet both an absolute threshold of 2 minimizer hits (`-a 2`) and a relative threshold of 1% of minimizers (`-r 0.01`) to pass the filter. Filtering can be inverted for e.g. host depletion using the `--deplete` (`-d`) flag. Gzip, Zstandard, and xz compression formats are detected automatically by file extension.
+The main command `deacon filter` accepts an index path followed by up to two FASTA/FASTQ file paths, depending on whether input sequences originate from stdin, a single file, or paired input files. Indexes are built with `deacon index build`.  Paired inputs are supported as either two separate or one interleaved file/stream when using `--interleaved`, and may be written either to separate paired output files or one interleaved file. For paired sequences, distinct minimizer hits originating from either mate are counted. `--check-pairs` optionally verifies that mates have matching Illumina CASAVA names (`1:`/`2:` mate fields) or matching legacy names ending in `/1` and `/2`. By default, input sequences must meet both an absolute threshold of 2 minimizer hits (`-a 2`) and a relative threshold of 1% of minimizers (`-r 0.01`) to pass the filter. Filtering can be inverted for e.g. host depletion using the `--deplete` (`-d`) flag. Gzip, Zstandard, and xz compression formats are detected automatically by file extension.
 
 #### Examples
 
@@ -119,6 +119,9 @@ deacon filter -d panhuman-1.k31w15.idx reads.fq.zst -o filt.fq.zst
 # Paired reads
 deacon filter -d panhuman-1.k31w15.idx r1.fq.gz r2.fq.gz > filt12.fq
 deacon filter -d panhuman-1.k31w15.idx r1.fq.gz r2.fq.gz -o filt.r1.fq.gz -O filt.r2.fq.gz
+
+# Validate matching Illumina record names while filtering paired sequences
+deacon filter -d --check-pairs panhuman-1.k31w15.idx r1.fq.gz r2.fq.gz -o filt.r1.fq.gz -O filt.r2.fq.gz
 
 # Interleaved paired reads (file or stdin)
 deacon filter -d --interleaved panhuman-1.k31w15.idx r12.fq.gz > filt12.fq
@@ -221,6 +224,8 @@ Options:
           Output sequences with minimizer hits to stderr
       --interleaved
           Treat INPUT as interleaved paired reads from a file or stdin
+      --check-pairs
+          Validate paired record names (Illumina CASAVA or /1 /2 suffixes)
   -q, --quiet
           Suppress progress reporting
   -h, --help
@@ -289,6 +294,7 @@ Use `-s summary.json` to save detailed filtering statistics:
   "prefix_length": 0,
   "deplete": true,
   "rename": false,
+  "check_pairs": false,
   "seqs_in": 1000000,
   "seqs_out": 13452,
   "seqs_removed": 986548,
@@ -342,4 +348,3 @@ Work in progress: https://github.com/galaxyproject/tools-iuc/pull/7473
 Please also consider citing the SimdMinimizers paper:
 
 > Ragnar Groot Koerkamp, Igor Martayan. "SimdMinimizers: Computing random minimizers, *fast*" *bioRxiv* 2025.01.27.634998, https://doi.org/10.1101/2025.01.27.634998
-

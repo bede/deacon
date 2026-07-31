@@ -31,6 +31,8 @@ pub struct FilterRunConfig {
     pub input2_path: Option<String>,
     /// Treat input_path as an interleaved paired stream
     pub interleaved: bool,
+    /// Validate paired record names (Illumina CASAVA or /1 /2 suffixes)
+    pub check_pairs: bool,
     /// Path to output fastx file (None for stdout; detects .gz/.zst/.xz)
     pub output_path: Option<PathBuf>,
     /// Path to optional second output fastx file for paired reads
@@ -75,6 +77,51 @@ struct FilterProcessorConfig {
     rename_random: bool,
     output_fasta: bool,
     debug: bool,
+    check_pairs: bool,
+}
+
+/// Split a FASTA/Q header into its first whitespace-delimited token and description
+#[inline]
+fn split_record_id(id: &[u8]) -> (&[u8], &[u8]) {
+    match id.iter().position(|byte| byte.is_ascii_whitespace()) {
+        Some(index) => (&id[..index], &id[index..]),
+        None => (id, &[]),
+    }
+}
+
+#[inline]
+fn casava_mate_number(description: &[u8]) -> Option<u8> {
+    let description = description
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .map_or(&[][..], |index| &description[index..]);
+
+    match description {
+        [mate @ (b'1' | b'2'), b':', ..] => Some(*mate),
+        _ => None,
+    }
+}
+
+#[inline]
+fn paired_record_names_match(id1: &[u8], id2: &[u8]) -> bool {
+    let (name1, description1) = split_record_id(id1);
+    let (name2, description2) = split_record_id(id2);
+
+    if let (Some(core1), Some(core2)) = (name1.strip_suffix(b"/1"), name2.strip_suffix(b"/2")) {
+        return !core1.is_empty() && core1 == core2;
+    }
+
+    !name1.is_empty()
+        && name1 == name2
+        && casava_mate_number(description1) == Some(b'1')
+        && casava_mate_number(description2) == Some(b'2')
+}
+
+fn validate_check_pairs_mode(check_pairs: bool, paired_input: bool) -> Result<()> {
+    if check_pairs && !paired_input {
+        anyhow::bail!("--check-pairs requires paired input (INPUT2 or --interleaved)");
+    }
+    Ok(())
 }
 
 /// Check if path is a named pipe or process substitution / /dev/fd/*
@@ -315,6 +362,7 @@ pub struct FilterSummary {
     deplete: bool,
     rename: bool,
     rename_random: bool,
+    check_pairs: bool,
     seqs_in: u64,
     seqs_out: u64,
     seqs_out_proportion: f64,
@@ -340,6 +388,7 @@ struct FilterProcessor<'a> {
     rename_random: bool,
     output_fasta: bool,
     debug: bool,
+    check_pairs: bool,
     kernel: FilterKernel,
 
     // Local buffers
@@ -385,6 +434,7 @@ impl<'a> FilterProcessor<'a> {
             rename_random: config.rename_random,
             output_fasta: config.output_fasta,
             debug: config.debug,
+            check_pairs: config.check_pairs,
             kernel: FilterKernel::new(
                 kmer_length,
                 window_size,
@@ -559,6 +609,15 @@ impl<'a, Rf: Record> ParallelProcessor<Rf> for FilterProcessor<'a> {
 
 impl<'a, Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor<'a> {
     fn process_record_pair(&mut self, record1: Rf, record2: Rf) -> paraseq::parallel::Result<()> {
+        if self.check_pairs && !paired_record_names_match(record1.id(), record2.id()) {
+            return Err(anyhow::anyhow!(
+                "Paired record name mismatch: R1='{}', R2='{}'. Expected matching Illumina CASAVA 1: and 2: fields or names suffixed with /1 and /2",
+                String::from_utf8_lossy(record1.id()),
+                String::from_utf8_lossy(record2.id())
+            )
+            .into());
+        }
+
         let seq1 = record1.seq();
         let seq2 = record2.seq();
 
@@ -652,6 +711,11 @@ impl<'a, Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor<'a> {
 }
 
 pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
+    validate_check_pairs_mode(
+        config.check_pairs,
+        config.interleaved || config.input2_path.is_some(),
+    )?;
+
     // Validate the index path once here; run_with_index never touches it again.
     if !config.minimizers_path.exists() {
         return Err(anyhow::anyhow!(
@@ -667,6 +731,7 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
         input_path: config.input_path.to_string(),
         input2_path: config.input2_path.map(str::to_string),
         interleaved: config.interleaved,
+        check_pairs: config.check_pairs,
         output_path: config.output_path.map(|p| p.to_path_buf()),
         output2_path: config.output2_path.map(str::to_string),
         abs_threshold: config.abs_threshold,
@@ -736,6 +801,11 @@ pub fn run_with_index(
     header: &IndexHeader,
     config: &FilterRunConfig,
 ) -> Result<FilterSummary> {
+    validate_check_pairs_mode(
+        config.check_pairs,
+        config.interleaved || config.input2_path.is_some(),
+    )?;
+
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
     let tool_version = format!("deacon {}", version);
@@ -806,6 +876,9 @@ pub fn run_with_index(
     }
     if config.rename_random {
         options.push("rename-random".to_string());
+    }
+    if config.check_pairs {
+        options.push("check-pairs".to_string());
     }
     if config.threads > 0 {
         let threads_str = if compressed_output_count > 0 {
@@ -878,6 +951,7 @@ pub fn run_with_index(
         rename_random: config.rename_random,
         output_fasta: config.output_fasta,
         debug: config.debug,
+        check_pairs: config.check_pairs,
     };
     let mut processor = FilterProcessor::new(
         minimizers,
@@ -1074,6 +1148,7 @@ pub fn run_with_index(
         deplete: config.deplete,
         rename: config.rename,
         rename_random: config.rename_random,
+        check_pairs: config.check_pairs,
         seqs_in: total_seqs,
         seqs_out: output_seqs,
         seqs_out_proportion: output_seq_proportion,
@@ -1109,6 +1184,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_paired_record_names_match_supported_formats() {
+        assert!(paired_record_names_match(b"cluster/1", b"cluster/2"));
+        assert!(paired_record_names_match(
+            b"cluster/1 legacy description",
+            b"cluster/2 other description"
+        ));
+        assert!(paired_record_names_match(
+            b"A00123:1:H5J2TDSX7:1:1101:1000:1000 1:N:0:ACGT",
+            b"A00123:1:H5J2TDSX7:1:1101:1000:1000 2:Y:7:TGCA"
+        ));
+        assert!(paired_record_names_match(
+            b"A00123:1:H5J2TDSX7:1:1101:1000:1000\t1:N:0:ACGT",
+            b"A00123:1:H5J2TDSX7:1:1101:1000:1000\t 2:N:0:ACGT"
+        ));
+    }
+
+    #[test]
+    fn test_paired_record_names_reject_invalid_pairs() {
+        let invalid = [
+            (&b"other/1"[..], &b"cluster/2"[..]),
+            (&b"cluster/2"[..], &b"cluster/1"[..]),
+            (&b"cluster/1"[..], &b"cluster/1"[..]),
+            (&b"cluster"[..], &b"cluster"[..]),
+            (&b"cluster/1"[..], &b"cluster 2:N:0:1"[..]),
+            (&b"/1"[..], &b"/2"[..]),
+            (&b"cluster 1:N:0:1"[..], &b"other 2:N:0:1"[..]),
+            (&b"cluster 2:N:0:1"[..], &b"cluster 1:N:0:1"[..]),
+            (&b"cluster 1:N:0:1"[..], &b"cluster 1:N:0:1"[..]),
+            (&b"cluster 1"[..], &b"cluster 2"[..]),
+        ];
+
+        for (id1, id2) in invalid {
+            assert!(
+                !paired_record_names_match(id1, id2),
+                "accepted invalid pair"
+            );
+        }
+    }
+
+    #[test]
     fn test_filter_summary() {
         let summary = FilterSummary {
             version: "deacon 0.1.0".to_string(),
@@ -1125,6 +1240,7 @@ mod tests {
             deplete: false,
             rename: false,
             rename_random: false,
+            check_pairs: false,
             seqs_in: 100,
             seqs_out: 90,
             seqs_out_proportion: 0.9,

@@ -71,6 +71,13 @@ fn create_test_paired_fastq(path1: &Path, path2: &Path) {
     fs::write(path2, fastq_content2).unwrap();
 }
 
+fn create_named_pair(path1: &Path, path2: &Path, id1: &str, id2: &str) {
+    let seq = "ACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCAT";
+    let qual = "~".repeat(seq.len());
+    fs::write(path1, format!("@{id1}\n{seq}\n+\n{qual}\n")).unwrap();
+    fs::write(path2, format!("@{id2}\n{seq}\n+\n{qual}\n")).unwrap();
+}
+
 fn create_test_interleaved_fastq(path: &Path) {
     let interleaved_content =
         "@read1/1\nACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n@read1/2\nACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA\n+\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n"
@@ -415,6 +422,126 @@ fn test_filter_paired() {
     // Validate output content (should be interleaved)
     let output_content = fs::read_to_string(&output_path).unwrap();
     assert!(!output_content.is_empty(), "Output file is empty");
+}
+
+#[test]
+fn test_check_pairs_accepts_casava_and_interleaved_legacy_names() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let r1_path = temp_dir.path().join("reads_1.fastq");
+    let r2_path = temp_dir.path().join("reads_2.fastq");
+    let interleaved_path = temp_dir.path().join("interleaved.fastq");
+    let summary_path = temp_dir.path().join("summary.json");
+
+    create_test_fasta(&fasta_path);
+    build_index(&fasta_path, &bin_path);
+    create_named_pair(
+        &r1_path,
+        &r2_path,
+        "A00123:1:H5J2TDSX7:1:1101:1000:1000 1:N:0:ACGT",
+        "A00123:1:H5J2TDSX7:1:1101:1000:1000 2:Y:7:TGCA",
+    );
+
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter")
+        .arg("--check-pairs")
+        .arg("--summary")
+        .arg(&summary_path)
+        .arg(&bin_path)
+        .arg(&r1_path)
+        .arg(&r2_path)
+        .arg("--output")
+        .arg("/dev/null")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("check-pairs"));
+
+    let summary: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&summary_path).unwrap()).unwrap();
+    assert_eq!(summary["check_pairs"], true);
+
+    let seq = "ACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCAT";
+    let qual = "~".repeat(seq.len());
+    fs::write(
+        &interleaved_path,
+        format!("@legacy/1 note\n{seq}\n+\n{qual}\n@legacy/2 other\n{seq}\n+\n{qual}\n"),
+    )
+    .unwrap();
+
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter")
+        .arg("--check-pairs")
+        .arg("--interleaved")
+        .arg(&bin_path)
+        .arg(&interleaved_path)
+        .arg("--output")
+        .arg("/dev/null")
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_check_pairs_rejects_mismatched_names() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let r1_path = temp_dir.path().join("reads_1.fastq");
+    let r2_path = temp_dir.path().join("reads_2.fastq");
+
+    create_test_fasta(&fasta_path);
+    build_index(&fasta_path, &bin_path);
+    create_named_pair(&r1_path, &r2_path, "cluster-a/1", "cluster-b/2");
+
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter")
+        .arg("--check-pairs")
+        .arg(&bin_path)
+        .arg(&r1_path)
+        .arg(&r2_path)
+        .arg("--output")
+        .arg("/dev/null")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("Paired record name mismatch"))
+        .stderr(predicates::str::contains("cluster-a/1"))
+        .stderr(predicates::str::contains("cluster-b/2"));
+
+    let seq = "ACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCAT";
+    let qual = "~".repeat(seq.len());
+    let interleaved_path = temp_dir.path().join("interleaved.fastq");
+    fs::write(
+        &interleaved_path,
+        format!("@cluster/2\n{seq}\n+\n{qual}\n@cluster/1\n{seq}\n+\n{qual}\n"),
+    )
+    .unwrap();
+
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter")
+        .arg("--check-pairs")
+        .arg("--interleaved")
+        .arg(&bin_path)
+        .arg(&interleaved_path)
+        .arg("--output")
+        .arg("/dev/null")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("Paired record name mismatch"));
+}
+
+#[test]
+fn test_check_pairs_requires_paired_input_before_index_load() {
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter")
+        .arg("--check-pairs")
+        .arg("missing.idx")
+        .arg("sequences.fastq")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "--check-pairs requires paired input",
+        ))
+        .stderr(predicates::str::contains("Index file does not exist").not());
 }
 
 #[test]

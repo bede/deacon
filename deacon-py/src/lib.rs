@@ -135,6 +135,7 @@ impl Index {
             input_path: fastq,
             input2_path: fastq2,
             interleaved,
+            check_pairs: false,
             output_path: output.map(PathBuf::from),
             output2_path: output2,
             abs_threshold,

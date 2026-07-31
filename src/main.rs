@@ -108,6 +108,10 @@ enum Command {
         )]
         interleaved: bool,
 
+        /// Validate paired record names (Illumina CASAVA or /1 /2 suffixes)
+        #[arg(long = "check-pairs", default_value_t = false)]
+        check_pairs: bool,
+
         /// Suppress progress reporting
         #[arg(short = 'q', long = "quiet", default_value_t = false)]
         quiet: bool,
@@ -506,6 +510,7 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
             input,
             input2,
             interleaved,
+            check_pairs,
             output,
             output2,
             abs_threshold,
@@ -535,6 +540,7 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
                 input_path: input,
                 input2_path: input2.as_deref(),
                 interleaved: *interleaved,
+                check_pairs: *check_pairs,
                 output_path: output.as_ref().map(|p| p.as_path()),
                 output2_path: output2.as_deref(),
                 abs_threshold: *abs_threshold as usize,
@@ -557,4 +563,32 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_pairs_survives_server_message_roundtrip() {
+        let cli = Cli::try_parse_from([
+            "deacon",
+            "filter",
+            "--check-pairs",
+            "index.idx",
+            "r1.fastq",
+            "r2.fastq",
+        ])
+        .unwrap();
+        let encoded = serde_json::to_vec(&cli.command).unwrap();
+        let decoded: Command = serde_json::from_slice(&encoded).unwrap();
+
+        assert!(matches!(
+            decoded,
+            Command::Filter {
+                check_pairs: true,
+                ..
+            }
+        ));
+    }
 }
