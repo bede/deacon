@@ -894,13 +894,13 @@ impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor<'_> {
             stats.total_seqs += self.local_stats.total_seqs;
             stats.total_bp += self.local_stats.total_bp;
 
-            let current_gb = stats.total_bp / 1_000_000_000;
-            if current_gb > stats.last_reported {
+            let current_10gb = stats.total_bp / 10_000_000_000;
+            if current_10gb > stats.last_reported {
                 eprintln!(
                     "  Processed {} sequences ({}bp), removed {} minimizers",
                     stats.total_seqs, stats.total_bp, hits
                 );
-                stats.last_reported = current_gb;
+                stats.last_reported = current_10gb;
             }
 
             self.local_stats = ProcessingStats::default();
