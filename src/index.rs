@@ -756,32 +756,92 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     Ok(())
 }
 
+/// Minimizers found in the index being diffed
 #[cfg(feature = "cli")]
 #[derive(Clone)]
-struct DiffIndexProcessor {
-    kmer_length: u8,
-    window_size: u8,
-    hasher: KmerHasher,
-    // Local buffers
-    buffers: Buffers,
-    local_stats: ProcessingStats,
-    local_minimizers_u64: Option<RapidHashSet<u64>>,
-    local_minimizers_u128: Option<RapidHashSet<u128>>,
-    // Global state
-    global_stats: Arc<Mutex<ProcessingStats>>,
-    initial_size: usize,
-    global_minimizers_u64: Arc<Mutex<Option<RapidHashSet<u64>>>>,
-    global_minimizers_u128: Arc<Mutex<Option<RapidHashSet<u128>>>>,
+enum HitSet {
+    U64(RapidHashSet<u64>),
+    U128(RapidHashSet<u128>),
 }
 
 #[cfg(feature = "cli")]
-impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor {
+impl HitSet {
+    /// An empty hit set matching the width of `set`
+    fn empty_like(set: &crate::MinimizerSet) -> Self {
+        match set {
+            crate::MinimizerSet::U64(_) => HitSet::U64(RapidHashSet::default()),
+            crate::MinimizerSet::U128(_) => HitSet::U128(RapidHashSet::default()),
+            // load_minimizers rejects BFF files, so this is unreachable
+            crate::MinimizerSet::Fuse(_) => unreachable!("diff does not operate on BFF indexes"),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            HitSet::U64(set) => set.len(),
+            HitSet::U128(set) => set.len(),
+        }
+    }
+
+    /// Drain `other` into `self`, keeping `other`'s allocation for reuse
+    fn drain_from(&mut self, other: &mut Self) {
+        match (self, other) {
+            (HitSet::U64(dst), HitSet::U64(src)) => dst.extend(src.drain()),
+            (HitSet::U128(dst), HitSet::U128(src)) => dst.extend(src.drain()),
+            _ => unreachable!("minimizer width mismatch between hit sets"),
+        }
+    }
+
+    /// Remove every hit from `set`
+    fn remove_from(&self, set: &mut crate::MinimizerSet) {
+        match (self, set) {
+            (HitSet::U64(hits), crate::MinimizerSet::U64(set)) => {
+                for minimizer in hits {
+                    set.remove(minimizer);
+                }
+            }
+            (HitSet::U128(hits), crate::MinimizerSet::U128(set)) => {
+                for minimizer in hits {
+                    set.remove(minimizer);
+                }
+            }
+            _ => unreachable!("minimizer width mismatch between hit set and index"),
+        }
+    }
+}
+
+#[cfg(feature = "cli")]
+#[derive(Clone)]
+struct DiffIndexProcessor<'a> {
+    kmer_length: u8,
+    window_size: u8,
+    hasher: KmerHasher,
+    /// Index being subtracted from. Read-only while streaming, so every thread probes
+    /// it without locking; the removal itself is a single pass once streaming is done.
+    first: &'a crate::MinimizerSet,
+    // Local buffers
+    buffers: Buffers,
+    local_stats: ProcessingStats,
+    /// Hits seen by this thread since the last batch. Bounded by `first`, and usually a
+    /// tiny fraction of it.
+    local_hits: HitSet,
+    // Global state
+    global_stats: Arc<Mutex<ProcessingStats>>,
+    global_hits: Arc<Mutex<HitSet>>,
+}
+
+#[cfg(feature = "cli")]
+impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor<'_> {
     fn process_record(&mut self, record: Rf) -> paraseq::parallel::Result<()> {
         let seq = record.seq();
         self.local_stats.total_seqs += 1;
         self.local_stats.total_bp += seq.len() as u64;
 
-        crate::minimizers::fill_minimizers(
+        if seq.len() < self.kmer_length as usize {
+            return Ok(());
+        }
+
+        crate::minimizers::fill_minimizers_unchecked(
             &seq,
             &self.hasher,
             self.kmer_length,
@@ -789,45 +849,43 @@ impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor {
             &mut self.buffers,
         );
 
-        // Extend appropriate local set based on type
-        match &mut self.buffers.minimizers {
-            crate::MinimizerVec::U64(vec) => {
-                self.local_minimizers_u64
-                    .as_mut()
-                    .unwrap()
-                    .extend(vec.iter());
+        // Dispatch on width once, then probe lock-free, keeping only the hits
+        match (self.first, &self.buffers.minimizers, &mut self.local_hits) {
+            (
+                crate::MinimizerSet::U64(first),
+                crate::MinimizerVec::U64(vec),
+                HitSet::U64(hits),
+            ) => {
+                for &minimizer in vec.iter() {
+                    if first.contains(&minimizer) {
+                        hits.insert(minimizer);
+                    }
+                }
             }
-            crate::MinimizerVec::U128(vec) => {
-                self.local_minimizers_u128
-                    .as_mut()
-                    .unwrap()
-                    .extend(vec.iter());
+            (
+                crate::MinimizerSet::U128(first),
+                crate::MinimizerVec::U128(vec),
+                HitSet::U128(hits),
+            ) => {
+                for &minimizer in vec.iter() {
+                    if first.contains(&minimizer) {
+                        hits.insert(minimizer);
+                    }
+                }
             }
+            _ => unreachable!("minimizer width mismatch between index and sequences"),
         }
 
         Ok(())
     }
 
     fn on_batch_complete(&mut self) -> paraseq::parallel::Result<()> {
-        // Write buffer to output
-        let len = if let Some(local) = &mut self.local_minimizers_u64 {
-            let mut global = self.global_minimizers_u64.lock();
-            let global_set = global.as_mut().unwrap();
-            for &minimizer in local.iter() {
-                global_set.remove(&minimizer);
-            }
-            let len = global_set.len();
-            local.clear();
-            len
-        } else {
-            let mut global = self.global_minimizers_u128.lock();
-            let global_set = global.as_mut().unwrap();
-            for &minimizer in self.local_minimizers_u128.as_ref().unwrap().iter() {
-                global_set.remove(&minimizer);
-            }
-            let len = global_set.len();
-            self.local_minimizers_u128.as_mut().unwrap().clear();
-            len
+        // Merge this batch's hits into the global set, holding the lock only for the
+        // hits rather than for every minimizer seen
+        let hits = {
+            let mut global = self.global_hits.lock();
+            global.drain_from(&mut self.local_hits);
+            global.len()
         };
 
         // Update global stats
@@ -840,9 +898,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor {
             if current_gb > stats.last_reported {
                 eprintln!(
                     "  Processed {} sequences ({}bp), removed {} minimizers",
-                    stats.total_seqs,
-                    stats.total_bp,
-                    self.initial_size - len
+                    stats.total_seqs, stats.total_bp, hits
                 );
                 stats.last_reported = current_gb;
             }
@@ -913,70 +969,40 @@ fn stream_diff_fastx(
 
     let reader = reader_with_inferred_batch_size(in_path)?;
 
-    // Move first_minimizers into Arc<Mutex<>> for parallel access
-    let initial_size = first_minimizers.len();
-    let (mut processor, global_minimizers_u64, global_minimizers_u128) = match first_minimizers {
-        crate::MinimizerSet::U64(set) => {
-            let moved_set = std::mem::take(set);
-            let arc = Arc::new(Mutex::new(Some(moved_set)));
-            (
-                DiffIndexProcessor {
-                    kmer_length,
-                    window_size,
-                    hasher: KmerHasher::new(kmer_length as usize),
-                    local_stats: ProcessingStats::default(),
-                    buffers: Buffers::new_u64(),
-                    local_minimizers_u64: Some(RapidHashSet::default()),
-                    local_minimizers_u128: None,
-                    global_stats: Arc::new(Mutex::new(ProcessingStats::default())),
-                    initial_size,
-                    global_minimizers_u64: arc.clone(),
-                    global_minimizers_u128: Arc::new(Mutex::new(None)),
-                },
-                Some(arc),
-                None,
-            )
-        }
-        crate::MinimizerSet::U128(set) => {
-            let moved_set = std::mem::take(set);
-            let arc = Arc::new(Mutex::new(Some(moved_set)));
-            (
-                DiffIndexProcessor {
-                    kmer_length,
-                    window_size,
-                    hasher: KmerHasher::new(kmer_length as usize),
-                    local_stats: ProcessingStats::default(),
-                    buffers: Buffers::new_u128(),
-                    local_minimizers_u64: None,
-                    local_minimizers_u128: Some(RapidHashSet::default()),
-                    global_stats: Arc::new(Mutex::new(ProcessingStats::default())),
-                    initial_size,
-                    global_minimizers_u64: Arc::new(Mutex::new(None)),
-                    global_minimizers_u128: arc.clone(),
-                },
-                None,
-                Some(arc),
-            )
-        }
-        // load_minimizers rejects BFF files, so this is unreachable
-        crate::MinimizerSet::Fuse(_) => unreachable!("diff does not operate on BFF indexes"),
+    // Read only index while streaming - remove minimizers in single final op
+    let global_stats = Arc::new(Mutex::new(ProcessingStats::default()));
+    let global_hits = Arc::new(Mutex::new(HitSet::empty_like(first_minimizers)));
+    let start_time = Instant::now();
+
+    let mut processor = DiffIndexProcessor {
+        kmer_length,
+        window_size,
+        hasher: KmerHasher::new(kmer_length as usize),
+        first: first_minimizers,
+        buffers: if kmer_length <= 32 {
+            Buffers::new_u64()
+        } else {
+            Buffers::new_u128()
+        },
+        local_stats: ProcessingStats::default(),
+        local_hits: HitSet::empty_like(first_minimizers),
+        global_stats: global_stats.clone(),
+        global_hits: global_hits.clone(),
     };
 
     reader.process_parallel(&mut processor, threads as usize)?;
+    drop(processor);
 
-    // Extract results from Arc<Mutex<>> after processing completes
-    let stats = processor.global_stats.lock().clone();
-    *first_minimizers = if let Some(arc) = global_minimizers_u64 {
-        let set = arc.lock().take().unwrap();
-        crate::MinimizerSet::U64(set)
-    } else {
-        let set = global_minimizers_u128.unwrap().lock().take().unwrap();
-        crate::MinimizerSet::U128(set)
-    };
+    let stats = global_stats.lock().clone();
+    global_hits.lock().remove_from(first_minimizers);
 
+    let elapsed = start_time.elapsed();
     eprintln!(
-        "Processed {} sequences ({}bp) from FASTX file",
-        stats.total_seqs, stats.total_bp
+        "Processed {} sequences ({}bp) from FASTX file in {:.2?} ({:.1} Mbp/s)",
+        stats.total_seqs,
+        stats.total_bp,
+        elapsed,
+        stats.total_bp as f64 / elapsed.as_secs_f64() / 1_000_000.0
     );
 
     Ok((stats.total_seqs as usize, stats.total_bp as usize))
