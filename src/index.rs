@@ -1129,7 +1129,12 @@ pub fn info(index_path: &Path) -> Result<()> {
             "  File size: {} bytes (~{:.2} bits/key)",
             file_size, bits_per_key
         );
-        eprintln!("  False-positive rate: ~2^-16 (~0.0015%)");
+        let bits = header.filter_bits();
+        eprintln!(
+            "  False-positive rate: ~2^-{} (~{:.2e})",
+            bits,
+            2f64.powi(-(bits as i32))
+        );
     } else {
         // Load exact index file
         let (minimizers, header) = load_minimizers_from_path(index_path)?;

@@ -669,12 +669,18 @@ fn test_index_freeze_and_info() {
         "info should report k=31. Got: {}",
         stderr
     );
+    // Specify correct FPR given BFF bits
+    assert!(
+        stderr.contains("~2^-32"),
+        "info should report the 32-bit FP rate. Got: {}",
+        stderr
+    );
 }
 
 #[test]
 fn test_index_freeze_filter_parity() {
     // The BFF index should produce identical filter output to the exact index for typical inputs
-    // (false-positive rate ~2^-16 means no divergence on a small read set).
+    // (default 32-bit fingerprints, FPR ~2^-32, so no divergence on a small read set).
     let temp_dir = tempdir().unwrap();
     let ref_path = temp_dir.path().join("ref.fasta");
     let idx_path = temp_dir.path().join("ref.idx");
