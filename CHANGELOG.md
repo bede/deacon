@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Major improvements to `deacon index diff` performance on fastx files.
+- Improved `deacon index diff` performance on fastx files.
+- `deacon index build` reports progress once per Gbp rather than once per sequence, reducing overheads when indexing many small sequences.
 - Bumped `simd-minimizers` and `packed-seq` dependencies.
 - The `deacon-wasm` browser build now compiles with `simd128` enabled for faster minimizer computation.
 

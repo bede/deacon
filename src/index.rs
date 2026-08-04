@@ -569,7 +569,6 @@ struct BuildIndexProcessor<'c> {
     local_stats: ProcessingStats,
     local_minimizers_u64: Option<RapidHashSet<u64>>,
     local_minimizers_u128: Option<RapidHashSet<u128>>,
-    local_record_info: Vec<(Vec<u8>, usize)>, // (record_id, seq_len) for progress output
     // Global state
     global_stats: Arc<Mutex<ProcessingStats>>,
     global_minimizers_u64: Arc<Mutex<Option<RapidHashSet<u64>>>>,
@@ -607,12 +606,6 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
             }
         }
 
-        // Store record info for progress output (printed sequentially in on_batch_complete)
-        if !self.config.quiet {
-            self.local_record_info
-                .push((record.id().to_vec(), seq.len()));
-        }
-
         Ok(())
     }
 
@@ -633,24 +626,24 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
             global.as_ref().unwrap().len()
         };
 
-        // Update global stats
+        // Tick to stderr once every Gbp
         {
             let mut stats = self.global_stats.lock();
             stats.total_seqs += self.local_stats.total_seqs;
             stats.total_bp += self.local_stats.total_bp;
-            self.local_stats = ProcessingStats::default();
-        }
 
-        // Print progress for each record in this batch (sequentially, after merging)
-        if !self.config.quiet {
-            for (record_id, seq_len) in &self.local_record_info {
-                let id_str = std::str::from_utf8(record_id).unwrap_or("unknown");
-                eprintln!(
-                    "  {} ({}bp), total minimizers: {}",
-                    id_str, seq_len, minimizer_count
-                );
+            if !self.config.quiet {
+                let current_gb = stats.total_bp / 1_000_000_000;
+                if current_gb > stats.last_reported {
+                    eprintln!(
+                        "  Processed {} sequences ({}bp), {} minimizers",
+                        stats.total_seqs, stats.total_bp, minimizer_count
+                    );
+                    stats.last_reported = current_gb;
+                }
             }
-            self.local_record_info.clear();
+
+            self.local_stats = ProcessingStats::default();
         }
 
         Ok(())
@@ -700,7 +693,6 @@ pub fn build(config: &IndexConfig) -> Result<()> {
             buffers: Buffers::new_u64(),
             local_minimizers_u64: Some(RapidHashSet::default()),
             local_minimizers_u128: None,
-            local_record_info: Vec::new(),
             global_stats: Arc::new(Mutex::new(ProcessingStats::default())),
             global_minimizers_u64: Arc::new(Mutex::new(Some(RapidHashSet::default()))),
             global_minimizers_u128: Arc::new(Mutex::new(None)),
@@ -713,7 +705,6 @@ pub fn build(config: &IndexConfig) -> Result<()> {
             buffers: Buffers::new_u128(),
             local_minimizers_u64: None,
             local_minimizers_u128: Some(RapidHashSet::default()),
-            local_record_info: Vec::new(),
             global_stats: Arc::new(Mutex::new(ProcessingStats::default())),
             global_minimizers_u64: Arc::new(Mutex::new(None)),
             global_minimizers_u128: Arc::new(Mutex::new(Some(RapidHashSet::default()))),
