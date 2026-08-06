@@ -76,6 +76,16 @@ Prebuilt pangenome indexes are provided. These can be downloaded using the links
 | :----------------------------------------------------------: | :----------------------------------------------------------: | ----------- | --------------------- | ----- | ------- |
 | **`panhuman-1` (*k*=31, *w*=15)** [Cloud](https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panhuman-1.k31w15.idx), [Zenodo](https://zenodo.org/records/17288185) | [HPRC Year 1](https://github.com/human-pangenomics/HPP_Year1_Assemblies/blob/main/assembly_index/Year1_assemblies_v2_genbank.index) ∪ [`CHM13v2.0`](https://www.ncbi.nlm.nih.gov/assembly/11828891) ∪ [`GRCh38.p14`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001405.40) - bacteria (FDA-ARGOS) - viruses (RefSeq) | 409,907,949 | 20,671 (**0.0050%**)  | 3.3GB | 2025-04 |
 | **`panmouse-1` (*k*=31, *w*=15)** [Cloud](https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panmouse-1.k31w15.idx), [Zenodo](https://zenodo.org/records/17699167) | [`GRCm39`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001635.27) ∪ [`PRJEB47108`](https://www.ebi.ac.uk/ena/browser/view/PRJEB47108?show=sequences) - bacteria (FDA-ARGOS) - viruses (RefSeq) | 551,041,865 | 9,866 (**0.0018%**)   | 4.4GB | 2025-11 |
+| **`pandog-1` (*k*=31, *w*=15)** [Zenodo](https://zenodo.org/records/17475720) | ([`ROS_Cfam_1.0`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_014441545.1/) U [`canFam4`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_011100685.1/) U [`canFam5`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_005444595.1/) U [`canFam6`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000002285.5/)) - bacteria (FDA-ARGOS) - viruses (RefSeq) | 306,554,948 | 3,793 (**0.00124%**) | 2.45GB | 2025-11 |
+
+## Prebuilt background indexes
+
+Prebuilt background indexes are provided. These can be downloaded using the links below.
+
+| Name/URL | Composition | Minimizers | Size | Date |
+|----------|-------------|------------|------|------|
+| **`FDA-ARGOS` + `RefSeq Virus` (*k*=31, *w*=15)** [Zenodo](https://zenodo.org/records/17511655) | bacteria (FDA-ARGOS) U viruses (RefSeq) | 269,926,901 | 2.16GB | 2025-11 |
+| **`FDA-ARGOS` + `RefSeq Virus` (*k*=31, *w*=15, *e*=0.5)** [Zenodo](https://zenodo.org/records/17511655) | bacteria (FDA-ARGOS) U viruses (RefSeq) | 269,906,899 | 2.16GB | 2025-11 |
 
 > [!NOTE]
 >
