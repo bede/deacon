@@ -4,14 +4,18 @@ use crate::{
     MinimizerSet, validate_unit_interval,
 };
 use anyhow::{Context, Result};
+use binseq::cbq;
+use binseq::write::{BinseqWriterBuilder, Format as BinseqFormat};
+use binseq::{BinseqRecord, ParallelReader as BinseqParallelReader, SequencingRecordBuilder};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use paraseq::Record;
 use paraseq::fastx::Reader;
 use paraseq::parallel::{PairedParallelProcessor, ParallelProcessor, ParallelReader};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,6 +25,114 @@ const OUTPUT_BUFFER_SIZE: usize = 8 * 1024 * 1024; // Opt: 8MB output buffer
 const DEFAULT_BUFFER_SIZE: usize = 64 * 1024;
 
 type BoxedWriter = Box<dyn Write + Send>;
+
+/// Input file format
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InputFormat {
+    Fastx,
+    Cbq,
+}
+
+/// Output file format
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OutputFormat {
+    Fastx,
+    Cbq,
+}
+
+/// Normalized input metadata, populated before any output is opened
+struct InputLayout {
+    format: InputFormat,
+    paired: bool,
+    qualities: bool,
+    headers: bool,
+}
+
+/// Shared output state; every processor clone merges into this under a lock
+#[derive(Clone)]
+enum SharedOutput {
+    Fastx(Arc<Mutex<BoxedWriter>>),
+    Cbq(Arc<Mutex<binseq::BinseqWriter<BoxedWriter>>>),
+}
+
+/// Thread-local output buffer merged into the shared output on batch completion
+#[allow(clippy::large_enum_variant)] // mirrors binseq's BinseqWriter, which is not boxed upstream
+#[derive(Clone)]
+enum LocalOutput {
+    Fastx(Vec<u8>),
+    Cbq(binseq::BinseqWriter<Vec<u8>>),
+}
+
+impl SharedOutput {
+    fn is_cbq(&self) -> bool {
+        matches!(self, Self::Cbq(_))
+    }
+}
+
+impl LocalOutput {
+    fn fastx_mut(&mut self) -> &mut Vec<u8> {
+        match self {
+            Self::Fastx(v) => v,
+            Self::Cbq(_) => unreachable!("CBQ local buffer used in FASTX path"),
+        }
+    }
+
+    fn fastx(&self) -> &[u8] {
+        match self {
+            Self::Fastx(v) => v,
+            Self::Cbq(_) => unreachable!("CBQ local buffer used in FASTX path"),
+        }
+    }
+
+    fn cbq_mut(&mut self) -> &mut binseq::BinseqWriter<Vec<u8>> {
+        match self {
+            Self::Cbq(w) => w,
+            Self::Fastx(_) => unreachable!("FASTX local buffer used in CBQ path"),
+        }
+    }
+}
+
+/// Input processing plan: every reader opens during layout resolution, before
+/// any output file is created.
+#[allow(clippy::large_enum_variant)] // MmapReader holds its mmap; boxed variants would add noise for no measurable gain
+enum InputPrep {
+    Cbq(cbq::MmapReader),
+    FastxSingle(Reader<Box<dyn std::io::Read + Send>>),
+    FastxInterleaved(Reader<Box<dyn std::io::Read + Send>>),
+    FastxPaired(Reader<Box<dyn std::io::Read + Send>>, Reader<Box<dyn std::io::Read + Send>>),
+    /// Empty input: create empty output without processing
+    Empty,
+}
+
+/// Adapter exposing the primary/secondary halves of a CBQ record as paraseq records
+struct CbqRecord<'a> {
+    id: &'a [u8],
+    seq: &'a [u8],
+    qual: Option<&'a [u8]>,
+    index: u64,
+}
+
+impl Record for CbqRecord<'_> {
+    fn id(&self) -> &[u8] {
+        self.id
+    }
+
+    fn index(&self) -> u64 {
+        self.index
+    }
+
+    fn seq(&self) -> Cow<'_, [u8]> {
+        Cow::Borrowed(self.seq)
+    }
+
+    fn seq_raw(&self) -> &[u8] {
+        self.seq
+    }
+
+    fn qual(&self) -> Option<&[u8]> {
+        self.qual
+    }
+}
 
 /// Filtering config for an already-loaded index (no index path; see [`FilterConfig`]).
 pub struct FilterRunConfig {
@@ -194,6 +306,190 @@ fn create_paraseq_reader(path: Option<&str>) -> Result<Reader<Box<dyn std::io::R
             Reader::from_path(p).map_err(|e| anyhow::anyhow!("Failed to open file {}: {}", p, e))
         }
     }
+}
+
+/// Resolve the output format from the output path suffix
+fn resolve_output_format(config: &FilterRunConfig) -> Result<OutputFormat> {
+    let Some(path) = config.output_path.as_deref() else {
+        return Ok(OutputFormat::Fastx);
+    };
+    let name = path.to_string_lossy();
+    if name.ends_with(".cbq") {
+        Ok(OutputFormat::Cbq)
+    } else if name.ends_with(".cbq.gz")
+        || name.ends_with(".cbq.zst")
+        || name.ends_with(".cbq.xz")
+    {
+        anyhow::bail!(
+            "Compressed CBQ output is not supported (CBQ performs its own block compression): {}",
+            name
+        );
+    } else {
+        Ok(OutputFormat::Fastx)
+    }
+}
+
+/// Resolve the input format and layout, opening all readers up front so input
+/// errors surface before any output file is created.
+fn prepare_input(
+    config: &FilterRunConfig,
+    interleaved_input: bool,
+    output_format: OutputFormat,
+) -> Result<(InputLayout, InputPrep)> {
+    // CBQ input is file-only so the mmap reader stays the only CBQ
+    // path; add binseq's streaming reader if stdin support is ever needed.
+    if config.input_path == "-" || is_special_input_path(&config.input_path) {
+        return prepare_fastx(config, interleaved_input, output_format);
+    }
+
+    // Regular files: sniff the CBQ magic; everything else is FASTX
+    let mut file = File::open(&config.input_path)
+        .map_err(|e| anyhow::anyhow!("Failed to open file {}: {}", config.input_path, e))?;
+    let mut magic = [0u8; 64];
+    let n = file.read(&mut magic)?;
+    match BinseqFormat::sniff(&magic[..n]) {
+        Some(BinseqFormat::Cbq) => {
+            let reader =
+                cbq::MmapReader::new(&config.input_path).context("Failed to open CBQ input")?;
+            let header = reader.header();
+            let layout = InputLayout {
+                format: InputFormat::Cbq,
+                paired: header.is_paired(),
+                qualities: header.has_qualities(),
+                headers: header.has_headers(),
+            };
+            // binseq's parallel reader rejects an empty record range, so
+            // zero-record CBQ files skip processing entirely
+            let prep = if reader.num_records() == 0 {
+                InputPrep::Empty
+            } else {
+                InputPrep::Cbq(reader)
+            };
+            Ok((layout, prep))
+        }
+        Some(f) => anyhow::bail!("{f:?} input is not supported; convert it to FASTQ or CBQ"),
+        None => prepare_fastx(config, interleaved_input, output_format),
+    }
+}
+
+/// Prepare a FASTX input: resolve the layout and open the reader(s) up front.
+fn prepare_fastx(
+    config: &FilterRunConfig,
+    interleaved_input: bool,
+    output_format: OutputFormat,
+) -> Result<(InputLayout, InputPrep)> {
+    let layout = InputLayout {
+        format: InputFormat::Fastx,
+        paired: interleaved_input || config.input2_path.is_some(),
+        qualities: false,
+        headers: true,
+    };
+
+    let input1_empty = is_empty_file(&config.input_path)?;
+    let input2_empty = config
+        .input2_path
+        .as_deref()
+        .map(is_empty_file)
+        .transpose()?
+        .unwrap_or(false);
+
+    if interleaved_input {
+        if input1_empty {
+            return Ok((layout, InputPrep::Empty));
+        }
+        return match create_paraseq_reader(Some(config.input_path.as_str())) {
+            Ok(reader) => {
+                let qualities = reader.format() == paraseq::fastx::Format::Fastq;
+                Ok((
+                    InputLayout { qualities, ..layout },
+                    InputPrep::FastxInterleaved(reader),
+                ))
+            }
+            Err(e) if is_empty_input_error(&e) => Ok((layout, InputPrep::Empty)),
+            Err(e) => Err(e),
+        };
+    }
+
+    if let Some(input2_path) = config.input2_path.as_deref() {
+        if input1_empty && input2_empty {
+            return Ok((layout, InputPrep::Empty));
+        }
+        if input1_empty || input2_empty {
+            return Err(anyhow::anyhow!(
+                "One paired file is empty but the other is not"
+            ));
+        }
+        let r1 = create_paraseq_reader(Some(config.input_path.as_str()));
+        let r2 = create_paraseq_reader(Some(input2_path));
+        return match (r1, r2) {
+            (Ok(reader1), Ok(reader2)) => {
+                if output_format == OutputFormat::Cbq
+                    && !config.output_fasta
+                    && reader1.format() != reader2.format()
+                {
+                    anyhow::bail!(
+                        "Mixed FASTA/FASTQ paired input cannot be written to a quality CBQ output"
+                    );
+                }
+                let qualities = reader1.format() == paraseq::fastx::Format::Fastq;
+                Ok((
+                    InputLayout { qualities, ..layout },
+                    InputPrep::FastxPaired(reader1, reader2),
+                ))
+            }
+            (Err(e1), Err(e2)) if is_empty_input_error(&e1) && is_empty_input_error(&e2) => {
+                Ok((layout, InputPrep::Empty))
+            }
+            (Err(e), _) if is_empty_input_error(&e) => Err(anyhow::anyhow!(
+                "First paired file appears empty while second is not"
+            )),
+            (_, Err(e)) if is_empty_input_error(&e) => Err(anyhow::anyhow!(
+                "Second paired file appears empty while first is not"
+            )),
+            (Err(e), _) => Err(e),
+            (_, Err(e)) => Err(e),
+        };
+    }
+
+    if input1_empty {
+        return Ok((layout, InputPrep::Empty));
+    }
+    match create_paraseq_reader(Some(config.input_path.as_str())) {
+        Ok(reader) => {
+            let qualities = reader.format() == paraseq::fastx::Format::Fastq;
+            Ok((
+                InputLayout { qualities, ..layout },
+                InputPrep::FastxSingle(reader),
+            ))
+        }
+        Err(e) if is_empty_input_error(&e) => Ok((layout, InputPrep::Empty)),
+        Err(e) => Err(e),
+    }
+}
+
+/// Validate format combinations before any output file is opened or truncated
+fn validate_input_output(
+    layout: &InputLayout,
+    output_format: OutputFormat,
+    config: &FilterRunConfig,
+) -> Result<()> {
+    if layout.format == InputFormat::Cbq && config.input2_path.is_some() {
+        anyhow::bail!("CBQ input does not support INPUT2");
+    }
+    if layout.format == InputFormat::Cbq && config.interleaved {
+        anyhow::bail!("CBQ input does not support --interleaved");
+    }
+    if output_format == OutputFormat::Cbq && config.output2_path.is_some() {
+        anyhow::bail!("CBQ output does not support OUTPUT2; CBQ pairing is native");
+    }
+    if output_format == OutputFormat::Cbq && config.output_path.is_none() {
+        anyhow::bail!("CBQ output to stdout is not supported");
+    }
+    if config.check_pairs && layout.format == InputFormat::Cbq && !layout.headers {
+        anyhow::bail!("--check-pairs requires CBQ input with headers");
+    }
+    validate_check_pairs_mode(config.check_pairs, layout.paired)?;
+    Ok(())
 }
 
 /// A record buffered without its header, which is written later by [`write_renamed`]
@@ -405,9 +701,9 @@ pub struct FilterSummary {
 }
 
 #[derive(Clone)]
-struct FilterProcessor<'a> {
+struct FilterProcessor {
     // Minimizer matching parameters
-    minimizers: &'a MinimizerSet,
+    minimizers: Arc<MinimizerSet>,
     rename: bool,
     output_fasta: bool,
     debug: bool,
@@ -417,8 +713,8 @@ struct FilterProcessor<'a> {
     kernel: FilterKernel,
 
     // Local buffers
-    local_buffer: Vec<u8>,
-    local_buffer2: Vec<u8>, // Second buffer for paired output
+    local_buffer: LocalOutput,
+    local_buffer2: Vec<u8>, // Second buffer for paired FASTX output
     local_stats: ProcessingStats,
 
     // Headers awaiting a number, and how many records/pairs this batch kept
@@ -429,7 +725,7 @@ struct FilterProcessor<'a> {
     rename_counter: Arc<AtomicU64>,
 
     // Global state
-    global_writer: Arc<Mutex<BoxedWriter>>,
+    global_writer: SharedOutput,
     global_writer2: Option<Arc<Mutex<BoxedWriter>>>,
     global_stats: Arc<Mutex<ProcessingStats>>,
     spinner: Option<Arc<Mutex<ProgressBar>>>,
@@ -446,17 +742,21 @@ pub(crate) struct ProcessingStats {
     pub last_reported: u64,
 }
 
-impl<'a> FilterProcessor<'a> {
+impl FilterProcessor {
     fn new(
-        minimizers: &'a MinimizerSet,
+        minimizers: Arc<MinimizerSet>,
         kmer_length: u8,
         window_size: u8,
         config: &FilterProcessorConfig,
-        writer: BoxedWriter,
+        global_writer: SharedOutput,
         writer2: Option<BoxedWriter>,
         spinner: Option<Arc<Mutex<ProgressBar>>>,
         filtering_start_time: Instant,
     ) -> Result<Self> {
+        let local_buffer = match &global_writer {
+            SharedOutput::Cbq(writer) => LocalOutput::Cbq(writer.lock().new_headless_buffer()?),
+            SharedOutput::Fastx(_) => LocalOutput::Fastx(Vec::with_capacity(DEFAULT_BUFFER_SIZE)),
+        };
         Ok(Self {
             minimizers,
             rename: config.rename,
@@ -474,14 +774,14 @@ impl<'a> FilterProcessor<'a> {
                     prefix_length: config.prefix_length,
                 },
             )?,
-            local_buffer: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
+            local_buffer,
             local_buffer2: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
             pending_renames: Vec::new(),
             pending_renames2: Vec::new(),
             batch_kept: 0,
             local_stats: ProcessingStats::default(),
             rename_counter: Arc::new(AtomicU64::new(0)),
-            global_writer: Arc::new(Mutex::new(writer)),
+            global_writer,
             global_writer2: writer2.map(|w| Arc::new(Mutex::new(w))),
             global_stats: Arc::new(Mutex::new(ProcessingStats::default())),
             spinner,
@@ -490,12 +790,12 @@ impl<'a> FilterProcessor<'a> {
     }
 
     fn should_keep_sequence(&mut self, seq: &[u8]) -> FilterDecision {
-        self.kernel.classify_read(self.minimizers, seq, self.debug)
+        self.kernel            .classify_read(&self.minimizers, seq, self.debug)
     }
 
     fn should_keep_pair(&mut self, seq1: &[u8], seq2: &[u8]) -> FilterDecision {
         self.kernel
-            .classify_pair(self.minimizers, seq1, seq2, self.debug)
+            .classify_pair(&self.minimizers, seq1, seq2, self.debug)
     }
 
     fn write_record<Rf: Record>(
@@ -504,13 +804,16 @@ impl<'a> FilterProcessor<'a> {
         seq: &[u8],
         read_suffix: &'static [u8],
     ) -> Result<()> {
-        let offset = self.local_buffer.len();
+        if self.global_writer.is_cbq() {
+            return self.push_cbq(record, seq, read_suffix);
+        }
+        let offset = self.local_buffer.fastx().len();
         let marker = format_record_to_buffer(
             record,
             seq,
             self.rename,
             self.output_fasta,
-            &mut self.local_buffer,
+            self.local_buffer.fastx_mut(),
         )?;
         if self.rename {
             self.pending_renames.push(PendingRename {
@@ -558,6 +861,72 @@ impl<'a> FilterProcessor<'a> {
             + 1
     }
 
+    /// Header for a CBQ record: the original id, or `number[ suffix]` when
+    /// renaming. CBQ headers are baked into blocks at push time, so numbers
+    /// are claimed per record rather than deferred like the FASTX path;
+    /// they are unique but sequential only with `--ordered` or `-t 1`.
+    fn cbq_header<'a>(&self, id: &'a [u8], counter: u64, read_suffix: &[u8]) -> Cow<'a, [u8]> {
+        if self.rename {
+            let mut header = counter.to_string().into_bytes();
+            if !read_suffix.is_empty() {
+                header.push(b' ');
+                header.extend_from_slice(read_suffix);
+            }
+            Cow::Owned(header)
+        } else {
+            Cow::Borrowed(id)
+        }
+    }
+
+    /// Push a single record into the thread-local CBQ writer
+    fn push_cbq<Rf: Record>(
+        &mut self,
+        record: &Rf,
+        seq: &[u8],
+        read_suffix: &[u8],
+    ) -> Result<()> {
+        let counter = if self.rename {
+            self.rename_counter.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            0
+        };
+        let header = self.cbq_header(record.id(), counter, read_suffix);
+        let seq_record = SequencingRecordBuilder::default()
+            .s_seq(seq)
+            .s_header(&header)
+            .opt_s_qual(record.qual())
+            .build()?;
+        self.local_buffer.cbq_mut().push(seq_record)?;
+        Ok(())
+    }
+
+    /// Push a paired record (both mates) into the thread-local CBQ writer
+    fn push_cbq_pair<Rf: Record>(
+        &mut self,
+        record1: &Rf,
+        seq1: &[u8],
+        record2: &Rf,
+        seq2: &[u8],
+    ) -> Result<()> {
+        let counter = if self.rename {
+            self.rename_counter.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            0
+        };
+        let header1 = self.cbq_header(record1.id(), counter, b"/1");
+        let header2 = self.cbq_header(record2.id(), counter, b"/2");
+        let seq_record = SequencingRecordBuilder::default()
+            .s_seq(seq1)
+            .s_header(&header1)
+            .opt_s_qual(record1.qual())
+            .x_seq(seq2)
+            .x_header(&header2)
+            .opt_x_qual(record2.qual())
+            .build()?;
+        self.local_buffer.cbq_mut().push(seq_record)?;
+        Ok(())
+    }
+
     fn update_spinner(&self) {
         if let Some(ref spinner) = self.spinner {
             let stats = self.global_stats.lock();
@@ -592,14 +961,9 @@ impl<'a> FilterProcessor<'a> {
             ));
         }
     }
-}
 
-impl<'a, Rf: Record> ParallelProcessor<Rf> for FilterProcessor<'a> {
-    fn requires_ordering(&self) -> bool {
-        self.ordered
-    }
-
-    fn process_record(&mut self, record: Rf) -> paraseq::parallel::Result<()> {
+    /// Shared per-record logic for every reader (paraseq FASTX, CBQ mmap, ...)
+    fn handle_record<Rf: Record>(&mut self, record: &Rf) -> Result<()> {
         let seq = record.seq();
         self.local_stats.total_seqs += 1;
         self.local_stats.total_bp += seq.len() as u64;
@@ -620,7 +984,7 @@ impl<'a, Rf: Record> ParallelProcessor<Rf> for FilterProcessor<'a> {
 
         if decision.keep {
             self.local_stats.output_bp += seq.len() as u64;
-            self.write_record(&record, &seq, b"")?;
+            self.write_record(record, &seq, b"")?;
             if self.rename {
                 self.batch_kept += 1;
             }
@@ -632,62 +996,14 @@ impl<'a, Rf: Record> ParallelProcessor<Rf> for FilterProcessor<'a> {
         Ok(())
     }
 
-    fn on_batch_complete(&mut self) -> paraseq::parallel::Result<()> {
-        // Write buffer to output
-        if !self.local_buffer.is_empty() {
-            let mut global_writer = self.global_writer.lock();
-            if self.rename {
-                let base = self.reserve_rename_ids();
-                write_renamed(
-                    &mut global_writer,
-                    &self.local_buffer,
-                    &self.pending_renames,
-                    base,
-                )?;
-            } else {
-                global_writer.write_all(&self.local_buffer)?;
-            }
-            global_writer.flush()?;
-        }
-
-        // Clear buffer after releasing the lock
-        self.local_buffer.clear();
-        self.pending_renames.clear();
-        self.batch_kept = 0;
-
-        // Update global stats
-        {
-            let mut stats = self.global_stats.lock();
-            stats.total_seqs += self.local_stats.total_seqs;
-            stats.filtered_seqs += self.local_stats.filtered_seqs;
-            stats.total_bp += self.local_stats.total_bp;
-            stats.output_bp += self.local_stats.output_bp;
-            stats.filtered_bp += self.local_stats.filtered_bp;
-        }
-
-        // Update spinner
-        self.update_spinner();
-
-        // Reset local stats
-        self.local_stats = ProcessingStats::default();
-
-        Ok(())
-    }
-}
-
-impl<'a, Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor<'a> {
-    fn requires_ordering(&self) -> bool {
-        self.ordered
-    }
-
-    fn process_record_pair(&mut self, record1: Rf, record2: Rf) -> paraseq::parallel::Result<()> {
+    /// Shared per-pair logic for every reader (paraseq FASTX, CBQ mmap, ...)
+    fn handle_record_pair<Rf: Record>(&mut self, record1: &Rf, record2: &Rf) -> Result<()> {
         if self.check_pairs && !paired_record_names_match(record1.id(), record2.id()) {
             return Err(anyhow::anyhow!(
                 "Paired record name mismatch: R1='{}', R2='{}'. Expected matching Illumina CASAVA 1: and 2: fields or names suffixed with /1 and /2",
                 String::from_utf8_lossy(record1.id()),
                 String::from_utf8_lossy(record2.id())
-            )
-            .into());
+            ));
         }
 
         let seq1 = record1.seq();
@@ -714,14 +1030,17 @@ impl<'a, Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor<'a> {
         if decision.keep {
             self.local_stats.output_bp += (seq1.len() + seq2.len()) as u64;
             // Both mates take the pair's number
-            if self.global_writer2.is_some() {
+            if self.global_writer.is_cbq() {
+                // Native paired record: both mates in one CBQ record
+                self.push_cbq_pair(record1, &seq1, record2, &seq2)?;
+            } else if self.global_writer2.is_some() {
                 // Separate outputs
-                self.write_record(&record1, &seq1, b"/1")?;
-                self.write_record_to_buffer2(&record2, &seq2, b"/2")?;
+                self.write_record(record1, &seq1, b"/1")?;
+                self.write_record_to_buffer2(record2, &seq2, b"/2")?;
             } else {
                 // Interleaved output
-                self.write_record(&record1, &seq1, b"/1")?;
-                self.write_record(&record2, &seq2, b"/2")?;
+                self.write_record(record1, &seq1, b"/1")?;
+                self.write_record(record2, &seq2, b"/2")?;
             }
             if self.rename {
                 self.batch_kept += 1;
@@ -734,51 +1053,65 @@ impl<'a, Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor<'a> {
         Ok(())
     }
 
-    fn on_batch_complete(&mut self) -> paraseq::parallel::Result<()> {
-        if let Some(ref writer2) = self.global_writer2 {
-            // Atomic paired batch writing
-            if !self.local_buffer.is_empty() || !self.local_buffer2.is_empty() {
-                let mut writer1 = self.global_writer.lock();
-                let mut writer2 = writer2.lock();
-
-                if self.rename {
-                    // Both mates share one block of numbers
-                    let base = self.reserve_rename_ids();
-                    write_renamed(
-                        &mut writer1,
-                        &self.local_buffer,
-                        &self.pending_renames,
-                        base,
-                    )?;
-                    write_renamed(
-                        &mut writer2,
-                        &self.local_buffer2,
-                        &self.pending_renames2,
-                        base,
-                    )?;
-                } else {
-                    writer1.write_all(&self.local_buffer)?;
-                    writer2.write_all(&self.local_buffer2)?;
-                }
-                writer1.flush()?;
-                writer2.flush()?;
+    /// Merge thread-local buffers and stats into the shared state (per batch)
+    fn flush_batch(&mut self) -> Result<()> {
+        match &self.global_writer {
+            SharedOutput::Cbq(global) => {
+                global.lock().ingest_completed(self.local_buffer.cbq_mut())?;
             }
-        } else {
-            // Interleaved output
-            if !self.local_buffer.is_empty() {
-                let mut writer = self.global_writer.lock();
-                if self.rename {
-                    let base = self.reserve_rename_ids();
-                    write_renamed(&mut writer, &self.local_buffer, &self.pending_renames, base)?;
+            SharedOutput::Fastx(global) => {
+                if let Some(writer2) = &self.global_writer2 {
+                    // Atomic paired batch writing
+                    if !self.local_buffer.fastx().is_empty() || !self.local_buffer2.is_empty() {
+                        let mut writer1 = global.lock();
+                        let mut writer2 = writer2.lock();
+
+                        if self.rename {
+                            // Both mates share one block of numbers
+                            let base = self.reserve_rename_ids();
+                            write_renamed(
+                                &mut writer1,
+                                self.local_buffer.fastx(),
+                                &self.pending_renames,
+                                base,
+                            )?;
+                            write_renamed(
+                                &mut writer2,
+                                &self.local_buffer2,
+                                &self.pending_renames2,
+                                base,
+                            )?;
+                        } else {
+                            writer1.write_all(self.local_buffer.fastx())?;
+                            writer2.write_all(&self.local_buffer2)?;
+                        }
+                        writer1.flush()?;
+                        writer2.flush()?;
+                    }
                 } else {
-                    writer.write_all(&self.local_buffer)?;
+                    // Interleaved output
+                    if !self.local_buffer.fastx().is_empty() {
+                        let mut writer = global.lock();
+                        if self.rename {
+                            let base = self.reserve_rename_ids();
+                            write_renamed(
+                                &mut writer,
+                                self.local_buffer.fastx(),
+                                &self.pending_renames,
+                                base,
+                            )?;
+                        } else {
+                            writer.write_all(self.local_buffer.fastx())?;
+                        }
+                        writer.flush()?;
+                    }
                 }
-                writer.flush()?;
             }
         }
 
-        // Clear buffer after releasing the lock for better performance
-        self.local_buffer.clear();
+        if let LocalOutput::Fastx(v) = &mut self.local_buffer {
+            v.clear();
+        }
         self.local_buffer2.clear();
         self.pending_renames.clear();
         self.pending_renames2.clear();
@@ -800,6 +1133,89 @@ impl<'a, Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor<'a> {
         // Reset local stats
         self.local_stats = ProcessingStats::default();
 
+        Ok(())
+    }
+
+    /// Merge any remaining local blocks into the shared state (per thread)
+    fn flush_thread(&mut self) -> Result<()> {
+        if let SharedOutput::Cbq(global) = &self.global_writer {
+            global.lock().ingest(self.local_buffer.cbq_mut())?;
+        }
+        Ok(())
+    }
+}
+
+impl<Rf: Record> ParallelProcessor<Rf> for FilterProcessor {
+    fn requires_ordering(&self) -> bool {
+        self.ordered
+    }
+
+    fn process_record(&mut self, record: Rf) -> paraseq::parallel::Result<()> {
+        self.handle_record(&record)?;
+        Ok(())
+    }
+
+    fn on_batch_complete(&mut self) -> paraseq::parallel::Result<()> {
+        self.flush_batch()?;
+        Ok(())
+    }
+
+    fn on_thread_complete(&mut self) -> paraseq::parallel::Result<()> {
+        self.flush_thread()?;
+        Ok(())
+    }
+}
+
+impl<Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor {
+    fn requires_ordering(&self) -> bool {
+        self.ordered
+    }
+
+    fn process_record_pair(&mut self, record1: Rf, record2: Rf) -> paraseq::parallel::Result<()> {
+        self.handle_record_pair(&record1, &record2)?;
+        Ok(())
+    }
+
+    fn on_batch_complete(&mut self) -> paraseq::parallel::Result<()> {
+        self.flush_batch()?;
+        Ok(())
+    }
+
+    fn on_thread_complete(&mut self) -> paraseq::parallel::Result<()> {
+        self.flush_thread()?;
+        Ok(())
+    }
+}
+
+impl binseq::ParallelProcessor for FilterProcessor {
+    fn process_record<R: BinseqRecord>(&mut self, record: R) -> binseq::Result<()> {
+        let record1 = CbqRecord {
+            id: record.sheader(),
+            seq: record.sseq(),
+            qual: record.has_quality().then(|| record.squal()),
+            index: record.index(),
+        };
+        if record.is_paired() {
+            let record2 = CbqRecord {
+                id: record.xheader(),
+                seq: record.xseq(),
+                qual: record.has_quality().then(|| record.xqual()),
+                index: record.index(),
+            };
+            self.handle_record_pair(&record1, &record2)?;
+        } else {
+            self.handle_record(&record1)?;
+        }
+        Ok(())
+    }
+
+    fn on_batch_complete(&mut self) -> binseq::Result<()> {
+        self.flush_batch()?;
+        Ok(())
+    }
+
+    fn on_thread_complete(&mut self) -> binseq::Result<()> {
+        self.flush_thread()?;
         Ok(())
     }
 }
@@ -874,7 +1290,7 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
                 threshold
             );
         }
-        return run_with_index(&minimizers, &header, &run_config);
+        return run_with_index(Arc::new(minimizers), &header, &run_config);
     }
 
     let (minimizers, header) = load_minimizers_cached(config.minimizers_path)?;
@@ -895,7 +1311,7 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
 /// Reusable entry point behind the Python bindings... load the index once, call repeatedly.
 /// Does no index-path validation; the index is already in memory.
 pub fn run_with_index(
-    minimizers: &MinimizerSet,
+    minimizers: Arc<MinimizerSet>,
     header: &IndexHeader,
     config: &FilterRunConfig,
 ) -> Result<FilterSummary> {
@@ -950,15 +1366,22 @@ pub fn run_with_index(
             .context("Failed to initialize thread pool");
     }
 
+    check_input_paths(config)?;
+
+    // Resolve formats and input metadata before opening or truncating outputs
+    let interleaved_stdin = config.input_path == "-" && config.input2_path.as_deref() == Some("-");
+    let interleaved_input = config.interleaved || interleaved_stdin;
+    let output_format = resolve_output_format(config)?;
+    let (layout, prepared) = prepare_input(config, interleaved_input, output_format)?;
+    validate_input_output(&layout, output_format, config)?;
+
     let mode = if config.deplete { "deplete" } else { "search" };
 
     let mut input_type = String::new();
     let mut options = Vec::<String>::new();
-    let interleaved_stdin = config.input_path == "-" && config.input2_path.as_deref() == Some("-");
-    let interleaved_input = config.interleaved || interleaved_stdin;
     if interleaved_input {
         input_type.push_str("interleaved");
-    } else if config.input2_path.is_some() {
+    } else if layout.paired {
         input_type.push_str("paired");
     } else {
         input_type.push_str("single");
@@ -1003,25 +1426,42 @@ pub fn run_with_index(
         );
     }
 
-    check_input_paths(config)?;
-
-    let writer = get_writer(
-        config.output_path.as_deref(),
-        config.compression_level,
-        compression_threads_per_output,
-    )?;
-    let writer2 = if let Some(output2) = config.output2_path.as_deref() {
-        if config.input2_path.is_some() || interleaved_input {
-            Some(get_writer(
-                Some(std::path::Path::new(output2)),
+    let (global_writer, writer2) = match output_format {
+        OutputFormat::Cbq => {
+            let cbq_writer = BinseqWriterBuilder::new(BinseqFormat::Cbq)
+                .paired(layout.paired)
+                .quality(layout.qualities && !config.output_fasta)
+                .headers(layout.headers || config.rename)
+                .flags(false)
+                .build(get_writer(
+                    config.output_path.as_deref(),
+                    config.compression_level,
+                    compression_threads_per_output,
+                )?)
+                .context("Failed to create CBQ writer")?;
+            (SharedOutput::Cbq(Arc::new(Mutex::new(cbq_writer))), None)
+        }
+        OutputFormat::Fastx => {
+            let writer = get_writer(
+                config.output_path.as_deref(),
                 config.compression_level,
                 compression_threads_per_output,
-            )?)
-        } else {
-            None
+            )?;
+            let writer2 = if let Some(output2) = config.output2_path.as_deref() {
+                if layout.paired {
+                    Some(get_writer(
+                        Some(std::path::Path::new(output2)),
+                        config.compression_level,
+                        compression_threads_per_output,
+                    )?)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            (SharedOutput::Fastx(Arc::new(Mutex::new(writer))), writer2)
         }
-    } else {
-        None
     };
 
     // Progress bar setup if not quiet
@@ -1057,99 +1497,31 @@ pub fn run_with_index(
         kmer_length,
         window_size,
         &processor_config,
-        writer,
+        global_writer,
         writer2,
         spinner.clone(),
         filtering_start_time,
     )?;
 
-    // Check for empty files via metadata (fast path for uncompressed files <5 bytes)
-    let input1_empty = is_empty_file(&config.input_path)?;
-    let input2_empty = config
-        .input2_path
-        .as_deref()
-        .map(is_empty_file)
-        .transpose()?
-        .unwrap_or(false);
-
     // Process based on input type - use filtering threads (already calculated above)
     let num_threads = filtering_threads;
 
-    if interleaved_input {
-        // Interleaved paired input from stdin or a file
-        if input1_empty {
-            if !quiet {
-                eprintln!("Empty input file(s) detected");
-            }
-        } else {
-            match create_paraseq_reader(Some(config.input_path.as_str())) {
-                Ok(reader) => {
-                    reader.process_parallel_interleaved(&mut processor, num_threads)?;
-                }
-                Err(e) if is_empty_input_error(&e) => {
-                    if !quiet {
-                        eprintln!("Empty input file(s) detected");
-                    }
-                }
-                Err(e) => return Err(e),
-            }
+    match prepared {
+        InputPrep::Cbq(reader) => {
+            reader.process_parallel(processor.clone(), num_threads)?;
         }
-    } else if let Some(input2_path) = config.input2_path.as_deref() {
-        // Paired files - both must be empty or both non-empty
-        if input1_empty && input2_empty {
-            if !quiet {
-                eprintln!("Empty input file(s) detected");
-            }
-        } else if input1_empty || input2_empty {
-            return Err(anyhow::anyhow!(
-                "One paired file is empty but the other is not"
-            ));
-        } else {
-            // Try to create readers, catching empty compressed files
-            let r1_result = create_paraseq_reader(Some(config.input_path.as_str()));
-            let r2_result = create_paraseq_reader(Some(input2_path));
-
-            match (r1_result, r2_result) {
-                (Ok(r1), Ok(r2)) => {
-                    r1.process_parallel_paired(r2, &mut processor, num_threads)?;
-                }
-                (Err(e1), Err(e2)) if is_empty_input_error(&e1) && is_empty_input_error(&e2) => {
-                    if !quiet {
-                        eprintln!("Empty input file(s) detected");
-                    }
-                }
-                (Err(e), _) if is_empty_input_error(&e) => {
-                    return Err(anyhow::anyhow!(
-                        "First paired file appears empty while second is not"
-                    ));
-                }
-                (_, Err(e)) if is_empty_input_error(&e) => {
-                    return Err(anyhow::anyhow!(
-                        "Second paired file appears empty while first is not"
-                    ));
-                }
-                (Err(e), _) => return Err(e),
-                (_, Err(e)) => return Err(e),
-            }
+        InputPrep::FastxSingle(reader) => {
+            reader.process_parallel(&mut processor, num_threads)?;
         }
-    } else {
-        // Single file or stdin
-        if input1_empty {
+        InputPrep::FastxInterleaved(reader) => {
+            reader.process_parallel_interleaved(&mut processor, num_threads)?;
+        }
+        InputPrep::FastxPaired(reader1, reader2) => {
+            reader1.process_parallel_paired(reader2, &mut processor, num_threads)?;
+        }
+        InputPrep::Empty => {
             if !quiet {
                 eprintln!("Empty input file(s) detected");
-            }
-        } else {
-            // Try to create reader, catching empty compressed files
-            match create_paraseq_reader(Some(config.input_path.as_str())) {
-                Ok(reader) => {
-                    reader.process_parallel(&mut processor, num_threads)?;
-                }
-                Err(e) if is_empty_input_error(&e) => {
-                    if !quiet {
-                        eprintln!("Empty input file(s) detected");
-                    }
-                }
-                Err(e) => return Err(e),
             }
         }
     }
@@ -1162,6 +1534,11 @@ pub fn run_with_index(
     let filtered_bp = final_stats.filtered_bp;
 
     drop(final_stats); // Release lock
+
+    // Finish the CBQ stream: flush remaining blocks and write the embedded index
+    if let SharedOutput::Cbq(global) = &processor.global_writer {
+        global.lock().finish()?;
+    }
 
     // Flush writers - they should auto-flush on drop
     drop(processor.global_writer);
