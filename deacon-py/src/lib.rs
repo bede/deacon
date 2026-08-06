@@ -160,7 +160,7 @@ impl Index {
         let mins = Arc::clone(&self.minimizers);
         let (k, w) = (self.k, self.w);
         let summary = py
-            .detach(|| run_with_index(&mins, &IndexHeader::new(k, w), &cfg))
+            .detach(|| run_with_index(mins, &IndexHeader::new(k, w), &cfg))
             .map_err(to_pyerr)?;
         Ok(pythonize::pythonize(py, &summary)?.unbind())
     }

@@ -167,7 +167,7 @@ pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, u
 }
 
 #[cfg(feature = "cli")]
-static INDEX: OnceLock<(PathBuf, crate::MinimizerSet, IndexHeader)> = OnceLock::new();
+static INDEX: OnceLock<(PathBuf, Arc<crate::MinimizerSet>, IndexHeader)> = OnceLock::new();
 
 #[cfg(feature = "cli")]
 pub fn current_index_path() -> Option<PathBuf> {
@@ -177,18 +177,18 @@ pub fn current_index_path() -> Option<PathBuf> {
 #[cfg(feature = "cli")]
 pub fn load_minimizers_cached(
     path: &Path,
-) -> Result<(&'static crate::MinimizerSet, &'static IndexHeader)> {
+) -> Result<(Arc<crate::MinimizerSet>, &'static IndexHeader)> {
     let (p, minimizers, header) = INDEX.get_or_init(|| {
         // Auto-detect exact vs BFF format
         let (m, h) = load_index_from_path_auto(path).unwrap();
-        (path.to_owned(), m, h)
+        (path.to_owned(), Arc::new(m), h)
     });
     assert_eq!(
         p, path,
         "Currently, the server can only have one index loaded."
     );
 
-    Ok((minimizers, header))
+    Ok((Arc::clone(minimizers), header))
 }
 
 /// Load minimizers from a reader (generic over any Read impl)

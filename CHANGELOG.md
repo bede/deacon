@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `deacon filter --ordered` uses paraseq 0.5.0 order preservation for deterministic output. Also exposed as `ordered` in the Python bindings and JSON summary.
+- `deacon filter` accepts CBQ (BINSEQ) input, detected automatically, and writes CBQ when the output path ends in `.cbq`; paired reads are stored as native paired records in a single file.
 
 ### Changed
 

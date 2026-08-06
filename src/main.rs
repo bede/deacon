@@ -34,11 +34,11 @@ enum Command {
         /// Path to minimizer index file
         index: PathBuf,
 
-        /// Optional path to fastx file (or - for stdin)
+        /// Optional path to fastx or CBQ file (or - for stdin)
         #[arg(default_value = "-")]
         input: String,
 
-        /// Optional path to second paired fastx file
+        /// Optional path to second paired fastx file (not supported with CBQ input)
         input2: Option<String>,
 
         /// Minimum absolute number of minimizer hits for a match
@@ -69,11 +69,11 @@ enum Command {
         #[arg(short = 'f', long = "fasta", default_value_t = false)]
         output_fasta: bool,
 
-        /// Path to output fastx file (stdout if not specified; detects .gz and .zst)
+        /// Path to output fastx file (stdout if not specified; detects .gz and .zst; .cbq suffix writes CBQ)
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
 
-        /// Optional path to second paired output fastx file (detects .gz and .zst)
+        /// Optional path to second paired output fastx file (detects .gz and .zst; not supported with CBQ output)
         #[arg(short = 'O', long = "output2")]
         output2: Option<String>,
 
