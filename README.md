@@ -125,7 +125,6 @@ deacon filter -d --check-pairs panhuman-1.k31w15.idx r1.fq.gz r2.fq.gz -o filt.r
 
 # Interleaved paired reads (file or stdin)
 deacon filter -d --interleaved panhuman-1.k31w15.idx r12.fq.gz > filt12.fq
-zcat r12.fq.gz | deacon filter -d --interleaved panhuman-1.k31w15.idx > filt12.fq
 zcat r12.fq.gz | deacon filter -d panhuman-1.k31w15.idx - - > filt12.fq
 
 # Save summary JSON

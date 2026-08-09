@@ -1177,7 +1177,9 @@ pub fn filter(
 ) -> Result<()> {
     crate::validate_unit_interval("complexity threshold", threshold)?;
     let start_time = Instant::now();
-    reject_bff(index_path, "filter")?;
+    if is_bff_file(index_path) {
+        anyhow::bail!("Complexity filtering is not supported on BFF indexes; use an exact index");
+    }
 
     let (mut minimizers, header) = load_minimizers_from_path(index_path)?;
     let before = minimizers.len();

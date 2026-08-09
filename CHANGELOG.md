@@ -5,18 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.16.0] - 2026-08-09
 
 ### Added
 
 - Support for filtering using smaller static fuse filter indexes (`.pidx`). These can be generated from standard Deacon indexes using `deacon index freeze`. Fuse filters reduce index size from ~64 bits/k-mer to ~36 bits/k-mer using default 32 bit fingerprints, or to ~18 bits/k-mer using 16 bit fingerprints. Default 32 bit fingerprints deliver a negligible false positive rate of ~2<sup>-32</sup>.
 - Browser-based streaming FASTA/FASTQ filtering with `deacon-wasm`.
-- `deacon index filter` keeps or discards index minimizers based on a complexity threshold (`-c`), with a choice of `--algorithm` (`-a`).
-- `deacon filter --complexity-threshold` (`-c`) ignores minimizers below a kdust complexity threshold at filter time.
-- `deacon filter --interleaved` treats the input file/stream as interleaved pairs.
+- kdust, a per-k-mer sdust-based complexity measure (0.0-1.0) for discarding low complexity minimizers. Apply it by filtering an existing index with `deacon index filter -c`, or at filter time with `deacon filter -c`, leaving the index unchanged.
+- `deacon filter --interleaved` treats the input file/stream as interleaved pairs. The existing way to filter interleaved reads from stdin (`deacon filter INDEX - -`) is unaffected.
 - `deacon filter --check-pairs` validates matching Illumina CASAVA or legacy `/1`/`/2` paired record names.
 - Python bindings published to PyPI as `deacon` (maturin/PyO3).
 - `deacon index diff` now accepts a `w=1` second source (fastx with `-w 1`, or a `w=1` index) for exact k-mer subtraction, removing every k-mer it contains from the first index regardless of the first index's window size.
+- `deacon server status` shows whether a server is running, and its index.
 
 ### Changed
 
@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `deacon index build` reports progress once per Gbp rather than once per sequence, reducing overheads when indexing many small sequences.
 - Bumped `simd-minimizers` and `packed-seq` dependencies.
 - The `deacon-wasm` browser build now compiles with `simd128` enabled for faster minimizer computation.
+- Relative (`-r`) and complexity (`-c`) thresholds outside 0.0-1.0 are rejected.
+
+### Fixed
+
+- Fixed truncated `.zst` output caused by a missing end-of-frame epilogue.
 
 ## [0.15.0] - 2026-03-13
 
