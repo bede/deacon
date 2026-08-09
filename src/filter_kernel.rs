@@ -1,5 +1,5 @@
 use crate::minimizers::{Buffers, KmerHasher, decode_u64, decode_u128, fill_minimizers_unchecked};
-use crate::{MinimizerSet, MinimizerVec, RapidHashSet};
+use crate::{MinimizerSet, MinimizerVec, RapidHashSet, validate_unit_interval};
 
 #[derive(Clone, Copy, Debug)]
 pub struct FilterParams {
@@ -58,8 +58,9 @@ pub struct FilterKernel {
 }
 
 impl FilterKernel {
-    pub fn new(kmer_length: u8, window_size: u8, params: FilterParams) -> Self {
-        Self {
+    pub fn new(kmer_length: u8, window_size: u8, params: FilterParams) -> anyhow::Result<Self> {
+        validate_unit_interval("relative threshold", params.rel_threshold)?;
+        Ok(Self {
             params,
             kmer_length,
             window_size,
@@ -70,7 +71,7 @@ impl FilterKernel {
                 Buffers::new_u128()
             },
             seen_hits: SeenHits::new(kmer_length),
-        }
+        })
     }
 
     #[inline]
@@ -225,7 +226,7 @@ mod tests {
             rel_threshold: 0.01,
             prefix_length: 0,
         };
-        let mut kernel = FilterKernel::new(31, 15, params);
+        let mut kernel = FilterKernel::new(31, 15, params).unwrap();
         assert!(kernel.classify_read(&index, b"ACGT", false).keep);
 
         let mut kernel = FilterKernel::new(
@@ -235,7 +236,8 @@ mod tests {
                 deplete: false,
                 ..params
             },
-        );
+        )
+        .unwrap();
         assert!(!kernel.classify_read(&index, b"ACGT", false).keep);
     }
 }

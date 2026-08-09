@@ -1,4 +1,8 @@
 use assert_cmd::cargo;
+use deacon::{
+    ComplexityAlgorithm, FilterKernel, FilterParams, MinimizerSet, RapidHashSet,
+    validate_unit_interval,
+};
 use predicates::str;
 use std::fs;
 use std::process::{Child, Command as StdCommand};
@@ -19,6 +23,53 @@ fn test_version() {
 fn test_no_args() {
     let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.assert().failure().stderr(str::contains("Usage"));
+}
+
+#[test]
+fn unit_interval_validation() {
+    for value in [0.0, 1.0] {
+        assert!(validate_unit_interval("threshold", value).is_ok());
+    }
+    for value in [-0.1, 1.1, f64::NAN, f64::INFINITY] {
+        assert!(validate_unit_interval("threshold", value).is_err());
+    }
+
+    // Library entry points must apply the same validation
+    let mut set = MinimizerSet::U64(RapidHashSet::default());
+    assert!(
+        set.retain_complexity(31, ComplexityAlgorithm::Kdust, f32::NAN, false)
+            .is_err()
+    );
+    assert!(
+        FilterKernel::new(
+            31,
+            15,
+            FilterParams {
+                deplete: false,
+                abs_threshold: 1,
+                rel_threshold: f64::NAN,
+                prefix_length: 0,
+            },
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn cli_rejects_invalid_thresholds() {
+    // So clap does not read a negative value as a flag
+    for args in [
+        ["filter", "missing.idx", "--rel-threshold=1.1"],
+        ["filter", "missing.idx", "--rel-threshold=-0.1"],
+        ["filter", "missing.idx", "--complexity-threshold=NaN"],
+        ["index", "filter", "--complexity-threshold=inf"],
+    ] {
+        cargo::cargo_bin_cmd!("deacon")
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(str::contains("must be between 0.0 and 1.0 inclusive"));
+    }
 }
 
 #[test]

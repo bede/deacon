@@ -6,13 +6,13 @@ use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 #[cfg(feature = "cli")]
-use crate::minimizers::{Buffers, KmerHasher};
-#[cfg(feature = "cli")]
 use crate::IndexConfig;
 #[cfg(feature = "cli")]
-use paraseq::prelude::{ParallelProcessor, ParallelReader};
+use crate::minimizers::{Buffers, KmerHasher};
 #[cfg(feature = "cli")]
 use paraseq::Record;
+#[cfg(feature = "cli")]
+use paraseq::prelude::{ParallelProcessor, ParallelReader};
 #[cfg(feature = "cli")]
 use parking_lot::Mutex;
 #[cfg(feature = "cli")]
@@ -842,11 +842,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor<'_> {
 
         // Dispatch on width once, then probe lock-free, keeping only the hits
         match (self.first, &self.buffers.minimizers, &mut self.local_hits) {
-            (
-                crate::MinimizerSet::U64(first),
-                crate::MinimizerVec::U64(vec),
-                HitSet::U64(hits),
-            ) => {
+            (crate::MinimizerSet::U64(first), crate::MinimizerVec::U64(vec), HitSet::U64(hits)) => {
                 for &minimizer in vec.iter() {
                     if first.contains(&minimizer) {
                         hits.insert(minimizer);
@@ -1179,6 +1175,7 @@ pub fn filter(
     threshold: f32,
     invert: bool,
 ) -> Result<()> {
+    crate::validate_unit_interval("complexity threshold", threshold)?;
     let start_time = Instant::now();
     reject_bff(index_path, "filter")?;
 
@@ -1194,7 +1191,7 @@ pub fn filter(
         threshold
     );
 
-    minimizers.retain_complexity(header.kmer_length(), algorithm, threshold, invert);
+    minimizers.retain_complexity(header.kmer_length(), algorithm, threshold, invert)?;
     let after = minimizers.len();
 
     dump_minimizers(&minimizers, &header, output)?;

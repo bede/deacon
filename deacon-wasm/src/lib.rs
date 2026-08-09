@@ -41,12 +41,14 @@ impl WasmIndex {
                     "Complexity filtering is not supported on BFF indexes; use an exact index",
                 ));
             }
-            minimizers.retain_complexity(
-                header.kmer_length(),
-                ComplexityAlgorithm::Kdust,
-                threshold,
-                false,
-            );
+            minimizers
+                .retain_complexity(
+                    header.kmer_length(),
+                    ComplexityAlgorithm::Kdust,
+                    threshold,
+                    false,
+                )
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
         }
         Ok(WasmIndex {
             inner: Arc::new(WasmIndexInner { minimizers, header }),
@@ -90,7 +92,7 @@ impl FilterSession {
         compress_output: bool,
         rename: bool,
         output_fasta: bool,
-    ) -> FilterSession {
+    ) -> Result<FilterSession, JsValue> {
         let k = index.inner.header.kmer_length();
         let w = index.inner.header.window_size();
 
@@ -105,7 +107,7 @@ impl FilterSession {
             None
         };
 
-        FilterSession {
+        Ok(FilterSession {
             index: Arc::clone(&index.inner),
             kernel: FilterKernel::new(
                 k,
@@ -116,7 +118,8 @@ impl FilterSession {
                     rel_threshold,
                     prefix_length: 0,
                 },
-            ),
+            )
+            .map_err(|e| JsValue::from_str(&e.to_string()))?,
             rename,
             output_fasta,
             rename_counter: 0,
@@ -125,7 +128,7 @@ impl FilterSession {
             gz_decoder,
             gz_encoder,
             bytes_since_flush: 0,
-        }
+        })
     }
 
     pub fn push_chunk(&mut self, chunk: &[u8]) -> Result<Vec<u8>, JsValue> {
@@ -321,10 +324,10 @@ impl PairedFilterSession {
         compress_r2: bool,
         rename: bool,
         output_fasta: bool,
-    ) -> PairedFilterSession {
+    ) -> Result<PairedFilterSession, JsValue> {
         let k = index.inner.header.kmer_length();
         let w = index.inner.header.window_size();
-        PairedFilterSession {
+        Ok(PairedFilterSession {
             index: Arc::clone(&index.inner),
             kernel: FilterKernel::new(
                 k,
@@ -335,7 +338,8 @@ impl PairedFilterSession {
                     rel_threshold,
                     prefix_length: 0,
                 },
-            ),
+            )
+            .map_err(|e| JsValue::from_str(&e.to_string()))?,
             rename,
             output_fasta,
             rename_counter: 0,
@@ -352,7 +356,7 @@ impl PairedFilterSession {
             bytes_since_flush_r2: 0,
             r1_finished: false,
             r2_finished: false,
-        }
+        })
     }
 
     pub fn push_r1(&mut self, chunk: &[u8]) -> Result<JsValue, JsValue> {

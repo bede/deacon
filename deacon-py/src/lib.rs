@@ -39,12 +39,14 @@ impl Index {
                     "complexity filtering is not supported on BFF indexes; use an exact index",
                 ));
             }
-            minimizers.retain_complexity(
-                header.kmer_length(),
-                ComplexityAlgorithm::Kdust,
-                threshold,
-                false,
-            );
+            minimizers
+                .retain_complexity(
+                    header.kmer_length(),
+                    ComplexityAlgorithm::Kdust,
+                    threshold,
+                    false,
+                )
+                .map_err(to_pyerr)?;
         }
         Ok(Index {
             label: path.to_string(),

@@ -3,13 +3,14 @@ use clap::{Parser, Subcommand};
 #[cfg(feature = "fetch")]
 use deacon::index_fetch;
 use deacon::{
+    ComplexityAlgorithm, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig,
     index_diff, index_dump, index_filter, index_freeze, index_info, index_intersect, index_union,
-    ComplexityAlgorithm, FilterConfig, IndexConfig, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::str::FromStr;
 
 #[derive(Parser, Serialize, Deserialize)]
 #[command(author, version, about, long_about = None)]
@@ -45,7 +46,7 @@ enum Command {
         abs_threshold: u16,
 
         /// Minimum relative proportion (0.0-1.0) of minimizer hits for a match
-        #[arg(short = 'r', long = "rel-threshold", default_value_t = 0.01)]
+        #[arg(short = 'r', long = "rel-threshold", default_value_t = 0.01, value_parser = parse_unit_interval::<f64>)]
         rel_threshold: f64,
 
         /// Search only the first N nucleotides per sequence (0 = entire sequence)
@@ -53,7 +54,7 @@ enum Command {
         prefix_length: usize,
 
         /// Ignore minimizers below this kdust complexity threshold (0.0-1.0)
-        #[arg(short = 'c', long = "complexity-threshold")]
+        #[arg(short = 'c', long = "complexity-threshold", value_parser = parse_unit_interval::<f32>)]
         complexity_threshold: Option<f32>,
 
         /// Discard matching sequences (invert filtering behaviour)
@@ -231,7 +232,7 @@ enum IndexCommand {
         algorithm: ComplexityAlgorithm,
 
         /// Discard minimizers with complexity below this threshold (0.0-1.0)
-        #[arg(short = 'c', long = "complexity-threshold")]
+        #[arg(short = 'c', long = "complexity-threshold", value_parser = parse_unit_interval::<f32>)]
         threshold: f32,
 
         /// Invert: keep only minimizers below the threshold
@@ -296,6 +297,16 @@ fn parse_fingerprint_bits(s: &str) -> Result<u8, String> {
         "32" => Ok(32),
         _ => Err(format!("expected 16 or 32, got `{s}`")),
     }
+}
+
+fn parse_unit_interval<T>(s: &str) -> Result<T, String>
+where
+    T: Copy + FromStr + Into<f64> + std::fmt::Display,
+    T::Err: std::fmt::Display,
+{
+    let value = s.parse::<T>().map_err(|e| e.to_string())?;
+    deacon::validate_unit_interval("threshold", value).map_err(|e| e.to_string())?;
+    Ok(value)
 }
 
 fn print_citation() {

@@ -1,7 +1,7 @@
 use crate::index::{load_index_from_path_auto, load_minimizers_cached};
 use crate::{
     ComplexityAlgorithm, FilterConfig, FilterDecision, FilterKernel, FilterParams, IndexHeader,
-    MinimizerSet,
+    MinimizerSet, validate_unit_interval,
 };
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
@@ -427,8 +427,8 @@ impl<'a> FilterProcessor<'a> {
         writer2: Option<BoxedWriter>,
         spinner: Option<Arc<Mutex<ProgressBar>>>,
         filtering_start_time: Instant,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        Ok(Self {
             minimizers,
             rename: config.rename,
             rename_random: config.rename_random,
@@ -444,7 +444,7 @@ impl<'a> FilterProcessor<'a> {
                     rel_threshold: config.rel_threshold,
                     prefix_length: config.prefix_length,
                 },
-            ),
+            )?,
             local_buffer: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
             local_buffer2: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
             rename_counter: Arc::new(AtomicU64::new(0)),
@@ -454,7 +454,7 @@ impl<'a> FilterProcessor<'a> {
             global_stats: Arc::new(Mutex::new(ProcessingStats::default())),
             spinner,
             filtering_start_time,
-        }
+        })
     }
 
     fn should_keep_sequence(&mut self, seq: &[u8]) -> FilterDecision {
@@ -711,6 +711,10 @@ impl<'a, Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor<'a> {
 }
 
 pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
+    validate_unit_interval("relative threshold", config.rel_threshold)?;
+    if let Some(threshold) = config.complexity_threshold {
+        validate_unit_interval("complexity threshold", threshold)?;
+    }
     validate_check_pairs_mode(
         config.check_pairs,
         config.interleaved || config.input2_path.is_some(),
@@ -764,7 +768,7 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
             ComplexityAlgorithm::Kdust,
             threshold,
             false,
-        );
+        )?;
         if !quiet {
             eprintln!(
                 "Loaded index (k={}, w={}) in {:.2?}; kept {} of {} minimizers (kdust >= {})",
@@ -801,6 +805,7 @@ pub fn run_with_index(
     header: &IndexHeader,
     config: &FilterRunConfig,
 ) -> Result<FilterSummary> {
+    validate_unit_interval("relative threshold", config.rel_threshold)?;
     validate_check_pairs_mode(
         config.check_pairs,
         config.interleaved || config.input2_path.is_some(),
@@ -962,7 +967,7 @@ pub fn run_with_index(
         writer2,
         spinner.clone(),
         filtering_start_time,
-    );
+    )?;
 
     // Check for empty files via metadata (fast path for uncompressed files <5 bytes)
     let input1_empty = is_empty_file(&config.input_path)?;

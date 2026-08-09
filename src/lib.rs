@@ -16,24 +16,35 @@ mod minimizers;
 
 // Public API
 #[cfg(feature = "cli")]
-pub use filter::{run as run_filter, run_with_index, FilterRunConfig, FilterSummary};
+pub use filter::{FilterRunConfig, FilterSummary, run as run_filter, run_with_index};
 pub use filter_kernel::{FilterDecision, FilterKernel, FilterParams};
 #[cfg(feature = "fetch")]
 pub use index::fetch as index_fetch;
+pub use index::{
+    IndexHeader, dump_minimizers, load_index_auto, load_index_from_path_auto,
+    load_minimizers_from_path,
+};
 #[cfg(feature = "cli")]
 pub use index::{
     build as index_build, current_index_path, diff as index_diff, dump as index_dump,
     filter as index_filter, freeze as index_freeze, info as index_info,
     intersect as index_intersect, union as index_union,
 };
-pub use index::{
-    dump_minimizers, load_index_auto, load_index_from_path_auto, load_minimizers_from_path,
-    IndexHeader,
-};
 pub use minimizers::{
-    compute_minimizers, decode_u128, decode_u64, fill_minimizers, Buffers, KmerHasher,
-    DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE,
+    Buffers, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, KmerHasher, compute_minimizers, decode_u64,
+    decode_u128, fill_minimizers,
 };
+
+/// Validate that a threshold is within 0.0..=1.0
+pub fn validate_unit_interval<T: Into<f64> + Copy + std::fmt::Display>(
+    name: &str,
+    value: T,
+) -> anyhow::Result<()> {
+    if !(0.0..=1.0).contains(&value.into()) {
+        anyhow::bail!("{name} must be between 0.0 and 1.0 inclusive; got {value}");
+    }
+    Ok(())
+}
 
 #[cfg(feature = "cli")]
 use anyhow::Result;
@@ -215,7 +226,8 @@ impl MinimizerSet {
         algorithm: ComplexityAlgorithm,
         threshold: f32,
         invert: bool,
-    ) {
+    ) -> anyhow::Result<()> {
+        validate_unit_interval("complexity threshold", threshold)?;
         use crate::minimizers::{calculate_kdust, calculate_scaled_entropy};
         let keep = |c: f32| {
             if invert {
@@ -243,10 +255,11 @@ impl MinimizerSet {
                 };
                 keep(c)
             }),
-            MinimizerSet::Fuse(_) => {
-                panic!("Complexity filtering is not supported on BFF indexes; use an exact index")
-            }
+            MinimizerSet::Fuse(_) => anyhow::bail!(
+                "Complexity filtering is not supported on BFF indexes; use an exact index"
+            ),
         }
+        Ok(())
     }
 }
 
