@@ -1,6 +1,6 @@
 [package]
 name = "deacon-py"
-version = "0.16.0-rc4"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 publish = false
