@@ -98,7 +98,8 @@ inherits = "release"
 [workspace]
 members = [".", "deacon-wasm", "deacon-py"]
 # deacon-py needs pyo3/Python, build it via maturin or `-p deacon-py`
-default-members = [".", "deacon-wasm"]
+# deacon-wasm only matters on wasm32, build via scripts/build-wasm.sh
+default-members = ["."]
 
 # shared version for the core crate, the Python bindings, and the WASM bundle
 [workspace.package]

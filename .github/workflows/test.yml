@@ -25,3 +25,6 @@ jobs:
         run: mv .cargo/config-portable.toml .cargo/config.toml
       - name: Run tests
         run: cargo test
+      # Not a default workspace member, so cargo test skips it
+      - name: Run deacon-wasm unit tests
+        run: cargo test -p deacon-wasm
