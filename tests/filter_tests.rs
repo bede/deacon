@@ -2156,7 +2156,8 @@ fn test_filter_with_named_pipe() {
 
 #[test]
 fn test_rename_counter_continuity_across_batches() {
-    // Verify that rename counter does not reset between batches (749d1ad fix).
+    // Each batch claims its block of numbers at flush time, so numbering must run
+    // unbroken across batch boundaries (749d1ad fix).
     // Create many records to force multiple internal batches.
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("ref.fasta");
@@ -2166,11 +2167,11 @@ fn test_rename_counter_continuity_across_batches() {
 
     create_test_fasta(&fasta_path);
 
-    // Generate 500 records to ensure multiple batches are processed
+    // Generate 3000 records to span multiple internal batches (1024 records each)
     let seq = "ACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA";
     let qual = "~".repeat(seq.len());
     let mut fastq_content = String::new();
-    for i in 0..500 {
+    for i in 0..3000 {
         fastq_content.push_str(&format!("@seq{}\n{}\n+\n{}\n", i, seq, qual));
     }
     fs::write(&fastq_path, fastq_content).unwrap();
@@ -2205,24 +2206,230 @@ fn test_rename_counter_continuity_across_batches() {
 
     assert!(!seen_ids.is_empty(), "Expected renamed sequences in output");
 
-    // Check all IDs are unique (no counter reset between batches)
+    // All IDs unique, with no number reused or skipped between batches
     let mut sorted = seen_ids.clone();
     sorted.sort();
     sorted.dedup();
     assert_eq!(
         seen_ids.len(),
         sorted.len(),
-        "Duplicate rename IDs found — counter likely reset between batches"
+        "Duplicate rename IDs found — batches likely claimed overlapping blocks"
     );
+    assert_eq!(
+        sorted,
+        (1..=3000).collect::<Vec<u64>>(),
+        "Expected every record retained and numbered 1..=3000 with no gaps"
+    );
+}
 
-    // Check IDs are sequential starting from 1
-    for (i, &id) in sorted.iter().enumerate() {
+#[test]
+fn test_rename_numbers_only_retained_records() {
+    // Depleted records consume no numbers, so retained records stay contiguous.
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let reads_path = temp_dir.path().join("reads.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output_path = temp_dir.path().join("filtered.fasta");
+
+    create_test_fasta(&fasta_path);
+    build_index(&fasta_path, &bin_path);
+
+    // Alternate records that match the reference (depleted) with ones that do not
+    let matching = fs::read_to_string(&fasta_path)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.starts_with('>'))
+        .collect::<String>();
+    let unrelated = "T".repeat(matching.len());
+    let mut reads = String::new();
+    for i in 0..10 {
+        let seq = if i % 2 == 0 { &matching } else { &unrelated };
+        reads.push_str(&format!(">seq{i}\n{seq}\n"));
+    }
+    fs::write(&reads_path, reads).unwrap();
+
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter")
+        .arg("--deplete")
+        .arg("--rename")
+        .arg("-a")
+        .arg("1")
+        .arg("-r")
+        .arg("0.0")
+        .arg("-t")
+        .arg("2")
+        .arg(&bin_path)
+        .arg(&reads_path)
+        .arg("--output")
+        .arg(&output_path)
+        .assert()
+        .success();
+
+    let ids: Vec<u64> = fs::read_to_string(&output_path)
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.strip_prefix('>')?.parse::<u64>().ok())
+        .collect();
+
+    // Records 0,2,4,6,8 match and are depleted; the surviving five number 1..=5
+    assert_eq!(ids, vec![1, 2, 3, 4, 5]);
+}
+
+/// Write `n` retained FASTQ records (headers seq0..seq{n-1}) spanning multiple
+/// internal batches (1024 records each), so `--ordered` has reordering to prevent.
+/// Every 7th record is 40x longer, skewing per-batch work so that without
+/// `--ordered`, batches reliably complete (and write) out of input order.
+fn write_multibatch_fastq(path: &Path, n: usize) {
+    let base = "ACGTGCATAGCTGCATGCATGCATGCATGCATGCATGCAATGCAACGTGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA";
+    let mut content = String::new();
+    for i in 0..n {
+        let seq = base.repeat(if i % 7 == 0 { 40 } else { 1 });
+        let qual = "~".repeat(seq.len());
+        content.push_str(&format!("@seq{i}\n{seq}\n+\n{qual}\n"));
+    }
+    fs::write(path, content).unwrap();
+}
+
+#[test]
+fn test_ordered_preserves_input_order() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output_path = temp_dir.path().join("filtered.fastq");
+
+    create_test_fasta(&fasta_path);
+    build_index(&fasta_path, &bin_path);
+    write_multibatch_fastq(&fastq_path, 3000);
+
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter")
+        .arg("--ordered")
+        .arg("-a")
+        .arg("1")
+        .arg("-r")
+        .arg("0.0")
+        .arg("-t")
+        .arg("4")
+        .arg(&bin_path)
+        .arg(&fastq_path)
+        .arg("--output")
+        .arg(&output_path)
+        .assert()
+        .success();
+
+    let indices: Vec<usize> = fs::read_to_string(&output_path)
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.strip_prefix("@seq")?.parse::<usize>().ok())
+        .collect();
+
+    assert_eq!(
+        indices,
+        (0..3000).collect::<Vec<usize>>(),
+        "Expected --ordered output to preserve input record order"
+    );
+}
+
+#[test]
+fn test_ordered_rename_is_deterministic() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+
+    create_test_fasta(&fasta_path);
+    build_index(&fasta_path, &bin_path);
+    write_multibatch_fastq(&fastq_path, 3000);
+
+    let mut outputs = Vec::new();
+    for run in 0..2 {
+        let output_path = temp_dir.path().join(format!("filtered{run}.fastq"));
+        let mut cmd = cargo::cargo_bin_cmd!("deacon");
+        cmd.arg("filter")
+            .arg("--ordered")
+            .arg("--rename")
+            .arg("-a")
+            .arg("1")
+            .arg("-r")
+            .arg("0.0")
+            .arg("-t")
+            .arg("4")
+            .arg(&bin_path)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output_path)
+            .assert()
+            .success();
+        outputs.push(fs::read_to_string(&output_path).unwrap());
+    }
+
+    // Numbering follows file order, not just the set of ids
+    let ids: Vec<u64> = outputs[0]
+        .lines()
+        .filter_map(|line| line.strip_prefix('@')?.parse::<u64>().ok())
+        .collect();
+    assert_eq!(
+        ids,
+        (1..=3000).collect::<Vec<u64>>(),
+        "Expected --ordered --rename ids to read 1..=3000 in file order"
+    );
+    assert_eq!(
+        outputs[0], outputs[1],
+        "Expected --ordered --rename output to be byte-identical across runs"
+    );
+}
+
+#[test]
+fn test_ordered_rename_paired_outputs() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq_path1 = temp_dir.path().join("reads_1.fastq");
+    let fastq_path2 = temp_dir.path().join("reads_2.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let output_path1 = temp_dir.path().join("filtered_1.fastq");
+    let output_path2 = temp_dir.path().join("filtered_2.fastq");
+
+    create_test_fasta(&fasta_path);
+    build_index(&fasta_path, &bin_path);
+    write_multibatch_fastq(&fastq_path1, 3000);
+    write_multibatch_fastq(&fastq_path2, 3000);
+
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter")
+        .arg("--ordered")
+        .arg("--rename")
+        .arg("-a")
+        .arg("1")
+        .arg("-r")
+        .arg("0.0")
+        .arg("-t")
+        .arg("4")
+        .arg(&bin_path)
+        .arg(&fastq_path1)
+        .arg(&fastq_path2)
+        .arg("--output")
+        .arg(&output_path1)
+        .arg("--output2")
+        .arg(&output_path2)
+        .assert()
+        .success();
+
+    // Renamed paired headers are "@<id> /1" and "@<id> /2"; ids running 1..=3000 in
+    // file order in both outputs shows order preservation and matching mate numbering
+    for (path, suffix) in [(&output_path1, "/1"), (&output_path2, "/2")] {
+        let ids: Vec<u64> = fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .filter_map(|line| {
+                let header = line.strip_prefix('@')?.strip_suffix(suffix)?;
+                header.trim_end().parse::<u64>().ok()
+            })
+            .collect();
         assert_eq!(
-            id,
-            (i + 1) as u64,
-            "Expected sequential ID {} but got {}",
-            i + 1,
-            id
+            ids,
+            (1..=3000).collect::<Vec<u64>>(),
+            "Expected {suffix} output ids to read 1..=3000 in file order"
         );
     }
 }

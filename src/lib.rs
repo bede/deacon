@@ -334,14 +334,14 @@ pub struct FilterConfig<'a> {
     /// Deplete mode (remove sequences WITH matches, original deacon behavior)
     pub deplete: bool,
 
-    /// Replace sequence headers with sequential numbers (1, 2, 3...)
+    /// Replace sequence headers with incrementing numbers (1, 2, 3...)
     pub rename: bool,
-
-    /// Replace headers with sequential numbers followed by random u64 (1-12345, 2-67890, ...)
-    pub rename_random: bool,
 
     /// Force FASTA output (discards quality scores)
     pub output_fasta: bool,
+
+    /// Preserve input record ordering (deterministic, slightly slower)
+    pub ordered: bool,
 
     /// Number of execution threads (0 = auto)
     pub threads: u16,

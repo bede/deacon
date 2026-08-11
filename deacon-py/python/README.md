@@ -60,21 +60,22 @@ Filter a FASTA/FASTQ file or file pair against the index and return a `dict` of 
 def filter(
     fastq,                   # input path (FASTA/FASTQ, optionally .gz/.zst/.xz)
     fastq2=None,             # second mate for paired reads
+    *,                       # remaining options are keyword-only
     interleaved=False,       # treat fastq as interleaved paired reads (cannot combine with fastq2)
     deplete=False,           # False = search (keep matches); True = deplete (remove matches)
     rename=False,            # replace read names with sequential integers
-    rename_random=False,     # replace read names with random strings
     output=None,             # output path; None writes to stdout
     output2=None,            # second output path for paired reads
     abs_threshold=2,         # min absolute minimizer hits to call a match
     rel_threshold=0.01,      # min proportion of minimizers hitting to call a match
     prefix_length=0,         # only use the first N bp of each read (0 = whole read)
     output_fasta=False,      # emit FASTA instead of FASTQ
+    ordered=False,           # preserve input record ordering (deterministic, slightly slower)
     threads=8,               # worker threads for filtering
     compression_level=2,     # output compression level
     compression_threads=0,   # threads for output compression (0 = auto)
-    debug=False,             # verbose per-read debug output
     quiet=True,              # suppress progress/log output on stderr
+    debug=False,             # verbose per-read debug output
 ) -> dict
 ```
 
@@ -82,7 +83,7 @@ def filter(
 
 **Output.** When `output` is `None` the filtered records are written to stdout. To count without keeping the filtered sequences, pass `output="/dev/null"`. Statistics are returned regardless.
 
-**Return value.** A `dict` including the run configuration (`version`, `index`, `input`/`input2`, `output`/`output2`, `k`, `w`, `abs_threshold`, `rel_threshold`, `prefix_length`, `deplete`, `rename`, `rename_random`) and the results:
+**Return value.** A `dict` including the run configuration (`version`, `index`, `input`/`input2`, `output`/`output2`, `k`, `w`, `abs_threshold`, `rel_threshold`, `prefix_length`, `deplete`, `rename`, `ordered`) and the results:
 
 | Key | Meaning |
 | --- | --- |

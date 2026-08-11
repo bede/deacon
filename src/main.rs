@@ -61,13 +61,9 @@ enum Command {
         #[arg(short = 'd', long = "deplete", default_value_t = false)]
         deplete: bool,
 
-        /// Replace sequence headers with incrementing numbers
+        /// Replace sequence headers with incrementing numbers (reproducible with --ordered)
         #[arg(short = 'R', long = "rename", default_value_t = false)]
         rename: bool,
-
-        /// Replace sequence headers with incrementing numbers and random suffixes
-        #[arg(long = "rename-random", default_value_t = false)]
-        rename_random: bool,
 
         /// Output FASTA format regardless of input format
         #[arg(short = 'f', long = "fasta", default_value_t = false)]
@@ -97,10 +93,6 @@ enum Command {
         #[arg(long = "compression-level", default_value_t = 2)]
         compression_level: u8,
 
-        /// Output sequences with minimizer hits to stderr
-        #[arg(long = "debug", default_value_t = false)]
-        debug: bool,
-
         /// Treat INPUT as interleaved paired reads from a file or stdin
         #[arg(
             long = "interleaved",
@@ -109,6 +101,10 @@ enum Command {
         )]
         interleaved: bool,
 
+        /// Preserve input record ordering (deterministic, slightly slower)
+        #[arg(long = "ordered", default_value_t = false)]
+        ordered: bool,
+
         /// Validate paired record names (Illumina CASAVA or /1 /2 suffixes)
         #[arg(long = "check-pairs", default_value_t = false)]
         check_pairs: bool,
@@ -116,6 +112,10 @@ enum Command {
         /// Suppress progress reporting
         #[arg(short = 'q', long = "quiet", default_value_t = false)]
         quiet: bool,
+
+        /// Output sequences with minimizer hits to stderr
+        #[arg(long = "debug", default_value_t = false)]
+        debug: bool,
     },
     /// Start/stop a server process for reduced latency filtering
     Server {
@@ -521,7 +521,6 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
             input,
             input2,
             interleaved,
-            check_pairs,
             output,
             output2,
             abs_threshold,
@@ -531,13 +530,14 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
             summary,
             deplete,
             rename,
-            rename_random,
             output_fasta,
             threads,
             compression_level,
             compression_threads,
-            debug,
+            ordered,
+            check_pairs,
             quiet,
+            debug,
         } => {
             // Validate output2 usage
             if output2.is_some() && input2.is_none() && !interleaved {
@@ -561,8 +561,8 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
                 summary_path: summary.as_ref(),
                 deplete: *deplete,
                 rename: *rename,
-                rename_random: *rename_random,
                 output_fasta: *output_fasta,
+                ordered: *ordered,
                 threads: *threads,
                 compression_level: *compression_level,
                 compression_threads: *compression_threads,

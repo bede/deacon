@@ -202,9 +202,7 @@ Options:
   -d, --deplete
           Discard matching sequences (invert filtering behaviour)
   -R, --rename
-          Replace sequence headers with incrementing numbers
-      --rename-random
-          Replace sequence headers with incrementing numbers and random suffixes
+          Replace sequence headers with incrementing numbers (reproducible with --ordered)
   -f, --fasta
           Output FASTA format regardless of input format
   -o, --output <OUTPUT>
@@ -219,14 +217,16 @@ Options:
           Number of threads used for output compression (0 = auto) [default: 0]
       --compression-level <COMPRESSION_LEVEL>
           Output compression level (1-9 for gz & xz; 1-22 for zstd) [default: 2]
-      --debug
-          Output sequences with minimizer hits to stderr
       --interleaved
           Treat INPUT as interleaved paired reads from a file or stdin
+      --ordered
+          Preserve input record ordering (deterministic, slightly slower)
       --check-pairs
           Validate paired record names (Illumina CASAVA or /1 /2 suffixes)
   -q, --quiet
           Suppress progress reporting
+      --debug
+          Output sequences with minimizer hits to stderr
   -h, --help
           Print help
 ```

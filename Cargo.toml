@@ -38,10 +38,9 @@ clap = { version = "4.6", features = ["derive"], optional = true }
 rayon = { version = "1", optional = true }
 parking_lot = { version = "0.12", optional = true }
 indicatif = { version = "0.18", optional = true }
-rand = { version = "0.9", optional = true }
 serde_json = { version = "1.0", optional = true }
 niffler = { version = "3.0.1", default-features = false, optional = true }
-paraseq = { version = "0.4.3", default-features = false, features = ["anyhow", "niffler"], optional = true }
+paraseq = { version = "0.5.0", default-features = false, features = ["anyhow", "niffler"], optional = true }
 ensure_simd = { version = "0.1.0", optional = true }
 
 # Compression deps (optional)
@@ -63,7 +62,7 @@ nix = { version = "0.31", features = ["fs"] }
 
 [features]
 scalar = ["simd-minimizers/scalar", "packed-seq/scalar"]
-cli = ["rayon", "parking_lot", "indicatif", "paraseq", "ensure_simd", "clap", "rand", "niffler", "serde_json"]
+cli = ["rayon", "parking_lot", "indicatif", "paraseq", "ensure_simd", "clap", "niffler", "serde_json"]
 # Disable for faster builds.
 compression = ["zstd", "liblzma", "flate2", "gzp", "paraseq/default"]
 # Use to still handle .gz files when "compression" is not enabled.
@@ -103,7 +102,7 @@ default-members = ["."]
 
 # shared version for the core crate, the Python bindings, and the WASM bundle
 [workspace.package]
-version = "0.16.0"
+version = "0.17.0"
 
 # unwind (not workspace's abort) so PyO3 can turn panics into Python exceptions
 [profile.pyext]

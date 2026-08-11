@@ -9,7 +9,6 @@ use paraseq::Record;
 use paraseq::fastx::Reader;
 use paraseq::parallel::{PairedParallelProcessor, ParallelProcessor, ParallelReader};
 use parking_lot::Mutex;
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
@@ -47,12 +46,12 @@ pub struct FilterRunConfig {
     pub summary_path: Option<PathBuf>,
     /// Deplete mode (remove sequences WITH matches)
     pub deplete: bool,
-    /// Replace sequence headers with sequential numbers
+    /// Replace sequence headers with incrementing numbers
     pub rename: bool,
-    /// Replace headers with sequential numbers followed by random u64
-    pub rename_random: bool,
     /// Force FASTA output (discards quality scores)
     pub output_fasta: bool,
+    /// Preserve input record ordering (deterministic, slightly slower)
+    pub ordered: bool,
     /// Number of execution threads (0 = auto)
     pub threads: u16,
     /// Compression level for output files (1-22 for zst, 1-9 for gz)
@@ -74,10 +73,10 @@ struct FilterProcessorConfig {
     prefix_length: usize,
     deplete: bool,
     rename: bool,
-    rename_random: bool,
     output_fasta: bool,
     debug: bool,
     check_pairs: bool,
+    ordered: bool,
 }
 
 /// Split a FASTA/Q header into its first whitespace-delimited token and description
@@ -197,37 +196,39 @@ fn create_paraseq_reader(path: Option<&str>) -> Result<Reader<Box<dyn std::io::R
     }
 }
 
-/// Format a single record into a buffer (FASTA/FASTQ format)
-/// `seq` is the newline-stripped sequence corresponding to the record from `record.seq()`.
+/// A record buffered without its header, which is written later by [`write_renamed`]
+/// once its final number is known (numbering depends on earlier batches finishing).
+#[derive(Clone)]
+struct PendingRename {
+    /// Start of the headerless body in the local buffer
+    offset: usize,
+    /// Number relative to the first of its batch
+    ordinal: u64,
+    /// `>` for FASTA, `@` for FASTQ
+    marker: u8,
+    /// Mate suffix after the number, e.g. `/1`; empty when unpaired
+    suffix: &'static [u8],
+}
+
+/// Format a record into a buffer (FASTA/FASTQ), returning its line prefix
+/// `seq` is the newline-stripped sequence from `record.seq()`.
+/// When renaming, the header is left to [`write_renamed`].
 fn format_record_to_buffer<R: Record>(
     record: &R,
     seq: &[u8],
-    counter: u64,
     rename: bool,
-    rename_random: bool,
-    read_suffix: &[u8],
     output_fasta: bool,
     buffer: &mut Vec<u8>,
-) -> Result<()> {
+) -> Result<u8> {
     let is_fasta = output_fasta || record.qual().is_none();
+    let marker = if is_fasta { b'>' } else { b'@' };
 
-    // Header
-    buffer.write_all(if is_fasta { b">" } else { b"@" })?;
-    if rename || rename_random {
-        buffer.extend_from_slice(counter.to_string().as_bytes());
-        if rename_random {
-            buffer.write_all(b"-")?;
-            let random_suffix = rand::rng().random::<u64>();
-            buffer.extend_from_slice(random_suffix.to_string().as_bytes());
-        }
-        if !read_suffix.is_empty() {
-            buffer.write_all(b" ")?;
-            buffer.write_all(read_suffix)?;
-        }
-    } else {
+    // Header (omitted when renaming)
+    if !rename {
+        buffer.push(marker);
         buffer.extend_from_slice(record.id());
+        buffer.write_all(b"\n")?;
     }
-    buffer.write_all(b"\n")?;
 
     // Sequence
     buffer.extend_from_slice(seq);
@@ -241,6 +242,29 @@ fn format_record_to_buffer<R: Record>(
             buffer.extend_from_slice(qual);
         }
         buffer.write_all(b"\n")?;
+    }
+    Ok(marker)
+}
+
+/// Write buffered records to `writer`, numbering them from `base`
+///
+/// Each body runs from its own offset to the next one's, or to the end of `buffer`.
+fn write_renamed(
+    writer: &mut BoxedWriter,
+    buffer: &[u8],
+    pending: &[PendingRename],
+    base: u64,
+) -> Result<()> {
+    for (i, record) in pending.iter().enumerate() {
+        let end = pending.get(i + 1).map_or(buffer.len(), |next| next.offset);
+        writer.write_all(&[record.marker])?;
+        writer.write_all((base + record.ordinal).to_string().as_bytes())?;
+        if !record.suffix.is_empty() {
+            writer.write_all(b" ")?;
+            writer.write_all(record.suffix)?;
+        }
+        writer.write_all(b"\n")?;
+        writer.write_all(&buffer[record.offset..end])?;
     }
     Ok(())
 }
@@ -361,7 +385,7 @@ pub struct FilterSummary {
     prefix_length: usize,
     deplete: bool,
     rename: bool,
-    rename_random: bool,
+    ordered: bool,
     check_pairs: bool,
     seqs_in: u64,
     seqs_out: u64,
@@ -385,10 +409,11 @@ struct FilterProcessor<'a> {
     // Minimizer matching parameters
     minimizers: &'a MinimizerSet,
     rename: bool,
-    rename_random: bool,
     output_fasta: bool,
     debug: bool,
     check_pairs: bool,
+    /// Write batches in input order, not completion order
+    ordered: bool,
     kernel: FilterKernel,
 
     // Local buffers
@@ -396,7 +421,11 @@ struct FilterProcessor<'a> {
     local_buffer2: Vec<u8>, // Second buffer for paired output
     local_stats: ProcessingStats,
 
-    // Shared atomic counter for seq renaming
+    // Headers awaiting a number, and how many records/pairs this batch kept
+    pending_renames: Vec<PendingRename>,
+    pending_renames2: Vec<PendingRename>, // Parallel to local_buffer2
+    batch_kept: u64,
+    /// Shared across workers, handing each batch the first number of its block
     rename_counter: Arc<AtomicU64>,
 
     // Global state
@@ -431,10 +460,10 @@ impl<'a> FilterProcessor<'a> {
         Ok(Self {
             minimizers,
             rename: config.rename,
-            rename_random: config.rename_random,
             output_fasta: config.output_fasta,
             debug: config.debug,
             check_pairs: config.check_pairs,
+            ordered: config.ordered,
             kernel: FilterKernel::new(
                 kmer_length,
                 window_size,
@@ -447,8 +476,11 @@ impl<'a> FilterProcessor<'a> {
             )?,
             local_buffer: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
             local_buffer2: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
-            rename_counter: Arc::new(AtomicU64::new(0)),
+            pending_renames: Vec::new(),
+            pending_renames2: Vec::new(),
+            batch_kept: 0,
             local_stats: ProcessingStats::default(),
+            rename_counter: Arc::new(AtomicU64::new(0)),
             global_writer: Arc::new(Mutex::new(writer)),
             global_writer2: writer2.map(|w| Arc::new(Mutex::new(w))),
             global_stats: Arc::new(Mutex::new(ProcessingStats::default())),
@@ -470,38 +502,60 @@ impl<'a> FilterProcessor<'a> {
         &mut self,
         record: &Rf,
         seq: &[u8],
-        counter: u64,
-        read_suffix: &[u8],
+        read_suffix: &'static [u8],
     ) -> Result<()> {
-        format_record_to_buffer(
+        let offset = self.local_buffer.len();
+        let marker = format_record_to_buffer(
             record,
             seq,
-            counter,
             self.rename,
-            self.rename_random,
-            read_suffix,
             self.output_fasta,
             &mut self.local_buffer,
-        )
+        )?;
+        if self.rename {
+            self.pending_renames.push(PendingRename {
+                offset,
+                ordinal: self.batch_kept,
+                marker,
+                suffix: read_suffix,
+            });
+        }
+        Ok(())
     }
 
     fn write_record_to_buffer2<Rf: Record>(
         &mut self,
         record: &Rf,
         seq: &[u8],
-        counter: u64,
-        read_suffix: &[u8],
+        read_suffix: &'static [u8],
     ) -> Result<()> {
-        format_record_to_buffer(
+        let offset = self.local_buffer2.len();
+        let marker = format_record_to_buffer(
             record,
             seq,
-            counter,
             self.rename,
-            self.rename_random,
-            read_suffix,
             self.output_fasta,
             &mut self.local_buffer2,
-        )
+        )?;
+        if self.rename {
+            self.pending_renames2.push(PendingRename {
+                offset,
+                ordinal: self.batch_kept,
+                marker,
+                suffix: read_suffix,
+            });
+        }
+        Ok(())
+    }
+
+    /// Claim this batch's block of numbers, returning the first
+    ///
+    /// Called under the writer lock: numbers are monotone in output order,
+    /// but deterministic only with `--ordered` or `-t 1`.
+    fn reserve_rename_ids(&self) -> u64 {
+        self.rename_counter
+            .fetch_add(self.batch_kept, Ordering::Relaxed)
+            + 1
     }
 
     fn update_spinner(&self) {
@@ -541,6 +595,10 @@ impl<'a> FilterProcessor<'a> {
 }
 
 impl<'a, Rf: Record> ParallelProcessor<Rf> for FilterProcessor<'a> {
+    fn requires_ordering(&self) -> bool {
+        self.ordered
+    }
+
     fn process_record(&mut self, record: Rf) -> paraseq::parallel::Result<()> {
         let seq = record.seq();
         self.local_stats.total_seqs += 1;
@@ -562,12 +620,10 @@ impl<'a, Rf: Record> ParallelProcessor<Rf> for FilterProcessor<'a> {
 
         if decision.keep {
             self.local_stats.output_bp += seq.len() as u64;
-            let counter = if self.rename || self.rename_random {
-                self.rename_counter.fetch_add(1, Ordering::Relaxed) + 1
-            } else {
-                0
-            };
-            self.write_record(&record, &seq, counter, b"")?;
+            self.write_record(&record, &seq, b"")?;
+            if self.rename {
+                self.batch_kept += 1;
+            }
         } else {
             self.local_stats.filtered_seqs += 1;
             self.local_stats.filtered_bp += seq.len() as u64;
@@ -580,12 +636,24 @@ impl<'a, Rf: Record> ParallelProcessor<Rf> for FilterProcessor<'a> {
         // Write buffer to output
         if !self.local_buffer.is_empty() {
             let mut global_writer = self.global_writer.lock();
-            global_writer.write_all(&self.local_buffer)?;
+            if self.rename {
+                let base = self.reserve_rename_ids();
+                write_renamed(
+                    &mut global_writer,
+                    &self.local_buffer,
+                    &self.pending_renames,
+                    base,
+                )?;
+            } else {
+                global_writer.write_all(&self.local_buffer)?;
+            }
             global_writer.flush()?;
         }
 
         // Clear buffer after releasing the lock
         self.local_buffer.clear();
+        self.pending_renames.clear();
+        self.batch_kept = 0;
 
         // Update global stats
         {
@@ -608,6 +676,10 @@ impl<'a, Rf: Record> ParallelProcessor<Rf> for FilterProcessor<'a> {
 }
 
 impl<'a, Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor<'a> {
+    fn requires_ordering(&self) -> bool {
+        self.ordered
+    }
+
     fn process_record_pair(&mut self, record1: Rf, record2: Rf) -> paraseq::parallel::Result<()> {
         if self.check_pairs && !paired_record_names_match(record1.id(), record2.id()) {
             return Err(anyhow::anyhow!(
@@ -641,21 +713,18 @@ impl<'a, Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor<'a> {
 
         if decision.keep {
             self.local_stats.output_bp += (seq1.len() + seq2.len()) as u64;
-            let counter = if self.rename || self.rename_random {
-                self.rename_counter.fetch_add(1, Ordering::Relaxed) + 1
-            } else {
-                0
-            };
-
-            // Write to appropriate writers
+            // Both mates take the pair's number
             if self.global_writer2.is_some() {
                 // Separate outputs
-                self.write_record(&record1, &seq1, counter, b"/1")?;
-                self.write_record_to_buffer2(&record2, &seq2, counter, b"/2")?;
+                self.write_record(&record1, &seq1, b"/1")?;
+                self.write_record_to_buffer2(&record2, &seq2, b"/2")?;
             } else {
                 // Interleaved output
-                self.write_record(&record1, &seq1, counter, b"/1")?;
-                self.write_record(&record2, &seq2, counter, b"/2")?;
+                self.write_record(&record1, &seq1, b"/1")?;
+                self.write_record(&record2, &seq2, b"/2")?;
+            }
+            if self.rename {
+                self.batch_kept += 1;
             }
         } else {
             self.local_stats.filtered_seqs += 2;
@@ -672,16 +741,38 @@ impl<'a, Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor<'a> {
                 let mut writer1 = self.global_writer.lock();
                 let mut writer2 = writer2.lock();
 
-                writer1.write_all(&self.local_buffer)?;
+                if self.rename {
+                    // Both mates share one block of numbers
+                    let base = self.reserve_rename_ids();
+                    write_renamed(
+                        &mut writer1,
+                        &self.local_buffer,
+                        &self.pending_renames,
+                        base,
+                    )?;
+                    write_renamed(
+                        &mut writer2,
+                        &self.local_buffer2,
+                        &self.pending_renames2,
+                        base,
+                    )?;
+                } else {
+                    writer1.write_all(&self.local_buffer)?;
+                    writer2.write_all(&self.local_buffer2)?;
+                }
                 writer1.flush()?;
-                writer2.write_all(&self.local_buffer2)?;
                 writer2.flush()?;
             }
         } else {
             // Interleaved output
             if !self.local_buffer.is_empty() {
                 let mut writer = self.global_writer.lock();
-                writer.write_all(&self.local_buffer)?;
+                if self.rename {
+                    let base = self.reserve_rename_ids();
+                    write_renamed(&mut writer, &self.local_buffer, &self.pending_renames, base)?;
+                } else {
+                    writer.write_all(&self.local_buffer)?;
+                }
                 writer.flush()?;
             }
         }
@@ -689,6 +780,9 @@ impl<'a, Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor<'a> {
         // Clear buffer after releasing the lock for better performance
         self.local_buffer.clear();
         self.local_buffer2.clear();
+        self.pending_renames.clear();
+        self.pending_renames2.clear();
+        self.batch_kept = 0;
 
         // Update global stats
         {
@@ -744,8 +838,8 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
         summary_path: config.summary_path.cloned(),
         deplete: config.deplete,
         rename: config.rename,
-        rename_random: config.rename_random,
         output_fasta: config.output_fasta,
+        ordered: config.ordered,
         threads: config.threads,
         compression_level: config.compression_level,
         compression_threads: config.compression_threads,
@@ -879,8 +973,8 @@ pub fn run_with_index(
     if config.rename {
         options.push("rename".to_string());
     }
-    if config.rename_random {
-        options.push("rename-random".to_string());
+    if config.ordered {
+        options.push("ordered".to_string());
     }
     if config.check_pairs {
         options.push("check-pairs".to_string());
@@ -953,10 +1047,10 @@ pub fn run_with_index(
         prefix_length: config.prefix_length,
         deplete: config.deplete,
         rename: config.rename,
-        rename_random: config.rename_random,
         output_fasta: config.output_fasta,
         debug: config.debug,
         check_pairs: config.check_pairs,
+        ordered: config.ordered,
     };
     let mut processor = FilterProcessor::new(
         minimizers,
@@ -1152,7 +1246,7 @@ pub fn run_with_index(
         prefix_length: config.prefix_length,
         deplete: config.deplete,
         rename: config.rename,
-        rename_random: config.rename_random,
+        ordered: config.ordered,
         check_pairs: config.check_pairs,
         seqs_in: total_seqs,
         seqs_out: output_seqs,
@@ -1244,7 +1338,7 @@ mod tests {
             prefix_length: 0,
             deplete: false,
             rename: false,
-            rename_random: false,
+            ordered: false,
             check_pairs: false,
             seqs_in: 100,
             seqs_out: 90,
