@@ -354,7 +354,7 @@ fn prepare_input(
     interleaved_input: bool,
     output_format: OutputFormat,
 ) -> Result<(InputLayout, InputPrep)> {
-    // ponytail: CBQ input is file-only so the mmap reader stays the only CBQ
+    // CBQ input is file-only so the mmap reader stays the only CBQ
     // path; add binseq's streaming reader if stdin support is ever needed.
     if config.input_path == "-" || is_special_input_path(&config.input_path) {
         return prepare_fastx(config, interleaved_input, output_format);
