@@ -16,7 +16,9 @@ mod minimizers;
 
 // Public API
 #[cfg(feature = "cli")]
-pub use filter::{FilterRunConfig, FilterSummary, run as run_filter, run_with_index};
+pub use filter::{
+    DEFAULT_CBQ_BLOCK_SIZE_MIB, FilterRunConfig, FilterSummary, run as run_filter, run_with_index,
+};
 pub use filter_kernel::{FilterDecision, FilterKernel, FilterParams};
 #[cfg(feature = "fetch")]
 pub use index::fetch as index_fetch;
@@ -331,7 +333,7 @@ pub struct FilterConfig<'a> {
     /// Path to JSON summary file
     pub summary_path: Option<&'a PathBuf>,
 
-    /// Deplete mode (remove sequences WITH matches, original deacon behavior)
+    /// Deplete mode (remove sequences WITH matches, original deacon behaviour)
     pub deplete: bool,
 
     /// Replace sequence headers with incrementing numbers (1, 2, 3...)
@@ -348,6 +350,9 @@ pub struct FilterConfig<'a> {
 
     /// Compression level for output files (1-22 for zst, 1-9 for gz)
     pub compression_level: u8,
+
+    /// cbq output block size in MiB (raised to the cbq input's block size if larger)
+    pub cbq_block_size: u16,
 
     /// Number of threads for compression (0 = auto-calculate as ceil(total/2))
     pub compression_threads: u16,

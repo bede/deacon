@@ -3,8 +3,9 @@ use clap::{Parser, Subcommand};
 #[cfg(feature = "fetch")]
 use deacon::index_fetch;
 use deacon::{
-    ComplexityAlgorithm, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterConfig, IndexConfig,
-    index_diff, index_dump, index_filter, index_freeze, index_info, index_intersect, index_union,
+    ComplexityAlgorithm, DEFAULT_CBQ_BLOCK_SIZE_MIB, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE,
+    FilterConfig, IndexConfig, index_diff, index_dump, index_filter, index_freeze, index_info,
+    index_intersect, index_union,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -29,16 +30,16 @@ enum Command {
         #[command(subcommand)]
         command: IndexCommand,
     },
-    /// Retain or deplete sequence records with sufficient minimizer hits to an indexed query
+    /// Retain or deplete sequence records with sufficient minimizer hits to the index
     Filter {
         /// Path to minimizer index file
         index: PathBuf,
 
-        /// Optional path to fastx or CBQ file (or - for stdin)
+        /// Optional path to fastx or binseq cbq file (or - for stdin)
         #[arg(default_value = "-")]
         input: String,
 
-        /// Optional path to second paired fastx file (not supported with CBQ input)
+        /// Optional path to second paired fastx file
         input2: Option<String>,
 
         /// Minimum absolute number of minimizer hits for a match
@@ -69,11 +70,11 @@ enum Command {
         #[arg(short = 'f', long = "fasta", default_value_t = false)]
         output_fasta: bool,
 
-        /// Path to output fastx file (stdout if not specified; detects .gz and .zst; .cbq suffix writes CBQ)
+        /// Path to output file (stdout by default; detects fastx with .gz, .zst, .xz, or binseq with .cbq)
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
 
-        /// Optional path to second paired output fastx file (detects .gz and .zst; not supported with CBQ output)
+        /// Optional path to second paired output fastx file (detects .gz, .zst, .xz)
         #[arg(short = 'O', long = "output2")]
         output2: Option<String>,
 
@@ -89,11 +90,19 @@ enum Command {
         #[arg(long = "compression-threads", default_value_t = 0)]
         compression_threads: u16,
 
-        /// Output compression level (1-9 for gz & xz; 1-22 for zstd)
+        /// Output compression level (1-9 for gz & xz; 1-22 for zstd, including cbq)
         #[arg(long = "compression-level", default_value_t = 2)]
         compression_level: u8,
 
-        /// Treat INPUT as interleaved paired reads from a file or stdin
+        /// cbq output block size in MiB (or cbq input block size if higher)
+        #[arg(
+            long = "cbq-block-size",
+            default_value_t = DEFAULT_CBQ_BLOCK_SIZE_MIB,
+            value_parser = clap::value_parser!(u16).range(1..=1024)
+        )]
+        cbq_block_size: u16,
+
+        /// Treat INPUT as interleaved paired records from single file or stdin
         #[arg(
             long = "interleaved",
             default_value_t = false,
@@ -109,13 +118,13 @@ enum Command {
         #[arg(long = "check-pairs", default_value_t = false)]
         check_pairs: bool,
 
-        /// Suppress progress reporting
-        #[arg(short = 'q', long = "quiet", default_value_t = false)]
-        quiet: bool,
-
         /// Output sequences with minimizer hits to stderr
         #[arg(long = "debug", default_value_t = false)]
         debug: bool,
+
+        /// Suppress progress reporting
+        #[arg(short = 'q', long = "quiet", default_value_t = false)]
+        quiet: bool,
     },
     /// Start/stop a server process for reduced latency filtering
     Server {
@@ -344,7 +353,7 @@ fn main() -> Result<()> {
         rayon::ThreadPoolBuilder::new()
             .num_threads(*threads as usize)
             .build_global()
-            .context("Failed to initialize thread pool")?;
+            .context("Failed to initialise thread pool")?;
 
         // Remove existing socket if present
         let _ = std::fs::remove_file("deacon_server_socket");
@@ -533,6 +542,7 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
             output_fasta,
             threads,
             compression_level,
+            cbq_block_size,
             compression_threads,
             ordered,
             check_pairs,
@@ -565,6 +575,7 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
                 ordered: *ordered,
                 threads: *threads,
                 compression_level: *compression_level,
+                cbq_block_size: *cbq_block_size,
                 compression_threads: *compression_threads,
                 debug: *debug,
                 quiet: *quiet,

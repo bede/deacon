@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ::deacon::{
-    ComplexityAlgorithm, FilterRunConfig, IndexHeader, MinimizerSet, index_fetch,
-    load_index_from_path_auto, run_with_index,
+    ComplexityAlgorithm, DEFAULT_CBQ_BLOCK_SIZE_MIB, FilterRunConfig, IndexHeader, MinimizerSet,
+    index_fetch, load_index_from_path_auto, run_with_index,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -151,6 +151,7 @@ impl Index {
             ordered,
             threads,
             compression_level,
+            cbq_block_size: DEFAULT_CBQ_BLOCK_SIZE_MIB,
             compression_threads,
             debug,
             quiet,

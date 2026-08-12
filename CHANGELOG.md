@@ -5,20 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.17.0] - 2026-08-11
+## [Unreleased]
 
 ### Added
 
-- `deacon filter --ordered` uses paraseq 0.5.0 order preservation for deterministic output. Also exposed as `ordered` in the Python bindings and JSON summary.
-- `deacon filter` accepts CBQ (BINSEQ) input, detected automatically, and writes CBQ when the output path ends in `.cbq`; paired reads are stored as native paired records in a single file.
+- `deacon filter --ordered` preserves output order via paraseq 0.5.0; also exposed as `ordered` in the Python bindings and JSON summary.
+- `deacon filter` accepts CBQ (BINSEQ) input, detected automatically, and writes CBQ when given a `.cbq` path; paired reads are stored as native paired records in a single file. Block size is set with `--cbq-block-size` (default 16 MiB).
 
 ### Changed
 
-- Python `Index.filter()` options after `fastq2` are now keyword-only.
+- Python `Index.filter()` options after `fastq2` are keyword-only.
 
 ### Removed
 
-- `deacon filter --rename-random`, and `rename_random` from the JSON summary and Python bindings.
+- Removed `--rename-random` CLI arg and `rename_random` from the JSON summary and Python bindings.
 
 ## [0.16.0] - 2026-08-09
 

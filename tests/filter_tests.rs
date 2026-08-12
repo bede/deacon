@@ -177,7 +177,7 @@ fn test_filter_to_file() {
     assert!(output_path.exists(), "Output file wasn't created");
     assert!(summary_path.exists(), "Summary file wasn't created");
 
-    // With new default behavior: sequences without matches are filtered out (sequences too short for k=31)
+    // With new default behaviour: sequences without matches are filtered out (sequences too short for k=31)
     let output_content = fs::read_to_string(&output_path).unwrap();
     assert!(
         output_content.is_empty(),
@@ -1113,7 +1113,7 @@ fn test_shared_minimizer_counted_once() {
 
     // If shared minimizers are counted once (correct): total hits = 1, pair kept (1 < 2)
     // If shared minimizers are counted twice (bug): total hits = 2+, pair filtered (2+ >= 2)
-    // Using --deplete to restore original behavior for this bug test
+    // Using --deplete to restore original behaviour for this bug test
     let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--deplete")
@@ -2786,14 +2786,17 @@ fn test_filter_paired_deplete_with_rename() {
 
 /// Write a small paired, headerless, quality-free CBQ file for validation tests
 fn write_headerless_paired_cbq(path: &Path) {
-    use binseq::write::{BinseqWriterBuilder, Format};
     use binseq::SequencingRecordBuilder;
+    use binseq::write::{BinseqWriterBuilder, Format};
     let file = File::create(path).unwrap();
     let mut writer = BinseqWriterBuilder::new(Format::Cbq)
         .paired(true)
         .build(file)
         .unwrap();
-    for seq in [b"ACGTACGTACGTACGTACGT".as_slice(), b"TGCAACGTACGTACGTACGT".as_slice()] {
+    for seq in [
+        b"ACGTACGTACGTACGTACGT".as_slice(),
+        b"TGCAACGTACGTACGTACGT".as_slice(),
+    ] {
         writer
             .push(
                 SequencingRecordBuilder::default()
@@ -2805,6 +2808,91 @@ fn write_headerless_paired_cbq(path: &Path) {
             .unwrap();
     }
     writer.finish().unwrap();
+}
+
+/// CBQ output block size is --cbq-block-size raised to the CBQ input's own block
+/// size, so ultra-long records always round-trip; FASTX has none to inherit.
+#[test]
+fn cbq_output_block_size() {
+    use binseq::SequencingRecordBuilder;
+    use binseq::write::{BinseqWriterBuilder, Format};
+
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    create_test_fasta(&fasta_path);
+    create_test_fastq(&fastq_path);
+    build_index(&fasta_path, &bin_path);
+
+    let input = temp_dir.path().join("in.cbq");
+    let mut writer = BinseqWriterBuilder::new(Format::Cbq)
+        .block_size(32 << 20)
+        .build(File::create(&input).unwrap())
+        .unwrap();
+    writer
+        .push(
+            SequencingRecordBuilder::default()
+                .s_seq(b"ACGTACGTACGTACGTACGT")
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+    writer.finish().unwrap();
+
+    let cases = [
+        (&fastq_path, None, 16 << 20),       // default
+        (&fastq_path, Some("64"), 64 << 20), // flag honoured
+        (&input, None, 32 << 20),            // input's block size wins over the default
+        (&input, Some("4"), 32 << 20),       // clamped up to the input's
+        (&input, Some("64"), 64 << 20),      // flag wins when larger
+    ];
+
+    for (case, (source, block_size, expected)) in cases.iter().enumerate() {
+        let output = temp_dir.path().join(format!("out{case}.cbq"));
+        let mut cmd = cargo::cargo_bin_cmd!("deacon");
+        cmd.args(["filter", "-a", "1", "-r", "0.0", "-t", "1"])
+            .arg(&bin_path)
+            .arg(source)
+            .arg("--output")
+            .arg(&output);
+        if let Some(block_size) = block_size {
+            cmd.args(["--cbq-block-size", block_size]);
+        }
+        cmd.assert().success();
+        let reader = binseq::cbq::MmapReader::new(&output).unwrap();
+        assert_eq!(
+            reader.header().block_size as usize,
+            *expected,
+            "case {case}"
+        );
+    }
+}
+
+/// --cbq-block-size is bounded by clap, before any work starts
+#[test]
+fn cbq_block_size_out_of_range_rejected() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    create_test_fasta(&fasta_path);
+    create_test_fastq(&fastq_path);
+    build_index(&fasta_path, &bin_path);
+
+    for block_size in ["0", "2000"] {
+        let output = temp_dir.path().join(format!("no_create{block_size}.cbq"));
+        cargo::cargo_bin_cmd!("deacon")
+            .args(["filter", "--cbq-block-size", block_size])
+            .arg(&bin_path)
+            .arg(&fastq_path)
+            .arg("--output")
+            .arg(&output)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("not in 1..=1024"));
+        assert!(!output.exists());
+    }
 }
 
 /// CBQ is only an I/O concern: FASTX -> CBQ -> FASTX must preserve reads,
@@ -3007,7 +3095,10 @@ fn cbq_roundtrip_matches_fastx() {
         .arg(&no_create)
         .assert()
         .failure();
-    assert!(!no_create.exists(), "CBQ input + INPUT2 must fail before output creation");
+    assert!(
+        !no_create.exists(),
+        "CBQ input + INPUT2 must fail before output creation"
+    );
 
     cargo::cargo_bin_cmd!("deacon")
         .args(["filter", "--interleaved", "-t", "1"])
@@ -3017,7 +3108,10 @@ fn cbq_roundtrip_matches_fastx() {
         .arg(&no_create)
         .assert()
         .failure();
-    assert!(!no_create.exists(), "CBQ input + --interleaved must fail before output creation");
+    assert!(
+        !no_create.exists(),
+        "CBQ input + --interleaved must fail before output creation"
+    );
 
     cargo::cargo_bin_cmd!("deacon")
         .args(["filter", "-t", "1"])
@@ -3029,18 +3123,10 @@ fn cbq_roundtrip_matches_fastx() {
         .arg(temp_dir.path().join("x.fastq")) // CBQ output + OUTPUT2
         .assert()
         .failure();
-    assert!(!no_create.exists(), "CBQ output + OUTPUT2 must fail before output creation");
-
-    let gz_cbq = temp_dir.path().join("bad.cbq.gz");
-    cargo::cargo_bin_cmd!("deacon")
-        .args(["filter", "-t", "1"])
-        .arg(&bin_path)
-        .arg(&fastq_path)
-        .arg("--output")
-        .arg(&gz_cbq) // compressed CBQ output
-        .assert()
-        .failure();
-    assert!(!gz_cbq.exists(), ".cbq.gz output must fail before output creation");
+    assert!(
+        !no_create.exists(),
+        "CBQ output + OUTPUT2 must fail before output creation"
+    );
 
     // --check-pairs + headerless CBQ input
     let headerless = temp_dir.path().join("headerless.cbq");
@@ -3057,4 +3143,409 @@ fn cbq_roundtrip_matches_fastx() {
         !no_create.exists(),
         "--check-pairs + headerless CBQ must fail before output creation"
     );
+}
+
+/// Write `n` distinct single-end FASTQ records that do not match the AAA index
+fn create_many_fastq(path: &Path, n: usize) -> String {
+    let mut content = String::new();
+    let seq = "CGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+    let qual = "~".repeat(seq.len());
+    for i in 0..n {
+        content.push_str(&format!("@read_{i}\n{seq}\n+\n{qual}\n"));
+    }
+    fs::write(path, &content).unwrap();
+    content
+}
+
+/// --check-pairs accepts a natively paired CBQ with /1 /2 names
+#[test]
+fn cbq_check_pairs_paired_input() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let interleaved_path = temp_dir.path().join("interleaved.fastq");
+    create_test_fasta(&fasta_path);
+    create_test_interleaved_fastq(&interleaved_path);
+    build_index(&fasta_path, &bin_path);
+
+    // Interleaved FASTQ with read1/1, read1/2 names -> paired CBQ
+    let paired_cbq = temp_dir.path().join("paired.cbq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-a", "1", "-r", "0.0", "-t", "1", "--interleaved"])
+        .arg(&bin_path)
+        .arg(&interleaved_path)
+        .arg("--output")
+        .arg(&paired_cbq)
+        .assert()
+        .success();
+
+    // Paired CBQ + --check-pairs succeeds despite no INPUT2/--interleaved
+    let out = temp_dir.path().join("out.fastq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-a", "1", "-r", "0.0", "-t", "1", "--check-pairs"])
+        .arg(&bin_path)
+        .arg(&paired_cbq)
+        .arg("--output")
+        .arg(&out)
+        .assert()
+        .success();
+    assert_eq!(count_records(&fs::read_to_string(&out).unwrap()), 4);
+}
+
+/// A file bearing the CBQ magic but truncated must error, not panic
+#[test]
+fn cbq_truncated_input_fails_cleanly() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    create_test_fasta(&fasta_path);
+    create_test_fastq(&fastq_path);
+    build_index(&fasta_path, &bin_path);
+
+    // Valid CBQ, then truncate it to just past its magic
+    let cbq_path = temp_dir.path().join("reads.cbq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-a", "1", "-r", "0.0", "-t", "1"])
+        .arg(&bin_path)
+        .arg(&fastq_path)
+        .arg("--output")
+        .arg(&cbq_path)
+        .assert()
+        .success();
+    let bytes = fs::read(&cbq_path).unwrap();
+    let truncated = temp_dir.path().join("truncated.cbq");
+    fs::write(&truncated, &bytes[..16]).unwrap();
+
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-t", "1"])
+        .arg(&bin_path)
+        .arg(&truncated)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Truncated or corrupt CBQ"));
+}
+
+/// CBQ per-record flags survive CBQ -> CBQ filtering
+#[test]
+fn cbq_flags_preserved() {
+    use binseq::write::{BinseqWriterBuilder, Format};
+    use binseq::{ParallelReader, SequencingRecordBuilder};
+    use std::sync::{Arc, Mutex};
+
+    let temp_dir = tempdir().unwrap();
+    let aaa_path = temp_dir.path().join("aaa.fasta");
+    let aaa_bin = temp_dir.path().join("aaa.bin");
+    create_test_fasta_aaa(&aaa_path);
+    build_index(&aaa_path, &aaa_bin);
+
+    // CBQ input with flags 7 and 9
+    let flagged = temp_dir.path().join("flagged.cbq");
+    let mut writer = BinseqWriterBuilder::new(Format::Cbq)
+        .headers(true)
+        .flags(true)
+        .build(File::create(&flagged).unwrap())
+        .unwrap();
+    for (i, flag) in [7u64, 9u64].iter().enumerate() {
+        writer
+            .push(
+                SequencingRecordBuilder::default()
+                    .s_seq(b"CGTACGTACGTACGTACGTACGTACGTACGTACGTACGT".as_slice())
+                    .s_header(format!("read_{i}").as_bytes())
+                    .opt_flag(Some(*flag))
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+    }
+    writer.finish().unwrap();
+
+    // Deplete against the AAA index keeps everything
+    let out_cbq = temp_dir.path().join("out.cbq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d", "-t", "1"])
+        .arg(&aaa_bin)
+        .arg(&flagged)
+        .arg("--output")
+        .arg(&out_cbq)
+        .assert()
+        .success();
+
+    // Collect the flags back out of the filtered CBQ
+    #[derive(Clone)]
+    struct FlagCollector(Arc<Mutex<Vec<Option<u64>>>>);
+    impl binseq::ParallelProcessor for FlagCollector {
+        fn process_record<R: binseq::BinseqRecord>(&mut self, record: R) -> binseq::Result<()> {
+            self.0.lock().unwrap().push(record.flag());
+            Ok(())
+        }
+    }
+    let reader = binseq::cbq::MmapReader::new(&out_cbq).unwrap();
+    assert!(reader.header().has_flags(), "flags must survive filtering");
+    let collector = FlagCollector(Arc::new(Mutex::new(Vec::new())));
+    reader.process_parallel(collector.clone(), 1).unwrap();
+    assert_eq!(*collector.0.lock().unwrap(), vec![Some(7), Some(9)]);
+}
+
+/// --ordered CBQ output matches the input order exactly, multithreaded
+#[test]
+fn cbq_ordered_output_is_input_ordered() {
+    let temp_dir = tempdir().unwrap();
+    let aaa_path = temp_dir.path().join("aaa.fasta");
+    let aaa_bin = temp_dir.path().join("aaa.bin");
+    create_test_fasta_aaa(&aaa_path);
+    build_index(&aaa_path, &aaa_bin);
+    let fastq_path = temp_dir.path().join("many.fastq");
+    let content = create_many_fastq(&fastq_path, 500);
+
+    // Deplete against the AAA index keeps all 500 reads
+    let cbq_path = temp_dir.path().join("ordered.cbq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d", "--ordered", "-t", "4"])
+        .arg(&aaa_bin)
+        .arg(&fastq_path)
+        .arg("--output")
+        .arg(&cbq_path)
+        .assert()
+        .success();
+
+    // Decoding the CBQ reproduces the input byte-for-byte (CBQ input with
+    // --ordered falls back to one thread)
+    let out = temp_dir.path().join("out.fastq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d", "--ordered", "-t", "4"])
+        .arg(&aaa_bin)
+        .arg(&cbq_path)
+        .arg("--output")
+        .arg(&out)
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&out).unwrap(),
+        content,
+        "ordered CBQ roundtrip must preserve input order"
+    );
+}
+
+/// --ordered --rename CBQ output numbers records 1..N in input order
+#[test]
+fn cbq_ordered_rename_is_sequential() {
+    let temp_dir = tempdir().unwrap();
+    let aaa_path = temp_dir.path().join("aaa.fasta");
+    let aaa_bin = temp_dir.path().join("aaa.bin");
+    create_test_fasta_aaa(&aaa_path);
+    build_index(&aaa_path, &aaa_bin);
+    let fastq_path = temp_dir.path().join("many.fastq");
+    create_many_fastq(&fastq_path, 200);
+
+    let cbq_path = temp_dir.path().join("renamed.cbq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d", "--ordered", "--rename", "-t", "4"])
+        .arg(&aaa_bin)
+        .arg(&fastq_path)
+        .arg("--output")
+        .arg(&cbq_path)
+        .assert()
+        .success();
+
+    let out = temp_dir.path().join("out.fastq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d", "-t", "1"])
+        .arg(&aaa_bin)
+        .arg(&cbq_path)
+        .arg("--output")
+        .arg(&out)
+        .assert()
+        .success();
+    let content = fs::read_to_string(&out).unwrap();
+    let ids: Vec<&str> = content
+        .lines()
+        .step_by(4)
+        .map(|h| h.trim_start_matches('@'))
+        .collect();
+    let expected: Vec<String> = (1..=200).map(|i| i.to_string()).collect();
+    assert_eq!(
+        ids, expected,
+        "renamed CBQ records must be numbered in order"
+    );
+}
+
+/// Multithreaded CBQ roundtrips preserve record counts
+#[test]
+fn cbq_multithreaded_roundtrip_counts() {
+    let temp_dir = tempdir().unwrap();
+    let aaa_path = temp_dir.path().join("aaa.fasta");
+    let aaa_bin = temp_dir.path().join("aaa.bin");
+    create_test_fasta_aaa(&aaa_path);
+    build_index(&aaa_path, &aaa_bin);
+    let fastq_path = temp_dir.path().join("many.fastq");
+    create_many_fastq(&fastq_path, 500);
+
+    let cbq_path = temp_dir.path().join("many.cbq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d", "-t", "4"])
+        .arg(&aaa_bin)
+        .arg(&fastq_path)
+        .arg("--output")
+        .arg(&cbq_path)
+        .assert()
+        .success();
+    let reader = binseq::cbq::MmapReader::new(&cbq_path).unwrap();
+    assert_eq!(reader.num_records(), 500);
+
+    let out = temp_dir.path().join("out.fastq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d", "-t", "4"])
+        .arg(&aaa_bin)
+        .arg(&cbq_path)
+        .arg("--output")
+        .arg(&out)
+        .assert()
+        .success();
+    assert_eq!(count_records(&fs::read_to_string(&out).unwrap()), 500);
+}
+
+/// OUTPUT2 must not silently write FASTX bytes into a .cbq-named file
+#[test]
+fn cbq_output2_suffix_rejected() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let r1_path = temp_dir.path().join("reads_1.fastq");
+    let r2_path = temp_dir.path().join("reads_2.fastq");
+    create_test_fasta(&fasta_path);
+    create_test_paired_fastq(&r1_path, &r2_path);
+    build_index(&fasta_path, &bin_path);
+
+    let out1 = temp_dir.path().join("out1.fastq");
+    let out2 = temp_dir.path().join("out2.cbq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-a", "1", "-r", "0.0", "-t", "1"])
+        .arg(&bin_path)
+        .arg(&r1_path)
+        .arg(&r2_path)
+        .arg("--output")
+        .arg(&out1)
+        .arg("--output2")
+        .arg(&out2)
+        .assert()
+        .failure();
+    assert!(!out1.exists(), "OUTPUT must not be created");
+    assert!(!out2.exists(), "OUTPUT2 must not be created");
+}
+
+/// Headerless, quality-free paired CBQ filters to CBQ (still headerless) and
+/// to FASTX (record-index ids, FASTA since there are no qualities)
+#[test]
+fn cbq_headerless_roundtrip() {
+    let temp_dir = tempdir().unwrap();
+    let aaa_path = temp_dir.path().join("aaa.fasta");
+    let aaa_bin = temp_dir.path().join("aaa.bin");
+    create_test_fasta_aaa(&aaa_path);
+    build_index(&aaa_path, &aaa_bin);
+    let headerless = temp_dir.path().join("headerless.cbq");
+    write_headerless_paired_cbq(&headerless);
+
+    // Deplete against the AAA index keeps both pairs
+    let out_cbq = temp_dir.path().join("out.cbq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d", "-t", "1"])
+        .arg(&aaa_bin)
+        .arg(&headerless)
+        .arg("--output")
+        .arg(&out_cbq)
+        .assert()
+        .success();
+    let reader = binseq::cbq::MmapReader::new(&out_cbq).unwrap();
+    assert!(reader.is_paired());
+    assert!(
+        !reader.header().has_headers(),
+        "output must stay headerless"
+    );
+    assert!(!reader.header().has_qualities());
+    assert_eq!(reader.num_records(), 2);
+
+    // Quality-free CBQ decodes to FASTA
+    let out_fasta = temp_dir.path().join("out.fasta");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d", "-t", "1"])
+        .arg(&aaa_bin)
+        .arg(&headerless)
+        .arg("--output")
+        .arg(&out_fasta)
+        .assert()
+        .success();
+    let content = fs::read_to_string(&out_fasta).unwrap();
+    assert_eq!(
+        content.matches('>').count(),
+        4,
+        "two pairs, four FASTA records"
+    );
+}
+
+/// Ultra-long reads exceed binseq's 1 MiB default block; deacon's larger CBQ
+/// block must roundtrip them
+#[test]
+fn cbq_ultralong_read_roundtrip() {
+    let temp_dir = tempdir().unwrap();
+    let aaa_path = temp_dir.path().join("aaa.fasta");
+    let aaa_bin = temp_dir.path().join("aaa.bin");
+    create_test_fasta_aaa(&aaa_path);
+    build_index(&aaa_path, &aaa_bin);
+
+    // 2 Mb read: ~2.5 MB embedded size, over the 1 MiB binseq default
+    let fastq_path = temp_dir.path().join("ultra.fastq");
+    let seq: String = "ACGTGCTA".repeat(250_000);
+    let qual = "~".repeat(seq.len());
+    let content = format!("@ultra1\n{seq}\n+\n{qual}\n");
+    fs::write(&fastq_path, &content).unwrap();
+
+    let cbq_path = temp_dir.path().join("ultra.cbq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d", "-t", "1"])
+        .arg(&aaa_bin)
+        .arg(&fastq_path)
+        .arg("--output")
+        .arg(&cbq_path)
+        .assert()
+        .success();
+
+    let out = temp_dir.path().join("ultra_out.fastq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d", "-t", "1"])
+        .arg(&aaa_bin)
+        .arg(&cbq_path)
+        .arg("--output")
+        .arg(&out)
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&out).unwrap(),
+        content,
+        "ultra-long read must roundtrip through CBQ"
+    );
+}
+
+/// CBQ output validates the compression level before creating the output
+#[test]
+fn cbq_invalid_compression_level_rejected() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    create_test_fasta(&fasta_path);
+    create_test_fastq(&fastq_path);
+    build_index(&fasta_path, &bin_path);
+
+    let no_create = temp_dir.path().join("bad_level.cbq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-t", "1", "--compression-level", "23"])
+        .arg(&bin_path)
+        .arg(&fastq_path)
+        .arg("--output")
+        .arg(&no_create)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid CBQ compression level"));
+    assert!(!no_create.exists());
 }
