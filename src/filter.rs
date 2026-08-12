@@ -157,8 +157,9 @@ impl Output {
             Output::Cbq { local, .. } => {
                 let number = rename.then(|| rename_counter.fetch_add(1, Ordering::Relaxed) + 1);
                 let header = cbq_header(read.id, number, b"");
+                let seq = sanitise_for_cbq(read.seq);
                 let seq_record = SequencingRecordBuilder::default()
-                    .s_seq(read.seq)
+                    .s_seq(&seq)
                     .s_header(&header)
                     .opt_s_qual(read.qual)
                     .opt_flag(read.flag)
@@ -229,11 +230,13 @@ impl Output {
                 let number = rename.then(|| rename_counter.fetch_add(1, Ordering::Relaxed) + 1);
                 let header1 = cbq_header(read1.id, number, b"/1");
                 let header2 = cbq_header(read2.id, number, b"/2");
+                let seq1 = sanitise_for_cbq(read1.seq);
+                let seq2 = sanitise_for_cbq(read2.seq);
                 let seq_record = SequencingRecordBuilder::default()
-                    .s_seq(read1.seq)
+                    .s_seq(&seq1)
                     .s_header(&header1)
                     .opt_s_qual(read1.qual)
-                    .x_seq(read2.seq)
+                    .x_seq(&seq2)
                     .x_header(&header2)
                     .opt_x_qual(read2.qual)
                     .opt_flag(read1.flag)
@@ -341,6 +344,28 @@ fn cbq_header<'a>(id: &'a [u8], number: Option<u64>, suffix: &[u8]) -> Cow<'a, [
         }
         None => Cow::Borrowed(id),
     }
+}
+
+/// Map unsupported bases to N.
+fn sanitise_for_cbq(seq: &[u8]) -> Cow<'_, [u8]> {
+    #[inline]
+    fn supported(b: u8) -> bool {
+        matches!(
+            b,
+            b'A' | b'C' | b'G' | b'T' | b'N' | b'a' | b'c' | b'g' | b't'
+        )
+    }
+
+    let Some(first) = seq.iter().position(|&b| !supported(b)) else {
+        return Cow::Borrowed(seq);
+    };
+    let mut sanitised = seq.to_vec();
+    sanitised[first..].iter_mut().for_each(|b| {
+        if !supported(*b) {
+            *b = b'N';
+        }
+    });
+    Cow::Owned(sanitised)
 }
 
 /// Filtering config for an already-loaded index (no index path; see [`FilterConfig`]).

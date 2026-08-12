@@ -3208,6 +3208,78 @@ fn cbq_ns_match_fastx() {
     }
 }
 
+/// CBQ encodes IUPAC codes as N across 32bp block boundaries.
+#[test]
+fn cbq_iupac_codes_become_n() {
+    let temp_dir = tempdir().unwrap();
+    let ref_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    fs::write(&ref_path, format!(">ref\n{}\n", "A".repeat(100))).unwrap();
+    build_index(&ref_path, &bin_path);
+
+    let mut seq = "ACGT".repeat(25).into_bytes();
+    for (code, pos) in [
+        ('Y', 0),
+        ('R', 15),
+        ('W', 31),
+        ('S', 32),
+        ('K', 33),
+        ('M', 63),
+        ('y', 1),
+        ('r', 16),
+        ('w', 30),
+        ('s', 34),
+        ('k', 62),
+        ('m', 64),
+        ('n', 99),
+    ] {
+        seq[pos] = code as u8;
+    }
+    let seq = String::from_utf8(seq).unwrap();
+    let expected_seq: String = seq
+        .bytes()
+        .map(|b| match b {
+            b'A' | b'C' | b'G' | b'T' => b as char,
+            _ => 'N',
+        })
+        .collect();
+
+    for (ext, input, expected, fasta) in [
+        (
+            "fasta",
+            format!(">iupac\n{seq}\n"),
+            format!(">iupac\n{expected_seq}\n"),
+            true,
+        ),
+        (
+            "fastq",
+            format!("@iupac\n{seq}\n+\n{}\n", "I".repeat(seq.len())),
+            format!("@iupac\n{expected_seq}\n+\n{}\n", "I".repeat(seq.len())),
+            false,
+        ),
+    ] {
+        let input_path = temp_dir.path().join(format!("reads.{ext}"));
+        let cbq_path = temp_dir.path().join(format!("reads-{ext}.cbq"));
+        let output_path = temp_dir.path().join(format!("roundtrip.{ext}"));
+        fs::write(&input_path, input).unwrap();
+
+        for (from, to) in [(&input_path, &cbq_path), (&cbq_path, &output_path)] {
+            let mut cmd = cargo::cargo_bin_cmd!("deacon");
+            cmd.args(["filter", "-d", "-a", "65535", "-r", "1", "-t", "1"]);
+            if fasta {
+                cmd.arg("--fasta");
+            }
+            cmd.arg(&bin_path)
+                .arg(from)
+                .arg("--output")
+                .arg(to)
+                .assert()
+                .success();
+        }
+        assert_eq!(fs::read_to_string(output_path).unwrap(), expected);
+    }
+}
+
 /// Write `n` distinct single-end FASTQ records that do not match the AAA index
 fn create_many_fastq(path: &Path, n: usize) -> String {
     let mut content = String::new();
