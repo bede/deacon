@@ -3145,6 +3145,69 @@ fn cbq_roundtrip_matches_fastx() {
     );
 }
 
+/// CBQ must preserve Ns and filter them like FASTX.
+#[test]
+fn cbq_ns_match_fastx() {
+    let temp_dir = tempdir().unwrap();
+    let ref_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    fs::write(&ref_path, format!(">ref\n{}\n", "A".repeat(100))).unwrap();
+    build_index(&ref_path, &bin_path);
+
+    let run = |input: &Path, output: &Path, deplete: bool, fasta: bool| {
+        let mut cmd = cargo::cargo_bin_cmd!("deacon");
+        cmd.arg("filter");
+        if deplete {
+            cmd.args(["-d", "-a", "999"]);
+        } else {
+            cmd.args(["-a", "1"]);
+        }
+        cmd.args(["-r", "0", "-t", "1"]);
+        if fasta {
+            cmd.arg("--fasta");
+        }
+        cmd.arg(&bin_path)
+            .arg(input)
+            .arg("--output")
+            .arg(output)
+            .assert()
+            .success();
+    };
+
+    let all_n = "N".repeat(64);
+    let split_n = format!("{}N{}", "A".repeat(64), "A".repeat(64));
+    let fastq = format!(
+        "@all-n\n{all_n}\n+\n{}\n@split-n\n{split_n}\n+\n{}\n",
+        "I".repeat(all_n.len()),
+        "I".repeat(split_n.len()),
+    );
+    let fasta = format!(">all-n\n{all_n}\n>split-n\n{split_n}\n");
+
+    for (ext, content, fasta_output, marker) in [
+        ("fastq", fastq.as_str(), false, "@"),
+        ("fasta", fasta.as_str(), true, ">"),
+    ] {
+        let input = temp_dir.path().join(format!("reads.{ext}"));
+        let cbq = temp_dir.path().join(format!("reads-{ext}.cbq"));
+        let roundtrip = temp_dir.path().join(format!("roundtrip.{ext}"));
+        let direct = temp_dir.path().join(format!("direct-filtered.{ext}"));
+        let via_cbq = temp_dir.path().join(format!("cbq-filtered.{ext}"));
+        fs::write(&input, content).unwrap();
+
+        run(&input, &cbq, true, fasta_output);
+        run(&cbq, &roundtrip, true, fasta_output);
+        assert_eq!(fs::read(&roundtrip).unwrap(), content.as_bytes());
+
+        run(&input, &direct, false, fasta_output);
+        run(&cbq, &via_cbq, false, fasta_output);
+        let filtered = fs::read(&direct).unwrap();
+        assert_eq!(filtered, fs::read(&via_cbq).unwrap());
+        let filtered = String::from_utf8_lossy(&filtered);
+        assert!(!filtered.contains(&format!("{marker}all-n")));
+        assert!(filtered.contains(&format!("{marker}split-n")));
+    }
+}
+
 /// Write `n` distinct single-end FASTQ records that do not match the AAA index
 fn create_many_fastq(path: &Path, n: usize) -> String {
     let mut content = String::new();
