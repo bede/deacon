@@ -168,13 +168,13 @@ dependencies = [
 
 [[package]]
 name = "binseq"
-version = "0.9.5"
+version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e468ca3b52411b87624a45d8bbdefd4e510c9121ae7da2a652fa6b90c90181dc"
+checksum = "5fea1e47c3296e0073dc373f24660b1bd8ec36d6c06a7de115e4c75bf5b1753d"
 dependencies = [
- "anyhow",
  "auto_impl",
- "bitnuc",
+ "bitnuc 0.4.1",
+ "bitnuc 0.5.2",
  "bytemuck",
  "byteorder",
  "itoa",
@@ -204,6 +204,16 @@ name = "bitnuc"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7871516cbb4e097e220623917e1491c995ee58c8018d929d4b1e76c378002bf"
+
+[[package]]
+name = "bitnuc"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93612e75f32ab9cca9750b822f77c5dcf213782cfb67e12f6c8cf91679cb112a"
+dependencies = [
+ "fearless_simd",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "bstr"
@@ -634,6 +644,12 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
+name = "fearless_simd"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4beca3cb2444e3304ac30843cc091f44ed58932353cd492ce740067bfce6b12"
 
 [[package]]
 name = "find-msvc-tools"
