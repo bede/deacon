@@ -259,6 +259,24 @@ mod tests {
     }
 
     #[test]
+    fn non_acgt_mapped_to_n() {
+        let hasher = KmerHasher::new(31);
+        let minimizers = |base| {
+            let mut seq = b"ACGT".repeat(40);
+            seq[64] = base;
+            match compute_minimizers(&seq, &hasher, 31, 15) {
+                crate::MinimizerVec::U64(vec) => vec,
+                crate::MinimizerVec::U128(_) => unreachable!(),
+            }
+        };
+        let expected = minimizers(b'N');
+
+        for &base in b"nRrYySsWwKkMmBbDdHhVvUu-" {
+            assert_eq!(minimizers(base), expected, "base {}", base as char);
+        }
+    }
+
+    #[test]
     fn test_calculate_scaled_entropy() {
         // Test short k-mers (should return 1.0 for k < 10)
         let short_kmer = b"ACGT";

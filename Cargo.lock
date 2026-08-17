@@ -172,6 +172,7 @@ version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5fea1e47c3296e0073dc373f24660b1bd8ec36d6c06a7de115e4c75bf5b1753d"
 dependencies = [
+ "anyhow",
  "auto_impl",
  "bitnuc 0.4.1",
  "bitnuc 0.5.2",
