@@ -70,7 +70,7 @@ pub struct FilterSession {
     index: Arc<WasmIndexInner>,
     kernel: FilterKernel,
     rename: bool,
-    output_fasta: bool,
+    discard_quality: bool,
     rename_counter: u64,
     parser: SeqChunkParser,
     stats: FilterStats,
@@ -91,7 +91,7 @@ impl FilterSession {
         decompress_input: bool,
         compress_output: bool,
         rename: bool,
-        output_fasta: bool,
+        discard_quality: bool,
     ) -> Result<FilterSession, JsValue> {
         let k = index.inner.header.kmer_length();
         let w = index.inner.header.window_size();
@@ -121,7 +121,7 @@ impl FilterSession {
             )
             .map_err(|e| JsValue::from_str(&e.to_string()))?,
             rename,
-            output_fasta,
+            discard_quality,
             rename_counter: 0,
             parser: SeqChunkParser::new(),
             stats: FilterStats::default(),
@@ -268,7 +268,7 @@ impl FilterSession {
                 header,
                 seq,
                 qual,
-                self.output_fasta,
+                self.discard_quality,
                 self.rename,
                 counter,
                 b"",
@@ -291,7 +291,7 @@ pub struct PairedFilterSession {
     index: Arc<WasmIndexInner>,
     kernel: FilterKernel,
     rename: bool,
-    output_fasta: bool,
+    discard_quality: bool,
     rename_counter: u64,
     parser_r1: SeqChunkParser,
     parser_r2: SeqChunkParser,
@@ -323,7 +323,7 @@ impl PairedFilterSession {
         compress_r1: bool,
         compress_r2: bool,
         rename: bool,
-        output_fasta: bool,
+        discard_quality: bool,
     ) -> Result<PairedFilterSession, JsValue> {
         let k = index.inner.header.kmer_length();
         let w = index.inner.header.window_size();
@@ -341,7 +341,7 @@ impl PairedFilterSession {
             )
             .map_err(|e| JsValue::from_str(&e.to_string()))?,
             rename,
-            output_fasta,
+            discard_quality,
             rename_counter: 0,
             parser_r1: SeqChunkParser::new(),
             parser_r2: SeqChunkParser::new(),
@@ -469,7 +469,7 @@ impl PairedFilterSession {
                 &record1.header,
                 &record1.seq,
                 record1.qual.as_deref(),
-                self.output_fasta,
+                self.discard_quality,
                 self.rename,
                 counter,
                 b"/1",
@@ -480,7 +480,7 @@ impl PairedFilterSession {
                 &record2.header,
                 &record2.seq,
                 record2.qual.as_deref(),
-                self.output_fasta,
+                self.discard_quality,
                 self.rename,
                 counter,
                 b"/2",
@@ -1006,12 +1006,12 @@ fn write_record(
     header: &[u8],
     seq: &[u8],
     qual: Option<&[u8]>,
-    output_fasta: bool,
+    discard_quality: bool,
     rename: bool,
     counter: u64,
     read_suffix: &[u8],
 ) -> std::io::Result<()> {
-    let is_fasta = output_fasta || qual.is_none();
+    let is_fasta = discard_quality || qual.is_none();
     output.write_all(if is_fasta { b">" } else { b"@" })?;
     if rename {
         output.write_all(counter.to_string().as_bytes())?;

@@ -339,8 +339,8 @@ pub struct FilterConfig<'a> {
     /// Replace sequence headers with incrementing numbers (1, 2, 3...)
     pub rename: bool,
 
-    /// Force FASTA output (discards quality scores)
-    pub output_fasta: bool,
+    /// Emit fasta or quality-free cbq regardless of input format
+    pub discard_quality: bool,
 
     /// Preserve input record ordering (deterministic, slightly slower)
     pub ordered: bool,

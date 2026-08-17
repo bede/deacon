@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Python `Index.filter()` options after `fastq2` are keyword-only.
+- `deacon filter --fasta` (`-f`) is now `--discard-quality` (no short form), since it discards quality scores for both fastx output (yielding FASTA) and CBQ output (yielding a quality-free CBQ). The Python binding's `output_fasta` keyword becomes `discard_quality`.
 
 ### Removed
 

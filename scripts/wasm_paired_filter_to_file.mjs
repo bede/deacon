@@ -49,7 +49,7 @@ const output1Path = requireArg(args, "output1");
 const output2Path = requireArg(args, "output2");
 const deplete = args.flags.has("deplete");
 const rename = args.flags.has("rename");
-const outputFasta = args.flags.has("fasta");
+const discardQuality = args.flags.has("discard-quality");
 const absThreshold = Number(args.get("abs-threshold") ?? 2);
 const relThreshold = Number(args.get("rel-threshold") ?? 0.01);
 
@@ -72,7 +72,7 @@ const session = new wasmModule.PairedFilterSession(
   false, // compress_r1
   false, // compress_r2
   rename,
-  outputFasta,
+  discardQuality,
 );
 
 const input1 = createReadStream(reads1Path, { highWaterMark: 256 * 1024 });

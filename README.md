@@ -207,9 +207,7 @@ Options:
   -d, --deplete
           Discard matching sequences (invert filtering behaviour)
   -R, --rename
-          Replace sequence headers with incrementing numbers (reproducible with --ordered)
-  -f, --fasta
-          Output FASTA format regardless of input format
+          Replace sequence headers with incrementing numbers (deterministic with --ordered)
   -o, --output <OUTPUT>
           Path to output file (stdout by default; detects fastx with .gz, .zst, .xz, or binseq with .cbq)
   -O, --output2 <OUTPUT2>
@@ -221,9 +219,11 @@ Options:
       --compression-threads <COMPRESSION_THREADS>
           Number of threads used for output compression (0 = auto) [default: 0]
       --compression-level <COMPRESSION_LEVEL>
-          Output compression level (1-9 for gz & xz; 1-22 for zstd, including cbq) [default: 2]
+          Output compression level (1-9 for gz & xz; 1-22 for zstd including cbq) [default: 2]
       --cbq-block-size <CBQ_BLOCK_SIZE>
           cbq output block size in MiB (or cbq input block size if higher) [default: 16]
+      --discard-quality
+          Emit fasta or quality-free cbq regardless of input format
       --interleaved
           Treat INPUT as interleaved paired records from single file or stdin
       --ordered
@@ -231,7 +231,7 @@ Options:
       --check-pairs
           Validate paired record names (Illumina CASAVA or /1 /2 suffixes)
       --debug
-          Output sequences with minimizer hits to stderr
+          Emit sequences with minimizer hits to stderr
   -q, --quiet
           Suppress progress reporting
   -h, --help
@@ -277,7 +277,7 @@ Options:
   -w <WINDOW_SIZE>         Minimizer window size used for indexing [default: 15]
   -o, --output <OUTPUT>    Path to output file (stdout if not specified)
   -t, --threads <THREADS>  Number of execution threads (0 = auto) [default: 8]
-  -q, --quiet              Suppress sequence header output
+  -q, --quiet              Suppress progress reporting
   -h, --help               Print help
 ```
 

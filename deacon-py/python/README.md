@@ -69,7 +69,7 @@ def filter(
     abs_threshold=2,         # min absolute minimizer hits to call a match
     rel_threshold=0.01,      # min proportion of minimizers hitting to call a match
     prefix_length=0,         # only use the first N bp of each read (0 = whole read)
-    output_fasta=False,      # emit FASTA instead of FASTQ
+    discard_quality=False,        # discard quality scores
     ordered=False,           # preserve input record ordering (deterministic, slightly slower)
     threads=8,               # worker threads for filtering
     compression_level=2,     # output compression level

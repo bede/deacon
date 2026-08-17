@@ -48,23 +48,23 @@ echo "Native/WASM parity check passed"
 echo "  bytes: $size"
 echo "  sha256: $sha"
 
-# Second pass: --rename + --fasta (-R -f) must also match byte-for-byte.
-native_rf="$work_dir/native.rename-fasta.fasta"
-wasm_rf="$work_dir/wasm.rename-fasta.fasta"
-echo "Running native filter (-R -f)..."
-cargo run --release -- filter -t 1 -R -f "$index_path" "$reads_path" -o "$native_rf"
-echo "Running WASM filter (--rename --fasta)..."
+# Second pass: --rename + --discard-quality must also match byte-for-byte.
+native_rf="$work_dir/native.rename-discard-quality.fasta"
+wasm_rf="$work_dir/wasm.rename-discard-quality.fasta"
+echo "Running native filter (--rename --discard-quality)..."
+cargo run --release -- filter -t 1 -R --discard-quality "$index_path" "$reads_path" -o "$native_rf"
+echo "Running WASM filter (--rename --discard-quality)..."
 node "$repo_root/scripts/wasm_filter_to_file.mjs" \
   --pkg "$pkg_dir" \
   --index "$index_path" \
   --reads "$reads_path" \
   --output "$wasm_rf" \
-  --rename --fasta
+  --rename --discard-quality
 
 if ! cmp -s "$native_rf" "$wasm_rf"; then
-  echo "Native/WASM output mismatch (rename+fasta)" >&2
+  echo "Native/WASM output mismatch (rename+discard-quality)" >&2
   echo "  native: $(shasum -a 256 "$native_rf" | awk '{print $1}')" >&2
   echo "  wasm:   $(shasum -a 256 "$wasm_rf" | awk '{print $1}')" >&2
   exit 1
 fi
-echo "Native/WASM rename+fasta parity check passed ($(wc -c < "$native_rf" | tr -d ' ') bytes)"
+echo "Native/WASM rename+discard-quality parity check passed ($(wc -c < "$native_rf" | tr -d ' ') bytes)"

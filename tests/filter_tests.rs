@@ -293,7 +293,7 @@ fn test_filter_rename() {
 }
 
 #[test]
-fn test_filter_fasta_flag() {
+fn test_filter_discard_quality_flag() {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("ref.fasta");
     let fastq_path = temp_dir.path().join("reads.fastq");
@@ -306,7 +306,7 @@ fn test_filter_fasta_flag() {
     let mut cmd = cargo::cargo_bin_cmd!("deacon");
     let output = cmd
         .arg("filter")
-        .arg("-f")
+        .arg("--discard-quality")
         .arg("-a")
         .arg("1")
         .arg("-r")
@@ -322,7 +322,7 @@ fn test_filter_fasta_flag() {
     let output_str = std::str::from_utf8(&output).unwrap();
     assert!(
         output_str.starts_with('>'),
-        "FASTQ in with -f should gen FASTA out"
+        "FASTQ in with -Q should gen FASTA out"
     );
 }
 
@@ -3028,10 +3028,10 @@ fn cbq_roundtrip_matches_fastx() {
         "paired CBQ round trip must match the interleaved FASTQ output"
     );
 
-    // --fasta creates a quality-free CBQ
+    // --discard-quality creates a quality-free CBQ
     let fasta_cbq = temp_dir.path().join("fasta.cbq");
     cargo::cargo_bin_cmd!("deacon")
-        .args(["filter", "-a", "1", "-r", "0.0", "-t", "1", "--fasta"])
+        .args(["filter", "-a", "1", "-r", "0.0", "-t", "1", "--discard-quality"])
         .arg(&bin_path)
         .arg(&fastq_path)
         .arg("--output")
@@ -3041,7 +3041,7 @@ fn cbq_roundtrip_matches_fastx() {
     let reader = binseq::cbq::MmapReader::new(&fasta_cbq).unwrap();
     assert!(
         !reader.header().has_qualities(),
-        "--fasta must produce a quality-free CBQ"
+        "--discard-quality must produce a quality-free CBQ"
     );
     assert_eq!(reader.num_records(), 2);
 
@@ -3164,7 +3164,7 @@ fn cbq_ns_match_fastx() {
         }
         cmd.args(["-r", "0", "-t", "1"]);
         if fasta {
-            cmd.arg("--fasta");
+            cmd.arg("--discard-quality");
         }
         cmd.arg(&bin_path)
             .arg(input)
@@ -3275,7 +3275,7 @@ fn cbq_iupac_codes_become_n() {
             let mut cmd = cargo::cargo_bin_cmd!("deacon");
             cmd.args(["filter", "-d", "-a", "65535", "-r", "1", "-t", "1"]);
             if fasta {
-                cmd.arg("--fasta");
+                cmd.arg("--discard-quality");
             }
             cmd.arg(&bin_path)
                 .arg(from)

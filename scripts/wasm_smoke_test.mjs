@@ -55,7 +55,7 @@ const session = new wasmModule.FilterSession(
   false, // decompress_input
   false, // compress_output
   false, // rename
-  false, // output_fasta
+  false, // discard_quality
 );
 
 const outputChunks = [];

@@ -62,13 +62,9 @@ enum Command {
         #[arg(short = 'd', long = "deplete", default_value_t = false)]
         deplete: bool,
 
-        /// Replace sequence headers with incrementing numbers (reproducible with --ordered)
+        /// Replace sequence headers with incrementing numbers (deterministic with --ordered)
         #[arg(short = 'R', long = "rename", default_value_t = false)]
         rename: bool,
-
-        /// Output FASTA format regardless of input format
-        #[arg(short = 'f', long = "fasta", default_value_t = false)]
-        output_fasta: bool,
 
         /// Path to output file (stdout by default; detects fastx with .gz, .zst, .xz, or binseq with .cbq)
         #[arg(short = 'o', long = "output")]
@@ -90,7 +86,7 @@ enum Command {
         #[arg(long = "compression-threads", default_value_t = 0)]
         compression_threads: u16,
 
-        /// Output compression level (1-9 for gz & xz; 1-22 for zstd, including cbq)
+        /// Output compression level (1-9 for gz & xz; 1-22 for zstd including cbq)
         #[arg(long = "compression-level", default_value_t = 2)]
         compression_level: u8,
 
@@ -101,6 +97,10 @@ enum Command {
             value_parser = clap::value_parser!(u16).range(1..=1024)
         )]
         cbq_block_size: u16,
+
+        /// Emit fasta or quality-free cbq regardless of input format
+        #[arg(long = "discard-quality", default_value_t = false)]
+        discard_quality: bool,
 
         /// Treat INPUT as interleaved paired records from single file or stdin
         #[arg(
@@ -118,7 +118,7 @@ enum Command {
         #[arg(long = "check-pairs", default_value_t = false)]
         check_pairs: bool,
 
-        /// Output sequences with minimizer hits to stderr
+        /// Emit sequences with minimizer hits to stderr
         #[arg(long = "debug", default_value_t = false)]
         debug: bool,
 
@@ -172,7 +172,7 @@ enum IndexCommand {
         #[arg(short = 't', long = "threads", default_value_t = 8)]
         threads: u16,
 
-        /// Suppress sequence header output
+        /// Suppress progress reporting
         #[arg(short = 'q', long = "quiet")]
         quiet: bool,
     },
@@ -539,7 +539,7 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
             summary,
             deplete,
             rename,
-            output_fasta,
+            discard_quality,
             threads,
             compression_level,
             cbq_block_size,
@@ -571,7 +571,7 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
                 summary_path: summary.as_ref(),
                 deplete: *deplete,
                 rename: *rename,
-                output_fasta: *output_fasta,
+                discard_quality: *discard_quality,
                 ordered: *ordered,
                 threads: *threads,
                 compression_level: *compression_level,

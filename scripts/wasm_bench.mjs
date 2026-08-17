@@ -64,7 +64,7 @@ for (let iter = 0; iter < iters; iter++) {
     decompressInput,
     false, // compress_output
     false, // rename
-    false, // output_fasta
+    false, // discard_quality
   );
 
   const start = process.hrtime.bigint();

@@ -119,10 +119,10 @@ impl Output {
         read: &ReadView,
         suffix: &'static [u8],
         rename: bool,
-        output_fasta: bool,
+        discard_quality: bool,
     ) -> Result<()> {
         let offset = buffer.len();
-        let marker = format_record_to_buffer(read, rename, output_fasta, buffer)?;
+        let marker = format_record_to_buffer(read, rename, discard_quality, buffer)?;
         if rename {
             pending.push(PendingRename {
                 offset,
@@ -139,7 +139,7 @@ impl Output {
         &mut self,
         read: &ReadView,
         rename: bool,
-        output_fasta: bool,
+        discard_quality: bool,
         rename_counter: &AtomicU64,
     ) -> Result<()> {
         match self {
@@ -149,7 +149,7 @@ impl Output {
                 batch_kept,
                 ..
             } => {
-                Self::push_fastx(local, pending, *batch_kept, read, b"", rename, output_fasta)?;
+                Self::push_fastx(local, pending, *batch_kept, read, b"", rename, discard_quality)?;
                 if rename {
                     *batch_kept += 1;
                 }
@@ -176,7 +176,7 @@ impl Output {
         read1: &ReadView,
         read2: &ReadView,
         rename: bool,
-        output_fasta: bool,
+        discard_quality: bool,
         rename_counter: &AtomicU64,
     ) -> Result<()> {
         match self {
@@ -196,7 +196,7 @@ impl Output {
                     read1,
                     b"/1",
                     rename,
-                    output_fasta,
+                    discard_quality,
                 )?;
                 if shared2.is_some() {
                     // Separate outputs
@@ -207,7 +207,7 @@ impl Output {
                         read2,
                         b"/2",
                         rename,
-                        output_fasta,
+                        discard_quality,
                     )?;
                 } else {
                     // Interleaved output
@@ -218,7 +218,7 @@ impl Output {
                         read2,
                         b"/2",
                         rename,
-                        output_fasta,
+                        discard_quality,
                     )?;
                 }
                 if rename {
@@ -369,8 +369,8 @@ pub struct FilterRunConfig {
     pub deplete: bool,
     /// Replace sequence headers with incrementing numbers
     pub rename: bool,
-    /// Force FASTA output (discards quality scores)
-    pub output_fasta: bool,
+    /// Emit fasta or quality-free cbq regardless of input format
+    pub discard_quality: bool,
     /// Preserve input record ordering (deterministic, slightly slower)
     pub ordered: bool,
     /// Number of execution threads (0 = auto)
@@ -396,7 +396,7 @@ struct FilterProcessorConfig {
     prefix_length: usize,
     deplete: bool,
     rename: bool,
-    output_fasta: bool,
+    discard_quality: bool,
     debug: bool,
     check_pairs: bool,
     ordered: bool,
@@ -722,10 +722,10 @@ struct PendingRename {
 fn format_record_to_buffer(
     read: &ReadView,
     rename: bool,
-    output_fasta: bool,
+    discard_quality: bool,
     buffer: &mut Vec<u8>,
 ) -> Result<u8> {
-    let is_fasta = output_fasta || read.qual.is_none();
+    let is_fasta = discard_quality || read.qual.is_none();
     let marker = if is_fasta { b'>' } else { b'@' };
 
     // Header (omitted when renaming)
@@ -921,7 +921,7 @@ struct FilterProcessor {
     // Minimizer matching parameters
     minimizers: Arc<MinimizerSet>,
     rename: bool,
-    output_fasta: bool,
+    discard_quality: bool,
     debug: bool,
     check_pairs: bool,
     /// Write batches in input order, not completion order
@@ -963,7 +963,7 @@ impl FilterProcessor {
         Ok(Self {
             minimizers,
             rename: config.rename,
-            output_fasta: config.output_fasta,
+            discard_quality: config.discard_quality,
             debug: config.debug,
             check_pairs: config.check_pairs,
             ordered: config.ordered,
@@ -1052,7 +1052,7 @@ impl FilterProcessor {
         if decision.keep {
             self.local_stats.output_bp += read.seq.len() as u64;
             self.output
-                .push_read(read, self.rename, self.output_fasta, &self.rename_counter)?;
+                .push_read(read, self.rename, self.discard_quality, &self.rename_counter)?;
         } else {
             self.local_stats.filtered_seqs += 1;
             self.local_stats.filtered_bp += read.seq.len() as u64;
@@ -1095,7 +1095,7 @@ impl FilterProcessor {
                 read1,
                 read2,
                 self.rename,
-                self.output_fasta,
+                self.discard_quality,
                 &self.rename_counter,
             )?;
         } else {
@@ -1270,7 +1270,7 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
         summary_path: config.summary_path.cloned(),
         deplete: config.deplete,
         rename: config.rename,
-        output_fasta: config.output_fasta,
+        discard_quality: config.discard_quality,
         ordered: config.ordered,
         threads: config.threads,
         compression_level: config.compression_level,
@@ -1460,7 +1460,7 @@ pub fn run_with_index(
                 .expect("CBQ output implies a named path");
             let cbq_writer = BinseqWriterBuilder::new(BinseqFormat::Cbq)
                 .paired(layout.paired)
-                .quality(layout.qualities && !config.output_fasta)
+                .quality(layout.qualities && !config.discard_quality)
                 .headers(layout.headers || config.rename)
                 .flags(layout.flags)
                 .block_size(
@@ -1518,7 +1518,7 @@ pub fn run_with_index(
         prefix_length: config.prefix_length,
         deplete: config.deplete,
         rename: config.rename,
-        output_fasta: config.output_fasta,
+        discard_quality: config.discard_quality,
         debug: config.debug,
         check_pairs: config.check_pairs,
         ordered: config.ordered,

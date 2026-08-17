@@ -35,7 +35,7 @@ async function streamFilterFile(file, opts) {
     isGz,  // decompress_input
     isGz,  // compress_output (match input format)
     false, // rename
-    false  // output_fasta
+    false  // discard_quality
   );
 
   const reader = file.stream().getReader();
@@ -133,7 +133,7 @@ async function streamFilterPairedFiles(file1, file2, opts) {
     r1Gz, r2Gz, // decompress_r1, decompress_r2
     r1Gz, r2Gz, // compress_r1, compress_r2
     false, // rename
-    false  // output_fasta
+    false  // discard_quality
   );
 
   const readerR1 = file1.stream().getReader();

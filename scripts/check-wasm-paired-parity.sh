@@ -53,15 +53,15 @@ echo "Native/WASM paired parity check passed"
 echo "  R1 bytes: $(wc -c < "$native_r1" | tr -d ' ')"
 echo "  R2 bytes: $(wc -c < "$native_r2" | tr -d ' ')"
 
-# Second pass: --rename + --fasta (-R -f) must also match byte-for-byte.
+# Second pass: --rename + --discard-quality must also match byte-for-byte.
 native_rf_r1="$work_dir/native.rf.r1.fasta"
 native_rf_r2="$work_dir/native.rf.r2.fasta"
 wasm_rf_r1="$work_dir/wasm.rf.r1.fasta"
 wasm_rf_r2="$work_dir/wasm.rf.r2.fasta"
-echo "Running native paired filter (-R -f)..."
-cargo run --release -- filter -d -t 1 -R -f "$index_path" "$reads1_path" "$reads2_path" \
+echo "Running native paired filter (--rename --discard-quality)..."
+cargo run --release -- filter -d -t 1 -R --discard-quality "$index_path" "$reads1_path" "$reads2_path" \
   -o "$native_rf_r1" -O "$native_rf_r2"
-echo "Running WASM paired filter (--rename --fasta)..."
+echo "Running WASM paired filter (--rename --discard-quality)..."
 node "$repo_root/scripts/wasm_paired_filter_to_file.mjs" \
   --pkg "$pkg_dir" \
   --index "$index_path" \
@@ -69,14 +69,14 @@ node "$repo_root/scripts/wasm_paired_filter_to_file.mjs" \
   --reads2 "$reads2_path" \
   --output1 "$wasm_rf_r1" \
   --output2 "$wasm_rf_r2" \
-  --deplete --rename --fasta
+  --deplete --rename --discard-quality
 
 if ! cmp -s "$native_rf_r1" "$wasm_rf_r1" || ! cmp -s "$native_rf_r2" "$wasm_rf_r2"; then
-  echo "Native/WASM paired output mismatch (rename+fasta)" >&2
+  echo "Native/WASM paired output mismatch (rename+discard-quality)" >&2
   echo "  native R1: $(shasum -a 256 "$native_rf_r1" | awk '{print $1}')" >&2
   echo "  wasm R1:   $(shasum -a 256 "$wasm_rf_r1" | awk '{print $1}')" >&2
   echo "  native R2: $(shasum -a 256 "$native_rf_r2" | awk '{print $1}')" >&2
   echo "  wasm R2:   $(shasum -a 256 "$wasm_rf_r2" | awk '{print $1}')" >&2
   exit 1
 fi
-echo "Native/WASM paired rename+fasta parity check passed"
+echo "Native/WASM paired rename+discard-quality parity check passed"

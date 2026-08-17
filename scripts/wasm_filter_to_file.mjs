@@ -50,7 +50,7 @@ const indexPath = requireArg(args, "index");
 const readsPath = requireArg(args, "reads");
 const outputPath = requireArg(args, "output");
 const rename = args.flags.has("rename");
-const outputFasta = args.flags.has("fasta");
+const discardQuality = args.flags.has("discard-quality");
 
 const wasmModule = await import(pathToFileURL(path.join(pkgDir, "deacon_wasm.js")).href);
 
@@ -69,7 +69,7 @@ const session = new wasmModule.FilterSession(
   true,  // decompress_input
   false, // compress_output
   rename,
-  outputFasta,
+  discardQuality,
 );
 
 const input = createReadStream(readsPath, { highWaterMark: 256 * 1024 });
