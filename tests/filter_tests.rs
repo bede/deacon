@@ -3583,6 +3583,65 @@ fn cbq_ordered_output_is_input_ordered() {
     );
 }
 
+/// Write reads that complete CBQ blocks mid-batch.
+fn create_many_long_fastq(path: &Path, n: usize, len: usize) -> String {
+    let mut content = String::new();
+    let seq = "CGTA".repeat(len / 4);
+    let qual = "~".repeat(seq.len());
+    for i in 0..n {
+        content.push_str(&format!("@read_{i:06}\n{seq}\n+\n{qual}\n"));
+    }
+    fs::write(path, &content).unwrap();
+    content
+}
+
+/// --ordered CBQ output stays ordered across completed blocks.
+#[test]
+fn cbq_ordered_block_completes_mid_batch() {
+    let temp_dir = tempdir().unwrap();
+    let aaa_path = temp_dir.path().join("aaa.fasta");
+    let aaa_bin = temp_dir.path().join("aaa.bin");
+    create_test_fasta_aaa(&aaa_path);
+    build_index(&aaa_path, &aaa_bin);
+
+    // Force each batch across multiple 1 MiB blocks.
+    let fastq_path = temp_dir.path().join("long.fastq");
+    let content = create_many_long_fastq(&fastq_path, 2048, 1000);
+
+    let cbq_path = temp_dir.path().join("ordered.cbq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args([
+            "filter",
+            "-d",
+            "--ordered",
+            "-t",
+            "4",
+            "--cbq-block-size",
+            "1",
+        ])
+        .arg(&aaa_bin)
+        .arg(&fastq_path)
+        .arg("--output")
+        .arg(&cbq_path)
+        .assert()
+        .success();
+
+    let out = temp_dir.path().join("out.fastq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d", "--ordered", "-t", "1"])
+        .arg(&aaa_bin)
+        .arg(&cbq_path)
+        .arg("--output")
+        .arg(&out)
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&out).unwrap(),
+        content,
+        "multi-block CBQ output must preserve input order"
+    );
+}
+
 /// --ordered --rename CBQ output numbers records 1..N in input order
 #[test]
 fn cbq_ordered_rename_is_sequential() {

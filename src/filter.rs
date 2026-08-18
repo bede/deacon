@@ -28,7 +28,7 @@ pub const DEFAULT_CBQ_BLOCK_SIZE_MIB: u16 = 16;
 
 type BoxedWriter = Box<dyn Write + Send>;
 /// CBQ output is always a named file, no stdout
-type CbqWriter = binseq::BinseqWriter<BufWriter<File>>;
+type CbqWriter = binseq::BinseqWriter<File>;
 
 /// Sequence file format
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -263,11 +263,15 @@ impl Output {
     ) -> Result<()> {
         match self {
             Output::Cbq { local, shared } => {
+                let mut shared = shared.lock();
                 if ordered {
-                    // Drain the incomplete block too, or records linger across batches
-                    shared.lock().ingest(local)?;
+                    // Keep the shared partial block ahead of the next batch.
+                    if let binseq::BinseqWriter::Cbq(writer) = &mut *shared {
+                        writer.flush()?;
+                    }
+                    shared.ingest(local)?;
                 } else {
-                    shared.lock().ingest_completed(local)?;
+                    shared.ingest_completed(local)?;
                 }
             }
             Output::Fastx {
@@ -824,11 +828,9 @@ fn count_compressed_outputs(config: &FilterRunConfig) -> u8 {
     count
 }
 
-/// Open a CBQ output file directly, bypassing the compressed writer stack
-fn open_cbq_output(path: &std::path::Path) -> Result<BufWriter<File>> {
-    let file = File::create(path)
-        .with_context(|| format!("Failed to create output file: {}", path.display()))?;
-    Ok(BufWriter::with_capacity(OUTPUT_BUFFER_SIZE, file))
+/// Open unbuffered so embedded-index write errors surface from `finish`.
+fn open_cbq_output(path: &std::path::Path) -> Result<File> {
+    File::create(path).with_context(|| format!("Failed to create output file: {}", path.display()))
 }
 
 /// Return a suitable writer for the output path extension
