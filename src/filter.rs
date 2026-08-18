@@ -1256,16 +1256,6 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
         validate_unit_interval("complexity threshold", threshold)?;
     }
 
-    // Fail --check-pairs before the index loads; CBQ may be natively paired,
-    // so skip it there and let validate_input_output recheck once the header is read
-    if config.check_pairs
-        && !config.interleaved
-        && config.input2_path.is_none()
-        && !is_cbq_path(config.input_path)
-    {
-        validate_check_pairs_mode(true, false)?;
-    }
-
     // Validate the index path once here; run_with_index never touches it again.
     if !config.minimizers_path.exists() {
         return Err(anyhow::anyhow!(

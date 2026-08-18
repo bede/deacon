@@ -530,18 +530,25 @@ fn test_check_pairs_rejects_mismatched_names() {
 }
 
 #[test]
-fn test_check_pairs_requires_paired_input_before_index_load() {
+fn test_check_pairs_requires_paired_input() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    create_test_fasta(&fasta_path);
+    create_test_fastq(&fastq_path);
+    build_index(&fasta_path, &bin_path);
+
     let mut cmd = cargo::cargo_bin_cmd!("deacon");
     cmd.arg("filter")
         .arg("--check-pairs")
-        .arg("missing.idx")
-        .arg("sequences.fastq")
+        .arg(&bin_path)
+        .arg(&fastq_path)
         .assert()
         .failure()
         .stderr(predicates::str::contains(
             "--check-pairs requires paired input",
-        ))
-        .stderr(predicates::str::contains("Index file does not exist").not());
+        ));
 }
 
 #[test]
@@ -3320,8 +3327,7 @@ fn cbq_check_pairs_paired_input() {
     create_test_interleaved_fastq(&interleaved_path);
     build_index(&fasta_path, &bin_path);
 
-    // Interleaved FASTQ with read1/1, read1/2 names -> paired CBQ, under both
-    // CBQ suffixes; --check-pairs is pre-flighted from the input path
+    // Interleaved FASTQ with read1/1, read1/2 names -> paired CBQ.
     for suffix in ["cbq", "cba"] {
         let paired_cbq = temp_dir.path().join(format!("paired.{suffix}"));
         cargo::cargo_bin_cmd!("deacon")
@@ -3351,6 +3357,20 @@ fn cbq_check_pairs_paired_input() {
             assert_eq!(content.matches('>').count(), 4);
         }
     }
+
+    // Input format is detected from content, not the suffix.
+    let disguised = temp_dir.path().join("paired.dat");
+    fs::copy(temp_dir.path().join("paired.cbq"), &disguised).unwrap();
+    let out = temp_dir.path().join("out-dat.fastq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-a", "1", "-r", "0.0", "-t", "1", "--check-pairs"])
+        .arg(&bin_path)
+        .arg(&disguised)
+        .arg("--output")
+        .arg(&out)
+        .assert()
+        .success();
+    assert_eq!(count_records(&fs::read_to_string(out).unwrap()), 4);
 }
 
 /// A `.cba` output path writes a CBQ without qualities, implying --discard-quality
