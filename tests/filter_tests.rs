@@ -3031,7 +3031,16 @@ fn cbq_roundtrip_matches_fastx() {
     // --discard-quality creates a quality-free CBQ
     let fasta_cbq = temp_dir.path().join("fasta.cbq");
     cargo::cargo_bin_cmd!("deacon")
-        .args(["filter", "-a", "1", "-r", "0.0", "-t", "1", "--discard-quality"])
+        .args([
+            "filter",
+            "-a",
+            "1",
+            "-r",
+            "0.0",
+            "-t",
+            "1",
+            "--discard-quality",
+        ])
         .arg(&bin_path)
         .arg(&fastq_path)
         .arg("--output")
@@ -3311,28 +3320,132 @@ fn cbq_check_pairs_paired_input() {
     create_test_interleaved_fastq(&interleaved_path);
     build_index(&fasta_path, &bin_path);
 
-    // Interleaved FASTQ with read1/1, read1/2 names -> paired CBQ
-    let paired_cbq = temp_dir.path().join("paired.cbq");
-    cargo::cargo_bin_cmd!("deacon")
-        .args(["filter", "-a", "1", "-r", "0.0", "-t", "1", "--interleaved"])
-        .arg(&bin_path)
-        .arg(&interleaved_path)
-        .arg("--output")
-        .arg(&paired_cbq)
-        .assert()
-        .success();
+    // Interleaved FASTQ with read1/1, read1/2 names -> paired CBQ, under both
+    // CBQ suffixes; --check-pairs is pre-flighted from the input path
+    for suffix in ["cbq", "cba"] {
+        let paired_cbq = temp_dir.path().join(format!("paired.{suffix}"));
+        cargo::cargo_bin_cmd!("deacon")
+            .args(["filter", "-a", "1", "-r", "0.0", "-t", "1", "--interleaved"])
+            .arg(&bin_path)
+            .arg(&interleaved_path)
+            .arg("--output")
+            .arg(&paired_cbq)
+            .assert()
+            .success();
 
-    // Paired CBQ + --check-pairs succeeds despite no INPUT2/--interleaved
-    let out = temp_dir.path().join("out.fastq");
+        // Paired CBQ + --check-pairs succeeds despite no INPUT2/--interleaved
+        let out = temp_dir.path().join(format!("out-{suffix}.fastx"));
+        cargo::cargo_bin_cmd!("deacon")
+            .args(["filter", "-a", "1", "-r", "0.0", "-t", "1", "--check-pairs"])
+            .arg(&bin_path)
+            .arg(&paired_cbq)
+            .arg("--output")
+            .arg(&out)
+            .assert()
+            .success();
+        let content = fs::read_to_string(&out).unwrap();
+        if suffix == "cbq" {
+            assert_eq!(count_records(&content), 4);
+        } else {
+            // .cba dropped quality, so it decodes to FASTA
+            assert_eq!(content.matches('>').count(), 4);
+        }
+    }
+}
+
+/// A `.cba` output path writes a CBQ without qualities, implying --discard-quality
+#[test]
+fn cba_output_is_quality_free_cbq() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    let r1_path = temp_dir.path().join("reads_1.fastq");
+    let r2_path = temp_dir.path().join("reads_2.fastq");
+    create_test_fasta(&fasta_path);
+    create_test_fastq(&fastq_path);
+    create_test_paired_fastq(&r1_path, &r2_path);
+    build_index(&fasta_path, &bin_path);
+
+    // FASTQ -> .cba, without --discard-quality
+    let cba_path = temp_dir.path().join("out.cba");
     cargo::cargo_bin_cmd!("deacon")
-        .args(["filter", "-a", "1", "-r", "0.0", "-t", "1", "--check-pairs"])
+        .args(["filter", "-a", "1", "-r", "0.0", "-t", "1"])
         .arg(&bin_path)
-        .arg(&paired_cbq)
+        .arg(&fastq_path)
         .arg("--output")
-        .arg(&out)
+        .arg(&cba_path)
         .assert()
         .success();
-    assert_eq!(count_records(&fs::read_to_string(&out).unwrap()), 4);
+    assert!(
+        fs::read(&cba_path).unwrap().starts_with(b"CBQFILE"),
+        ".cba output must be a CBQ file"
+    );
+    let reader = binseq::cbq::MmapReader::new(&cba_path).unwrap();
+    assert!(
+        !reader.header().has_qualities(),
+        ".cba must imply --discard-quality"
+    );
+    assert!(reader.header().has_headers(), ".cba must keep headers");
+    assert_eq!(reader.num_records(), 2);
+
+    // ... and is byte-identical to the same run written as .cbq with the flag
+    let cbq_path = temp_dir.path().join("out.cbq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args([
+            "filter",
+            "-a",
+            "1",
+            "-r",
+            "0.0",
+            "-t",
+            "1",
+            "--discard-quality",
+        ])
+        .arg(&bin_path)
+        .arg(&fastq_path)
+        .arg("--output")
+        .arg(&cbq_path)
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read(&cba_path).unwrap(),
+        fs::read(&cbq_path).unwrap(),
+        ".cba must match .cbq written with --discard-quality"
+    );
+
+    // A .cba reads back as CBQ input (magic sniffed) and decodes to FASTA
+    let roundtrip = temp_dir.path().join("roundtrip.fastx");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-a", "1", "-r", "0.0", "-t", "1"])
+        .arg(&bin_path)
+        .arg(&cba_path)
+        .arg("--output")
+        .arg(&roundtrip)
+        .assert()
+        .success();
+    let content = fs::read_to_string(&roundtrip).unwrap();
+    assert!(
+        content.starts_with('>'),
+        "quality-free CBQ decodes to FASTA"
+    );
+    assert_eq!(content.matches('>').count(), 2);
+
+    // Paired input stays natively paired in a .cba
+    let paired_cba = temp_dir.path().join("paired.cba");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-a", "1", "-r", "0.0", "-t", "1"])
+        .arg(&bin_path)
+        .arg(&r1_path)
+        .arg(&r2_path)
+        .arg("--output")
+        .arg(&paired_cba)
+        .assert()
+        .success();
+    let reader = binseq::cbq::MmapReader::new(&paired_cba).unwrap();
+    assert!(reader.is_paired(), "paired input must stay paired in .cba");
+    assert!(!reader.header().has_qualities());
+    assert_eq!(reader.num_records(), 2);
 }
 
 /// A file bearing the CBQ magic but truncated must error, not panic
@@ -3560,21 +3673,23 @@ fn cbq_output2_suffix_rejected() {
     create_test_paired_fastq(&r1_path, &r2_path);
     build_index(&fasta_path, &bin_path);
 
-    let out1 = temp_dir.path().join("out1.fastq");
-    let out2 = temp_dir.path().join("out2.cbq");
-    cargo::cargo_bin_cmd!("deacon")
-        .args(["filter", "-a", "1", "-r", "0.0", "-t", "1"])
-        .arg(&bin_path)
-        .arg(&r1_path)
-        .arg(&r2_path)
-        .arg("--output")
-        .arg(&out1)
-        .arg("--output2")
-        .arg(&out2)
-        .assert()
-        .failure();
-    assert!(!out1.exists(), "OUTPUT must not be created");
-    assert!(!out2.exists(), "OUTPUT2 must not be created");
+    for suffix in ["cbq", "cba"] {
+        let out1 = temp_dir.path().join(format!("out1-{suffix}.fastq"));
+        let out2 = temp_dir.path().join(format!("out2.{suffix}"));
+        cargo::cargo_bin_cmd!("deacon")
+            .args(["filter", "-a", "1", "-r", "0.0", "-t", "1"])
+            .arg(&bin_path)
+            .arg(&r1_path)
+            .arg(&r2_path)
+            .arg("--output")
+            .arg(&out1)
+            .arg("--output2")
+            .arg(&out2)
+            .assert()
+            .failure();
+        assert!(!out1.exists(), "OUTPUT must not be created");
+        assert!(!out2.exists(), "OUTPUT2 must not be created");
+    }
 }
 
 /// Headerless, quality-free paired CBQ filters to CBQ (still headerless) and

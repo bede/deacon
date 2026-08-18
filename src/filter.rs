@@ -149,7 +149,15 @@ impl Output {
                 batch_kept,
                 ..
             } => {
-                Self::push_fastx(local, pending, *batch_kept, read, b"", rename, discard_quality)?;
+                Self::push_fastx(
+                    local,
+                    pending,
+                    *batch_kept,
+                    read,
+                    b"",
+                    rename,
+                    discard_quality,
+                )?;
                 if rename {
                     *batch_kept += 1;
                 }
@@ -369,7 +377,7 @@ pub struct FilterRunConfig {
     pub deplete: bool,
     /// Replace sequence headers with incrementing numbers
     pub rename: bool,
-    /// Emit fasta or quality-free cbq regardless of input format
+    /// Emit fasta or quality-free cbq regardless of input format (implied by a .cba output)
     pub discard_quality: bool,
     /// Preserve input record ordering (deterministic, slightly slower)
     pub ordered: bool,
@@ -519,10 +527,20 @@ fn create_paraseq_reader(path: Option<&str>) -> Result<Reader<Box<dyn std::io::R
     }
 }
 
+/// A BINSEQ CBQ path: `.cbq`, or `.cba` by convention when quality is discarded
+fn is_cbq_path(path: &str) -> bool {
+    path.ends_with(".cbq") || is_cba_path(path)
+}
+
+/// `.cba` names a quality-free CBQ, implying `--discard-quality` for that output
+fn is_cba_path(path: &str) -> bool {
+    path.ends_with(".cba")
+}
+
 /// Resolve the output format from the output path suffix
 fn resolve_output_format(config: &FilterRunConfig) -> Format {
     match config.output_path.as_deref() {
-        Some(path) if path.to_string_lossy().ends_with(".cbq") => Format::Cbq,
+        Some(path) if is_cbq_path(&path.to_string_lossy()) => Format::Cbq,
         _ => Format::Fastx,
     }
 }
@@ -682,11 +700,7 @@ fn validate_input_output(
     if output_format == Format::Cbq && config.output2_path.is_some() {
         anyhow::bail!("CBQ output does not support OUTPUT2; CBQ pairing is native");
     }
-    if config
-        .output2_path
-        .as_deref()
-        .is_some_and(|output2| output2.ends_with(".cbq"))
-    {
+    if config.output2_path.as_deref().is_some_and(is_cbq_path) {
         anyhow::bail!("OUTPUT2 cannot be CBQ; CBQ pairing is native (use a single --output)");
     }
     if output_format == Format::Cbq && !(1..=22).contains(&config.compression_level) {
@@ -1051,8 +1065,12 @@ impl FilterProcessor {
 
         if decision.keep {
             self.local_stats.output_bp += read.seq.len() as u64;
-            self.output
-                .push_read(read, self.rename, self.discard_quality, &self.rename_counter)?;
+            self.output.push_read(
+                read,
+                self.rename,
+                self.discard_quality,
+                &self.rename_counter,
+            )?;
         } else {
             self.local_stats.filtered_seqs += 1;
             self.local_stats.filtered_bp += read.seq.len() as u64;
@@ -1241,7 +1259,7 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
     if config.check_pairs
         && !config.interleaved
         && config.input2_path.is_none()
-        && !config.input_path.ends_with(".cbq")
+        && !is_cbq_path(config.input_path)
     {
         validate_check_pairs_mode(true, false)?;
     }
@@ -1385,6 +1403,12 @@ pub fn run_with_index(
     let interleaved_stdin = config.input_path == "-" && config.input2_path.as_deref() == Some("-");
     let interleaved_input = config.interleaved || interleaved_stdin;
     let output_format = resolve_output_format(config);
+    // `.cba` names a quality-free CBQ, implying --discard-quality for the output
+    let discard_quality = config.discard_quality
+        || config
+            .output_path
+            .as_deref()
+            .is_some_and(|path| is_cba_path(&path.to_string_lossy()));
     let (layout, input) = open_input(config, interleaved_input)?;
     validate_input_output(&layout, output_format, config)?;
 
@@ -1460,7 +1484,7 @@ pub fn run_with_index(
                 .expect("CBQ output implies a named path");
             let cbq_writer = BinseqWriterBuilder::new(BinseqFormat::Cbq)
                 .paired(layout.paired)
-                .quality(layout.qualities && !config.discard_quality)
+                .quality(layout.qualities && !discard_quality)
                 .headers(layout.headers || config.rename)
                 .flags(layout.flags)
                 .block_size(
@@ -1518,7 +1542,7 @@ pub fn run_with_index(
         prefix_length: config.prefix_length,
         deplete: config.deplete,
         rename: config.rename,
-        discard_quality: config.discard_quality,
+        discard_quality,
         debug: config.debug,
         check_pairs: config.check_pairs,
         ordered: config.ordered,

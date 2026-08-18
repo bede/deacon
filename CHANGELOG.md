@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `deacon filter --ordered` preserves output order via paraseq 0.5.0; also exposed as `ordered` in the Python bindings and JSON summary.
-- `deacon filter` accepts CBQ (BINSEQ) input, detected automatically, and writes CBQ when given a `.cbq` path; paired reads are stored as native paired records in a single file. Output block size is the greater of `--cbq-block-size` (default 16 MiB) and the input block size for CBQ input.
+- `deacon filter` accepts CBQ (BINSEQ) input and writes CBQ when given a `.cbq` path. Paired CBQ records are supported. Output block size is the greater of `--cbq-block-size` (default 16 MiB) and the input block size given CBQ input. By convention a `.cba` output extension also writes CBQ without quality scores, implying `--discard-quality`.
 
 ### Changed
 

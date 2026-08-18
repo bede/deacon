@@ -66,7 +66,7 @@ enum Command {
         #[arg(short = 'R', long = "rename", default_value_t = false)]
         rename: bool,
 
-        /// Path to output file (stdout by default; detects fastx with .gz, .zst, .xz, or binseq with .cbq)
+        /// Path to output file (fastx to stdout by default; detects .gz, .zst, .xz, .cbq, .cba)
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
 

@@ -339,7 +339,7 @@ pub struct FilterConfig<'a> {
     /// Replace sequence headers with incrementing numbers (1, 2, 3...)
     pub rename: bool,
 
-    /// Emit fasta or quality-free cbq regardless of input format
+    /// Emit fasta or quality-free cbq regardless of input format (implied by a .cba output)
     pub discard_quality: bool,
 
     /// Preserve input record ordering (deterministic, slightly slower)
