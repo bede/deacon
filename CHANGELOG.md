@@ -5,17 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.17.0] - 2026-08-18
 
 ### Added
 
-- `deacon filter --ordered` preserves output order via paraseq 0.5.0; also exposed as `ordered` in the Python bindings and JSON summary.
-- `deacon filter` accepts CBQ (BINSEQ) input and writes CBQ when given a `.cbq` path. Paired CBQ records are supported. Output block size is the greater of `--cbq-block-size` (default 16 MiB) and the input block size given CBQ input. By convention a `.cba` output extension also writes CBQ without quality scores, implying `--discard-quality`.
+- `deacon filter --ordered` preserves output order via paraseq 0.5.0.  Arg `ordered` added to Python bindings and JSON summary.
+- `deacon filter` accepts CBQ (BINSEQ) input and writes CBQ when given a `.cbq` path. Single and paired CBQ is supported. Output block size is the greater of `--cbq-block-size` (default 16 MiB) and the input block size given CBQ input. By convention an alternate `.cba` output extension writes CBQ without quality scores, implying `--discard-quality`.
+- Python `Index.filter()` now exposes `check_pairs`, `summary`, and `cbq_block_size`, and accepts path-like objects for all paths.
 
 ### Changed
 
-- Python `Index.filter()` options after `fastq2` are keyword-only.
-- `deacon filter --fasta` (`-f`) is now `--discard-quality` (no short form), since it discards quality scores for both fastx output (yielding FASTA) and CBQ output (yielding a quality-free CBQ). The Python binding's `output_fasta` keyword becomes `discard_quality`.
+- **Breaking (Python):** index/filter input paths are positional-only; options and all `Index.fetch()` arguments are keyword-only. `filter` also renames `fastq`/`fastq2` to `input`/`input2`.
+- Python filtering rejects `abs_threshold=0`, matching the CLI.
+- Renamed `--fasta` (`-f`)/`output_fasta` to `--discard-quality`/`discard_quality`.
 
 ### Removed
 

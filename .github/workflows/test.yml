@@ -16,7 +16,7 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo registry
@@ -28,3 +28,27 @@ jobs:
       # Not a default workspace member, so cargo test skips it
       - name: Run deacon-wasm unit tests
         run: cargo test -p deacon-wasm
+
+  python-test:
+    name: Python bindings
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+      - name: Use portable config
+        run: mv .cargo/config-portable.toml .cargo/config.toml
+      - name: Build bindings
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install "maturin>=1.7,<2"
+          .venv/bin/maturin develop -m deacon-py/Cargo.toml
+      - name: Run Python tests
+        run: .venv/bin/python -m unittest discover -s deacon-py/tests -v
