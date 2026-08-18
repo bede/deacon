@@ -37,7 +37,7 @@ jobs:
           # abi3-py312 built with whatever Python the runner has
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 1
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.target }}
           path: dist/*
@@ -51,7 +51,7 @@ jobs:
         with:
           command: sdist
           args: -m deacon-py/Cargo.toml --out dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sdist
           path: dist/*
@@ -64,7 +64,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
