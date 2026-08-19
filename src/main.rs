@@ -297,6 +297,7 @@ enum Reply {
     /// Reply for `server status`.
     IndexPath(Option<PathBuf>),
     Done,
+    Error(String),
 }
 
 /// Parse and validate the BFF fingerprint width (16 or 32 bits)
@@ -353,19 +354,34 @@ fn main() -> Result<()> {
         rayon::ThreadPoolBuilder::new()
             .num_threads(*threads as usize)
             .build_global()
-            .context("Failed to initialise thread pool")?;
+            .context("Failed to initialize thread pool")?;
 
         // Remove existing socket if present
         let _ = std::fs::remove_file("deacon_server_socket");
         let listener = UnixListener::bind("deacon_server_socket")?;
+
+        // Loop over incoming connections.
         'stream: for stream in listener.incoming() {
-            let mut stream = stream.unwrap();
+            let mut stream = match stream {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to accept incoming connection: {e}");
+                    continue 'stream;
+                }
+            };
             let mut message = vec![];
             let mut buf = vec![0; 10000];
             loop {
-                let len = stream.read(&mut buf)?;
+                let len = match stream.read(&mut buf) {
+                    Ok(len) => len,
+                    Err(e) => {
+                        eprintln!("Failed to read request from client: {e}");
+                        continue 'stream;
+                    }
+                };
                 if len == 0 {
                     // drop this message
+                    eprintln!("Incoming request was empty.");
                     continue 'stream;
                 }
                 let buf = &buf[..len];
@@ -376,19 +392,25 @@ fn main() -> Result<()> {
                     break;
                 }
             }
-            let message: Command = serde_json::from_slice(&message).unwrap();
-            match message {
+            let message: Command = match serde_json::from_slice(&message) {
+                Ok(message) => message,
+                Err(e) => {
+                    eprintln!("Failed to parse request from client: {e}");
+                    continue 'stream;
+                }
+            };
+            let reply_status = match message {
                 Command::Server {
                     command: ServerCommand::Start { .. },
                 } => {
                     // just reply Done from already-started server.
-                    serde_json::to_writer(stream, &Reply::Done)?;
+                    serde_json::to_writer(stream, &Reply::Done)
                 }
                 Command::Server {
                     command: ServerCommand::Status,
                 } => {
                     let reply = Reply::IndexPath(deacon::current_index_path());
-                    serde_json::to_writer(stream, &reply)?;
+                    serde_json::to_writer(stream, &reply)
                 }
                 Command::Server {
                     command: ServerCommand::Stop,
@@ -399,9 +421,16 @@ fn main() -> Result<()> {
                     break;
                 }
                 command => {
-                    process_command(&command)?;
-                    serde_json::to_writer(stream, &Reply::Done)?;
+                    let result = process_command(&command);
+                    let reply = match result {
+                        Ok(()) => Reply::Done,
+                        Err(e) => Reply::Error(format!("{e:#}")),
+                    };
+                    serde_json::to_writer(stream, &reply)
                 }
+            };
+            if let Err(e) = reply_status {
+                eprintln!("Failed to send reply to client: {e}");
             }
         }
 
@@ -414,7 +443,8 @@ fn main() -> Result<()> {
         serde_json::to_writer(&stream, &cli.command)?;
         stream.write_all(b"\0")?;
         stream.flush()?;
-        let message: Reply = serde_json::from_reader(stream).unwrap();
+        let message: Reply = serde_json::from_reader(stream)
+            .map_err(|e| anyhow::anyhow!("Could not read the server response:\n{e}"))?;
         match message {
             Reply::IndexPath(index_path) => {
                 println!("Server is running.");
@@ -425,6 +455,11 @@ fn main() -> Result<()> {
                 }
             }
             Reply::Done => {}
+            Reply::Error(e) => {
+                return Err(anyhow::anyhow!(
+                    "The server had an error while processing the command:\n{e}"
+                ));
+            }
         }
 
         return Ok(());
