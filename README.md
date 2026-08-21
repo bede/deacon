@@ -325,7 +325,7 @@ Use `-s summary.json` to save detailed filtering statistics:
 
 ## Server mode
 
-From version `0.11.0`, it is possible to eliminate index loading overhead at the start of each filter operation by preloading the index in the memory of a local server process. Subsequent filtering commands with `--use-server` are executed by the server process using a UNIX socket. Having started a server process, the index of the first filtering command it receives persists in memory for the life of that server process, enabling subsequent filter commands to be served rapidly without hash set construction overhead.
+From version `0.11.0`, it is possible to eliminate index loading overhead at the start of each filter operation by preloading the index in the memory of a local server process. Subsequent filtering commands with `--use-server` are executed by the server process using a UNIX socket. Having started a server process, the index of the first filtering command it receives persists in memory for the life of that server process, enabling subsequent filter commands to be served rapidly without HashSet construction overhead.
 
 ```bash
 # Start the server
@@ -341,6 +341,10 @@ deacon --use-server filter ref.idx reads.fq -o filt.fq -s summary.json
 deacon --use-server server stop
 ```
 
+## Python bindings
+
+Since `0.16.0`, Deacon can also be used as a [Python package distributed via PyPI](https://pypi.org/project/deacon/). Like server mode, this enables multihreaded filtering with index reuse. Refer to the [Python readme](https://github.com/bede/deacon/blob/main/deacon-py/python/README.md) for more information.
+
 ## Workflow manager integration
 
 ### Nextflow (nf-core)
@@ -349,7 +353,8 @@ deacon --use-server server stop
 - Subworkflow [`fastq_index_filter_deacon`](https://nf-co.re/subworkflows/fastq_index_filter_deacon/)
 
 ### Galaxy
-Work in progress: https://github.com/galaxyproject/tools-iuc/pull/7473
+
+- Tool Shed suite [`suite_deacon`](https://toolshed.g2.bx.psu.edu/view/iuc/suite_deacon), installable into any Galaxy instance
 
 
 
