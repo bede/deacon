@@ -901,13 +901,13 @@ impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor<'_> {
 #[cfg(feature = "cli")]
 fn stream_diff_fastx(
     fastx_path: &Path,
-    kmer_length: u8,
     window_size: u8,
     first_header: &IndexHeader,
     threads: u16,
     first_minimizers: &mut crate::MinimizerSet,
 ) -> Result<(usize, usize)> {
     let path = fastx_path;
+    let kmer_length = first_header.kmer_length();
 
     // Validate k-mer and window size constraints
     let temp_config = crate::IndexConfig {
@@ -920,14 +920,7 @@ fn stream_diff_fastx(
     };
     temp_config.validate()?;
 
-    // k must match; w must match or be 1 (w=1 emits every k-mer, for exact masking)
-    if kmer_length != first_header.kmer_length() {
-        return Err(anyhow::anyhow!(
-            "FASTX k={} must match first index k={}",
-            kmer_length,
-            first_header.kmer_length()
-        ));
-    }
+    // w must match or be 1 (w=1 emits every k-mer, for exact masking)
     if window_size != first_header.window_size() && window_size != 1 {
         return Err(anyhow::anyhow!(
             "FASTX w={} must match first index w={} or be 1 (for exact k-mer subtraction)",
@@ -1000,7 +993,6 @@ fn stream_diff_fastx(
 pub fn diff(
     first: &Path,
     second: &Path,
-    kmer_length: Option<u8>,
     window_size: Option<u8>,
     threads: u16,
     output: Option<&Path>,
@@ -1015,11 +1007,11 @@ pub fn diff(
     eprintln!("First index: loaded {} minimizers", first_minimizers.len());
 
     // Guess if second file is an index or FASTX file
-    let second_minimizers = if let (Some(k), Some(w)) = (kmer_length, window_size) {
-        // Second file is a FASTX file - stream diff with provided k, w
+    let second_minimizers = if let Some(w) = window_size {
+        // An explicit window marks the second file as FASTX; k comes from the first index
         let before_count = first_minimizers.len();
         let (_seq_count, _total_bp) =
-            stream_diff_fastx(second, k, w, &header, threads, &mut first_minimizers)?;
+            stream_diff_fastx(second, w, &header, threads, &mut first_minimizers)?;
 
         // Report results
         eprintln!(
@@ -1061,14 +1053,13 @@ pub fn diff(
         } else {
             // Second file is not a valid index, treat as FASTX file
             // Use k and w from first index header and do a streaming diff
-            let k = header.kmer_length();
             let w = header.window_size();
 
             // Count minimizers before diff
             let before_count = first_minimizers.len();
 
             let (_seq_count, _total_bp) =
-                stream_diff_fastx(second, k, w, &header, threads, &mut first_minimizers)?;
+                stream_diff_fastx(second, w, &header, threads, &mut first_minimizers)?;
 
             // Report results
             eprintln!(

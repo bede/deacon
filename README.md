@@ -174,7 +174,7 @@ A differentiating feature of Deacon is the ease of combining, subtracting and in
 - Use `deacon index union 1.idx 2.idx 3.idx… > 1+2+3.idx` to succinctly combine two or more indexes.
 - Use `deacon index diff 1.idx 2.idx > 1-2.idx` to subtract minimizers in 2.idx from 1.idx. Useful for masking out shared minimizer content between e.g. target and host genomes.
   - `deacon index diff` also supports subtracting minimizers from an index using a fastx file or stream directly, e.g. `deacon index diff 1.idx 2.fa.gz > 1-2.idx` or `zcat *.fa.gz | deacon index diff 1.idx - > 1-2.idx`. This enables diffing with larger-than-memory sequence collections if desired.
-  - A `w=1` source subtracts *every* k-mer it contains rather than a windowed minimizer subset, e.g. `deacon index diff 1.idx kmers.fa -k 31 -w 1`. Use this to subtract exact k-mers. Otherwise `k` and `w` must match the first index.
+  - Specifying `w=1` subtracts every single k-mer in the second index/FASTX from the first.
 
 - Use `deacon index intersect 1.idx 2.idx… > 1∩2.idx` to find the intersection of minimizers in two or more indexes.
 
@@ -355,6 +355,10 @@ Since `0.16.0`, Deacon can also be used as a [Python package distributed via PyP
 ### Galaxy
 
 - Tool Shed suite [`suite_deacon`](https://toolshed.g2.bx.psu.edu/view/iuc/suite_deacon), installable into any Galaxy instance
+
+## Limitations
+
+Deacon is benchmarked using both long reads and 2x150bp short reads. Classification accuracy deteriorates with very short reads however – if classifying old 50bp Illumina reads for example, consider using `--abs-threshold 1` (`-a 1`). 
 
 
 

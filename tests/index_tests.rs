@@ -200,12 +200,10 @@ fn test_index_diff_three_methods() {
         .unwrap();
     assert!(output1.status.success());
 
-    // Method 2: Index + FASTX file diff (with explicit k,w)
+    // Method 2: Index + FASTX file diff (with explicit w)
     let output2 = cargo::cargo_bin_cmd!("deacon")
         .arg("index")
         .arg("diff")
-        .arg("-k")
-        .arg("31")
         .arg("-w")
         .arg("15")
         .arg("-o")
@@ -319,12 +317,10 @@ fn test_index_diff_auto_detect_parameters() {
         .unwrap();
     assert!(output_auto.status.success());
 
-    // Method 2: Explicitly specify k,w (should match index defaults)
+    // Method 2: Explicitly specify w (k always comes from the first index)
     let output_explicit = cargo::cargo_bin_cmd!("deacon")
         .arg("index")
         .arg("diff")
-        .arg("-k")
-        .arg("31")
         .arg("-w")
         .arg("15")
         .arg("-o")
@@ -415,61 +411,69 @@ fn test_index_build_w1_exact_kmers() {
     );
 }
 
-// A w=1 source (fastx via -w 1, or a w=1 index) fully masks a w=15 index.
+// Diffing one k-mer as raw FASTX or as a w=1 index produces the same result.
 #[test]
-fn test_index_diff_w1_exact_masking() {
+fn test_index_diff_one_kmer_fastx_matches_index() {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("test.fasta");
     let ref_path = temp_dir.path().join("ref.bin");
-    let kmers_fa = temp_dir.path().join("kmers.fa");
-    let kmers_idx = temp_dir.path().join("kmers.bin");
-    let out_fa = temp_dir.path().join("out_fa.bin");
-    let out_idx = temp_dir.path().join("out_idx.bin");
+    let kmer_fa = temp_dir.path().join("kmer.fa");
+    let kmer_idx = temp_dir.path().join("kmer.bin");
+    let fastx_result = temp_dir.path().join("fastx-result.bin");
+    let index_result = temp_dir.path().join("index-result.bin");
 
-    create_test_fasta(&fasta_path, 1);
+    // A 45bp sequence contains one k=31, w=15 minimizer window.
+    fs::write(
+        &fasta_path,
+        ">seq\nACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTA\n",
+    )
+    .unwrap();
     build_index(&fasta_path, &ref_path);
 
     cargo::cargo_bin_cmd!("deacon")
         .args(["index", "dump", "-o"])
-        .arg(&kmers_fa)
+        .arg(&kmer_fa)
         .arg(&ref_path)
         .assert()
         .success();
-
-    // Route 1: diff the fasta of k-mers directly with -w 1
-    let out1 = cargo::cargo_bin_cmd!("deacon")
-        .args(["index", "diff", "-k", "31", "-w", "1", "-o"])
-        .arg(&out_fa)
-        .arg(&ref_path)
-        .arg(&kmers_fa)
-        .output()
-        .unwrap();
-    assert!(out1.status.success());
     assert_eq!(
-        extract_remaining_count(&out1.stderr),
-        0,
-        "w=1 fastx diff should remove all minimizers"
+        fs::read_to_string(&kmer_fa)
+            .unwrap()
+            .lines()
+            .filter(|line| line.starts_with('>'))
+            .count(),
+        1
     );
 
-    // Route 2: pre-build a w=1 index and index-diff it
     cargo::cargo_bin_cmd!("deacon")
         .args(["index", "build", "-w", "1", "-o"])
-        .arg(&kmers_idx)
-        .arg(&kmers_fa)
+        .arg(&kmer_idx)
+        .arg(&kmer_fa)
         .assert()
         .success();
-    let out2 = cargo::cargo_bin_cmd!("deacon")
-        .args(["index", "diff", "-o"])
-        .arg(&out_idx)
+
+    let fastx_diff = cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "diff", "-w", "1", "-o"])
+        .arg(&fastx_result)
         .arg(&ref_path)
-        .arg(&kmers_idx)
+        .arg(&kmer_fa)
         .output()
         .unwrap();
-    assert!(out2.status.success());
+    let index_diff = cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "diff", "-o"])
+        .arg(&index_result)
+        .arg(&ref_path)
+        .arg(&kmer_idx)
+        .output()
+        .unwrap();
+
+    assert!(fastx_diff.status.success());
+    assert!(index_diff.status.success());
+    assert_eq!(extract_remaining_count(&fastx_diff.stderr), 0);
+    assert_eq!(extract_remaining_count(&index_diff.stderr), 0);
     assert_eq!(
-        extract_remaining_count(&out2.stderr),
-        0,
-        "w=1 index diff should remove all minimizers"
+        fs::read(&fastx_result).unwrap(),
+        fs::read(&index_result).unwrap()
     );
 }
 

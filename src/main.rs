@@ -206,11 +206,7 @@ enum IndexCommand {
         #[arg(required = true)]
         second: PathBuf,
 
-        /// K-mer length (required if second argument is FASTX file, 1-32)
-        #[arg(short = 'k', long = "kmer-length", value_parser = clap::value_parser!(u8).range(1..=32))]
-        kmer_length: Option<u8>,
-
-        /// Window size (required if second argument is FASTX file)
+        /// Window size for FASTX input (defaults to the first index; w=1 uses every k-mer)
         #[arg(short = 'w', long = "window-size")]
         window_size: Option<u8>,
 
@@ -523,20 +519,12 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
             IndexCommand::Diff {
                 first,
                 second,
-                kmer_length,
                 window_size,
                 output,
                 threads,
             } => {
-                index_diff(
-                    first,
-                    second,
-                    *kmer_length,
-                    *window_size,
-                    *threads,
-                    output.as_deref(),
-                )
-                .context("Failed to run index diff command")?;
+                index_diff(first, second, *window_size, *threads, output.as_deref())
+                    .context("Failed to run index diff command")?;
             }
             IndexCommand::Dump { index, output } => {
                 index_dump(index, output.as_deref()).context("Failed to run index dump command")?;

@@ -16,11 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Breaking (Python):** index/filter input paths are positional-only; options and all `Index.fetch()` arguments are keyword-only. `filter` also renames `fastq`/`fastq2` to `input`/`input2`.
+- `index_diff` now derives k from the first index and no longer accepts a redundant k-mer length argument.
 - Python filtering rejects `abs_threshold=0`, matching the CLI.
 - Renamed `--fasta` (`-f`)/`output_fasta` to `--discard-quality`/`discard_quality`.
 
 ### Removed
 
+- Removed the redundant `-k`/`--kmer-length` option from `deacon index diff`; use `-w 1` to subtract every k-mer from a FASTX source.
 - Removed `--rename-random` CLI arg and `rename_random` from the JSON summary and Python bindings.
 
 ## [0.16.0] - 2026-08-09
