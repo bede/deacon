@@ -19,6 +19,13 @@ fn create_test_fasta(path: &Path, variant: usize) {
     fs::write(path, fasta_content).unwrap();
 }
 
+// 300bp sequence yielding 38 distinct minimizers at k=31, w=15
+const DIVERSE_SEQ: &str = "GCTAAAGACAATTACATAACATACACGTCAGCACGAAACTTGTTGGCCCAGTGTGAATCGCTTAAGGGTTAAGTAAGTGTGATGCATACGCCTTTACTTGCTGTGTCCACCCCATCGGACTGGCATTTTTATTACACTCAGAAACAGAACTCGGGTAATTTTGACAGGTCACGCAGAGGCGCGCCCTCCTGAAGTGCGTGGACACTCGCTATGAATCTCTGATTTACCCACTCTGCCAAACTCCAGCGCGGTCAGTTCCATCACCCTAAGTAACCGAATAATGCGTTCGCTCTATTGACT";
+
+fn create_diverse_fasta(path: &Path) {
+    fs::write(path, format!(">seq1\n{}\n", DIVERSE_SEQ)).unwrap();
+}
+
 // Index builder helper
 fn build_index(fasta_path: &Path, bin_path: &Path) {
     let mut cmd = cargo::cargo_bin_cmd!("deacon");
@@ -587,6 +594,123 @@ fn test_index_intersect() {
         intersect_size,
         bin2_size
     );
+}
+
+// Dump an index to length-k records, keep a subset, rebuild at w=1.
+fn build_w1_subset_index(ref_path: &Path, dir: &Path, records: usize) -> std::path::PathBuf {
+    let kmers_fa = dir.join("kmers.fa");
+    let kmers_idx = dir.join("kmers.bin");
+
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "dump", "-o"])
+        .arg(&kmers_fa)
+        .arg(ref_path)
+        .assert()
+        .success();
+
+    let dumped = fs::read_to_string(&kmers_fa).unwrap();
+    let lines: Vec<&str> = dumped.lines().collect();
+    assert!(
+        lines.len() > records * 2,
+        "index must have more than {} dumped records",
+        records
+    );
+    let subset: String = lines[..records * 2]
+        .iter()
+        .map(|l| format!("{}\n", l))
+        .collect();
+    fs::write(&kmers_fa, &subset).unwrap();
+
+    // These records are 31bp, shorter than k+w-1 = 45, so a w=15 build would
+    // yield nothing at all: w=1 is the only way to index them.
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "build", "-w", "1", "-o"])
+        .arg(&kmers_idx)
+        .arg(&kmers_fa)
+        .assert()
+        .success();
+
+    kmers_idx
+}
+
+// A w=1 operand intersects on exact k-mers regardless of the first index's w,
+// and the output declares the first index's w.
+#[test]
+fn test_index_intersect_w1_operand() {
+    const SUBSET_RECORDS: usize = 3;
+
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("test.fasta");
+    let ref_path = temp_dir.path().join("ref.bin");
+    let out_path = temp_dir.path().join("out.bin");
+
+    create_diverse_fasta(&fasta_path);
+    build_index(&fasta_path, &ref_path);
+
+    let kmers_idx = build_w1_subset_index(&ref_path, temp_dir.path(), SUBSET_RECORDS);
+
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "intersect", "-o"])
+        .arg(&out_path)
+        .arg(&ref_path)
+        .arg(&kmers_idx)
+        .assert()
+        .success();
+
+    let info = cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "info"])
+        .arg(&out_path)
+        .output()
+        .unwrap();
+    assert!(info.status.success());
+    assert_eq!(
+        extract_distinct_count(&info.stderr),
+        SUBSET_RECORDS,
+        "intersection should retain exactly the w=1 operand's k-mers"
+    );
+    let stderr = String::from_utf8_lossy(&info.stderr);
+    assert!(
+        stderr.contains("Window size (w): 15"),
+        "output should declare w=15, not the w=1 operand's window: {}",
+        stderr
+    );
+
+    // The w=1 exemption applies to later operands only, matching index diff.
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "intersect", "-o"])
+        .arg(&out_path)
+        .arg(&kmers_idx)
+        .arg(&ref_path)
+        .assert()
+        .failure();
+}
+
+// A non-1 w mismatch between two indexes must still error.
+#[test]
+fn test_index_intersect_w_mismatch_errors() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("test.fasta");
+    let w15_path = temp_dir.path().join("w15.bin");
+    let w21_path = temp_dir.path().join("w21.bin");
+    let out_path = temp_dir.path().join("out.bin");
+
+    create_test_fasta(&fasta_path, 1);
+    build_index(&fasta_path, &w15_path);
+
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "build", "-w", "21", "-o"])
+        .arg(&w21_path)
+        .arg(&fasta_path)
+        .assert()
+        .success();
+
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "intersect", "-o"])
+        .arg(&out_path)
+        .arg(&w15_path)
+        .arg(&w21_path)
+        .assert()
+        .failure();
 }
 
 #[test]

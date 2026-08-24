@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `deacon filter --ordered` preserves output order via paraseq 0.5.0.  Arg `ordered` added to Python bindings and JSON summary.
 - `deacon filter` accepts CBQ (BINSEQ) input and writes CBQ when given a `.cbq` path. Single and paired CBQ is supported. Output block size is the greater of `--cbq-block-size` (default 16 MiB) and the input block size given CBQ input. By convention an alternate `.cba` output extension writes CBQ without quality scores, implying `--discard-quality`.
 - Python `Index.filter()` now exposes `check_pairs`, `summary`, and `cbq_block_size`, and accepts path-like objects for all paths.
+- `deacon index intersect` accepts `w=1` indexes in any position after the first, intersecting them with an index of any `w`, as `deacon index diff` already does for its second index.
 
 ### Changed
 

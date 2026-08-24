@@ -1308,13 +1308,13 @@ pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
         header.window_size()
     );
 
-    // Check header compat
+    // Check header compat, allow w=1 passthrough
     for (i, (file_header, _)) in headers_and_counts.iter().enumerate() {
         if file_header.kmer_length() != header.kmer_length()
-            || file_header.window_size() != header.window_size()
+            || (file_header.window_size() != header.window_size() && file_header.window_size() != 1)
         {
             return Err(anyhow::anyhow!(
-                "Incompatible headers: index {} has k={}, w={}, but first index has k={}, w={}",
+                "Incompatible headers: index {} has k={}, w={}, but first index has k={}, w={} (w must match or index must be w=1)",
                 i,
                 file_header.kmer_length(),
                 file_header.window_size(),
