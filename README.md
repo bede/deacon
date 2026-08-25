@@ -90,7 +90,7 @@ Prebuilt pangenome indexes are provided. These can be downloaded using the links
 
 ### Filtering
 
-The main command `deacon filter` accepts an index path followed by up to two sequence file paths, depending on whether input sequences originate from stdin, a single file, or paired input files. Indexes are built with `deacon index build`.  Paired inputs are supported as either two separate or one interleaved file/stream when using `--interleaved`, and may be written either to separate paired output files or one interleaved file. For paired sequences, distinct minimizer hits originating from either mate are counted. Paired read headers can be validated using `--check-pairs`. By default, input sequences must meet both an absolute threshold of 2 minimizer hits (`-a 2`) and a relative threshold of 1% of minimizers (`-r 0.01`) to pass the filter. Filtering can be inverted for e.g. host depletion using the `--deplete` (`-d`) flag. Gzip, Zstandard, and xz compressed FASTX formats are detected automatically by file extension. Single and paired [BINSEQ](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v2) CBQ files are natively supported for both input and output. CBQ input is detected by content rather than file extension, while a `.cbq` output path writes CBQ, and a `.cba` output path writes CBQ without quality.
+The main command `deacon filter` accepts an index path followed by up to two sequence file paths, depending on whether input sequences originate from stdin, a single file, or paired input files. Indexes are built with `deacon index build`.  Paired inputs are supported as either two separate or one interleaved file/stream when using `--interleaved`, and may be written either to separate paired output files or one interleaved file. For paired sequences, distinct minimizer hits originating from either mate are counted. Paired read headers can be validated using `--check-pairs`. By default, input sequences must meet both an absolute threshold of 2 minimizer hits (`-a 2`) and a relative threshold of 1% of minimizers (`-r 0.01`) to pass the filter. Filtering can be inverted for e.g. host depletion using the `--deplete` (`-d`) flag. Use `--inverse-output` to write discarded records at the same time. Gzip, Zstandard, and xz compressed FASTX formats are detected automatically by file extension. Single and paired [BINSEQ](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v2) CBQ files are natively supported for both input and output. CBQ input is detected by content rather than file extension, while a `.cbq` output path writes CBQ, and a `.cba` output path writes CBQ without quality.
 
 #### Examples
 
@@ -101,6 +101,9 @@ deacon filter genes.idx sequences.fa.gz -o matches.fa.gz
 
 # Host depletion using the panhuman-1 index
 deacon filter -d panhuman-1.k31w15.idx reads.fq.gz -o filt.fq.gz
+
+# Write retained and discarded reads
+deacon filter -d panhuman-1.k31w15.idx reads.fq.gz -o filt.fq.gz -i host.fq.gz
 
 # High sensitivity host depletion with absolute threshold of 1 and no relative threshold
 deacon filter -d -a 1 -r 0 panhuman-1.k31w15.idx reads.fq.gz -o filt.fq.gz
@@ -120,6 +123,8 @@ deacon filter -d panhuman-1.k31w15.idx reads.fq.zst -o filt.fq.zst
 # Paired reads
 deacon filter -d panhuman-1.k31w15.idx r1.fq.gz r2.fq.gz > filt12.fq
 deacon filter -d panhuman-1.k31w15.idx r1.fq.gz r2.fq.gz -o filt.r1.fq.gz -O filt.r2.fq.gz
+deacon filter panhuman-1.k31w15.idx r1.fq.gz r2.fq.gz \
+  -o matches.r1.fq.gz -O matches.r2.fq.gz -i rest.r1.fq.gz -I rest.r2.fq.gz
 
 # Validate matching Illumina record names while filtering paired sequences
 deacon filter -d --check-pairs panhuman-1.k31w15.idx r1.fq.gz r2.fq.gz -o filt.r1.fq.gz -O filt.r2.fq.gz
@@ -217,6 +222,10 @@ Options:
           Path to output file (fastx to stdout by default; detects .gz, .zst, .xz, .cbq, .cba)
   -O, --output2 <OUTPUT2>
           Optional path to second paired output fastx file (detects .gz, .zst, .xz)
+  -i, --inverse-output <INVERSE_OUTPUT>
+          Path to inverse output file for discarded records (detects .gz, .zst, .xz, .cbq, .cba)
+  -I, --inverse-output2 <INVERSE_OUTPUT2>
+          Optional path to second paired inverse output fastx file (detects .gz, .zst, .xz)
   -s, --summary <SUMMARY>
           Path to JSON summary output file
   -t, --threads <THREADS>
@@ -298,6 +307,8 @@ Use `-s summary.json` to save detailed filtering statistics:
   "input2": null,
   "output": "-",
   "output2": null,
+  "inverse_output": null,
+  "inverse_output2": null,
   "k": 31,
   "w": 15,
   "abs_threshold": 2,

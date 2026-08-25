@@ -318,6 +318,12 @@ pub struct FilterConfig<'a> {
     /// Path to optional second output fastx file for paired reads (detects .gz and .zst)
     pub output2_path: Option<&'a str>,
 
+    /// Path to inverse output file for discarded records (detects .gz and .zst)
+    pub inverse_output_path: Option<&'a Path>,
+
+    /// Path to optional second paired inverse output fastx file (detects .gz and .zst)
+    pub inverse_output2_path: Option<&'a str>,
+
     /// Absolute threshold for filtering sequences
     pub abs_threshold: usize,
 

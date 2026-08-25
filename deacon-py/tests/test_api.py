@@ -47,6 +47,8 @@ class SignatureTests(unittest.TestCase):
         parameters = inspect.signature(Index.filter).parameters
         self.assertEqual(parameters["input"].kind, inspect.Parameter.POSITIONAL_ONLY)
         self.assertEqual(parameters["cbq_block_size"].default, 16)
+        self.assertIsNone(parameters["inverse_output"].default)
+        self.assertIsNone(parameters["inverse_output2"].default)
         for name, parameter in parameters.items():
             if name not in {"self", "input"}:
                 self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY, name)
@@ -88,6 +90,29 @@ class FilteringTests(unittest.TestCase):
             self.assertEqual(json.loads(summary_path.read_text()), summary)
             self.assertEqual(summary["check_pairs"], False)
             self.assertGreater(summary["seqs_in"], 0)
+
+    def test_inverse_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            primary = directory / "primary.fastq"
+            inverse = directory / "inverse.fastq"
+            summary = self.index.filter(
+                READS,
+                output=primary,
+                inverse_output=inverse,
+                threads=1,
+            )
+
+            self.assertTrue(primary.is_file())
+            self.assertTrue(inverse.is_file())
+            self.assertEqual(summary["inverse_output"], str(inverse))
+            self.assertEqual(
+                summary["seqs_out"] + summary["seqs_removed"],
+                summary["seqs_in"],
+            )
+            records = len(primary.read_text().splitlines()) // 4
+            inverse_records = len(inverse.read_text().splitlines()) // 4
+            self.assertEqual(records + inverse_records, summary["seqs_in"])
 
     def test_check_pairs(self):
         with tempfile.TemporaryDirectory() as directory:

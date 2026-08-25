@@ -13,7 +13,7 @@ class Index:
         """
         Download a prebuilt index, then load and return it.
         """
-    def filter(self, input: str |PathLike[str], /, *, input2: str |PathLike[str] |None = None, interleaved: bool = False, check_pairs: bool = False, deplete: bool = False, rename: bool = False, output: str |PathLike[str] |None = None, output2: str |PathLike[str] |None = None, summary: str |PathLike[str] |None = None, abs_threshold: int = 2, rel_threshold: float = 0.01, prefix_length: int = 0, discard_quality: bool = False, ordered: bool = False, threads: int = 8, compression_level: int = 2, compression_threads: int = 0, cbq_block_size: int = 16, quiet: bool = True, debug: bool = False) -> dict: ...
+    def filter(self, input: str |PathLike[str], /, *, input2: str |PathLike[str] |None = None, interleaved: bool = False, check_pairs: bool = False, deplete: bool = False, rename: bool = False, output: str |PathLike[str] |None = None, output2: str |PathLike[str] |None = None, inverse_output: str |PathLike[str] |None = None, inverse_output2: str |PathLike[str] |None = None, summary: str |PathLike[str] |None = None, abs_threshold: int = 2, rel_threshold: float = 0.01, prefix_length: int = 0, discard_quality: bool = False, ordered: bool = False, threads: int = 8, compression_level: int = 2, compression_threads: int = 0, cbq_block_size: int = 16, quiet: bool = True, debug: bool = False) -> dict: ...
     def info(self, /) -> dict:
         """
         Index metadata: k, w, format and minimizer/key count.

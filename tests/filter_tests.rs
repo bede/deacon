@@ -2007,6 +2007,37 @@ fn test_thread_allocation_auto_paired_gz() {
 
 #[test]
 #[cfg(feature = "compression")]
+fn test_thread_allocation_counts_inverse_outputs() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq1_path = temp_dir.path().join("reads1.fastq");
+    let fastq2_path = temp_dir.path().join("reads2.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    create_test_fasta(&fasta_path);
+    create_test_paired_fastq(&fastq1_path, &fastq2_path);
+    build_index(&fasta_path, &bin_path);
+
+    cargo::cargo_bin_cmd!("deacon")
+        .arg("filter")
+        .arg(&bin_path)
+        .arg(&fastq1_path)
+        .arg(&fastq2_path)
+        .arg("-o")
+        .arg(temp_dir.path().join("kept1.fastq.gz"))
+        .arg("-O")
+        .arg(temp_dir.path().join("kept2.fastq.gz"))
+        .arg("-i")
+        .arg(temp_dir.path().join("discarded1.fastq.gz"))
+        .arg("-I")
+        .arg(temp_dir.path().join("discarded2.fastq.gz"))
+        .args(["--threads", "8", "--compression-threads", "6"])
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("threads=8(2f+8c)"));
+}
+
+#[test]
+#[cfg(feature = "compression")]
 fn test_thread_allocation_manual_override() {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("ref.fasta");
@@ -3885,4 +3916,283 @@ fn cbq_invalid_compression_level_rejected() {
         .failure()
         .stderr(predicate::str::contains("Invalid CBQ compression level"));
     assert!(!no_create.exists());
+}
+
+fn write_inverse_partition_fixture(reference: &Path, reads: &Path) {
+    fs::write(reference, format!(">ref\n{}\n", "A".repeat(100))).unwrap();
+    fs::write(
+        reads,
+        format!(
+            ">match\n{}\n>discarded\n{}\n>short\nACGT\n",
+            "A".repeat(60),
+            "C".repeat(60)
+        ),
+    )
+    .unwrap();
+}
+
+fn fasta_ids(path: &Path) -> Vec<String> {
+    fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.strip_prefix('>').map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn inverse_output_partitions_search_and_deplete() {
+    let temp_dir = tempdir().unwrap();
+    let reference = temp_dir.path().join("ref.fasta");
+    let reads = temp_dir.path().join("reads.fasta");
+    let index = temp_dir.path().join("ref.idx");
+    write_inverse_partition_fixture(&reference, &reads);
+    build_index(&reference, &index);
+
+    for (deplete, expected_primary, expected_inverse) in [
+        (false, vec!["match"], vec!["discarded", "short"]),
+        (true, vec!["discarded", "short"], vec!["match"]),
+    ] {
+        let primary = temp_dir.path().join(format!("primary-{deplete}.fasta"));
+        let inverse = temp_dir.path().join(format!("inverse-{deplete}.fasta"));
+        let summary = temp_dir.path().join(format!("summary-{deplete}.json"));
+        let mut cmd = cargo::cargo_bin_cmd!("deacon");
+        cmd.args(["filter", "-a", "1", "-r", "0", "-t", "1"]);
+        if deplete {
+            cmd.arg("--deplete");
+        }
+        cmd.arg(&index)
+            .arg(&reads)
+            .arg("--output")
+            .arg(&primary)
+            .arg("--inverse-output")
+            .arg(&inverse)
+            .arg("--summary")
+            .arg(&summary)
+            .assert()
+            .success();
+
+        assert_eq!(fasta_ids(&primary), expected_primary);
+        assert_eq!(fasta_ids(&inverse), expected_inverse);
+        let summary: serde_json::Value =
+            serde_json::from_slice(&fs::read(&summary).unwrap()).unwrap();
+        assert_eq!(
+            summary["inverse_output"],
+            inverse.to_string_lossy().as_ref()
+        );
+        assert_eq!(summary["seqs_out"], expected_primary.len());
+        assert_eq!(summary["seqs_removed"], expected_inverse.len());
+    }
+}
+
+#[test]
+fn inverse_output_rename_uses_input_global_numbers() {
+    let temp_dir = tempdir().unwrap();
+    let reference = temp_dir.path().join("ref.fasta");
+    let reads = temp_dir.path().join("reads.fasta");
+    let index = temp_dir.path().join("ref.idx");
+    let primary = temp_dir.path().join("primary.fasta");
+    let inverse = temp_dir.path().join("inverse.fasta");
+    write_inverse_partition_fixture(&reference, &reads);
+    build_index(&reference, &index);
+
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-a", "1", "-r", "0", "--ordered", "--rename"])
+        .arg(&index)
+        .arg(&reads)
+        .args(["-o"])
+        .arg(&primary)
+        .args(["-i"])
+        .arg(&inverse)
+        .assert()
+        .success();
+
+    assert_eq!(fasta_ids(&primary), ["1"]);
+    assert_eq!(fasta_ids(&inverse), ["2", "3"]);
+}
+
+#[test]
+fn ordered_multibatch_inverse_rename_tracks_input_positions() {
+    let temp_dir = tempdir().unwrap();
+    let reference = temp_dir.path().join("ref.fasta");
+    let reads = temp_dir.path().join("reads.fasta");
+    let index = temp_dir.path().join("ref.idx");
+    let primary = temp_dir.path().join("primary.fasta");
+    let inverse = temp_dir.path().join("inverse.fasta");
+    fs::write(&reference, format!(">ref\n{}\n", "A".repeat(100))).unwrap();
+    let mut input = String::new();
+    for i in 0..2100 {
+        let base = if i % 2 == 0 { 'A' } else { 'C' };
+        input.push_str(&format!(">read{i}\n{}\n", base.to_string().repeat(60)));
+    }
+    fs::write(&reads, input).unwrap();
+    build_index(&reference, &index);
+
+    cargo::cargo_bin_cmd!("deacon")
+        .args([
+            "filter",
+            "-a",
+            "1",
+            "-r",
+            "0",
+            "-t",
+            "4",
+            "--ordered",
+            "--rename",
+        ])
+        .arg(&index)
+        .arg(&reads)
+        .arg("-o")
+        .arg(&primary)
+        .arg("-i")
+        .arg(&inverse)
+        .assert()
+        .success();
+
+    let expected_primary: Vec<_> = (1..=2100).step_by(2).map(|n| n.to_string()).collect();
+    let expected_inverse: Vec<_> = (2..=2100).step_by(2).map(|n| n.to_string()).collect();
+    assert_eq!(fasta_ids(&primary), expected_primary);
+    assert_eq!(fasta_ids(&inverse), expected_inverse);
+}
+
+#[test]
+fn inverse_cbq_output_is_independent_and_finalized() {
+    let temp_dir = tempdir().unwrap();
+    let reference = temp_dir.path().join("ref.fasta");
+    let reads = temp_dir.path().join("reads.fasta");
+    let index = temp_dir.path().join("ref.idx");
+    let primary = temp_dir.path().join("primary.fasta");
+    let inverse = temp_dir.path().join("inverse.cbq");
+    write_inverse_partition_fixture(&reference, &reads);
+    build_index(&reference, &index);
+
+    cargo::cargo_bin_cmd!("deacon")
+        .args([
+            "filter",
+            "-a",
+            "1",
+            "-r",
+            "0",
+            "-t",
+            "1",
+            "--ordered",
+            "--rename",
+        ])
+        .arg(&index)
+        .arg(&reads)
+        .arg("-o")
+        .arg(&primary)
+        .arg("-i")
+        .arg(&inverse)
+        .assert()
+        .success();
+
+    assert_eq!(fasta_ids(&primary), ["1"]);
+    let reader = binseq::cbq::MmapReader::new(&inverse).unwrap();
+    assert_eq!(reader.num_records(), 2);
+
+    let roundtrip = temp_dir.path().join("inverse.fasta");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d", "-a", "65535", "-r", "1", "-t", "1"])
+        .arg(&index)
+        .arg(&inverse)
+        .arg("-o")
+        .arg(&roundtrip)
+        .assert()
+        .success();
+    assert_eq!(fasta_ids(&roundtrip), ["2", "3"]);
+}
+
+#[test]
+fn paired_inverse_output_keeps_mates_together() {
+    let temp_dir = tempdir().unwrap();
+    let reference = temp_dir.path().join("ref.fasta");
+    let index = temp_dir.path().join("ref.idx");
+    let reads1 = temp_dir.path().join("reads1.fasta");
+    let reads2 = temp_dir.path().join("reads2.fasta");
+    fs::write(&reference, format!(">ref\n{}\n", "A".repeat(100))).unwrap();
+    fs::write(
+        &reads1,
+        format!(
+            ">pair1/1\n{}\n>pair2/1\n{}\n",
+            "A".repeat(60),
+            "C".repeat(60)
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &reads2,
+        format!(
+            ">pair1/2\n{}\n>pair2/2\n{}\n",
+            "G".repeat(60),
+            "C".repeat(60)
+        ),
+    )
+    .unwrap();
+    build_index(&reference, &index);
+
+    let primary1 = temp_dir.path().join("primary1.fasta");
+    let primary2 = temp_dir.path().join("primary2.fasta");
+    let inverse1 = temp_dir.path().join("inverse1.fasta");
+    let inverse2 = temp_dir.path().join("inverse2.fasta");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-a", "1", "-r", "0", "-t", "1"])
+        .arg(&index)
+        .arg(&reads1)
+        .arg(&reads2)
+        .arg("-o")
+        .arg(&primary1)
+        .arg("-O")
+        .arg(&primary2)
+        .arg("-i")
+        .arg(&inverse1)
+        .arg("-I")
+        .arg(&inverse2)
+        .assert()
+        .success();
+
+    assert_eq!(fasta_ids(&primary1), ["pair1/1"]);
+    assert_eq!(fasta_ids(&primary2), ["pair1/2"]);
+    assert_eq!(fasta_ids(&inverse1), ["pair2/1"]);
+    assert_eq!(fasta_ids(&inverse2), ["pair2/2"]);
+}
+
+#[test]
+fn inverse_output_validation_precedes_output_creation() {
+    let temp_dir = tempdir().unwrap();
+    let reference = temp_dir.path().join("ref.fasta");
+    let reads = temp_dir.path().join("reads.fasta");
+    let index = temp_dir.path().join("ref.idx");
+    write_inverse_partition_fixture(&reference, &reads);
+    build_index(&reference, &index);
+
+    let primary = temp_dir.path().join("same.fasta");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-t", "1"])
+        .arg(&index)
+        .arg(&reads)
+        .arg("-o")
+        .arg(&primary)
+        .arg("-i")
+        .arg(&primary)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Output paths must be distinct"));
+    assert!(!primary.exists());
+
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-t", "1"])
+        .arg(&index)
+        .arg(&reads)
+        .arg("-o")
+        .arg(&primary)
+        .arg("-i")
+        .arg(temp_dir.path().join("inverse.fasta"))
+        .arg("-I")
+        .arg(temp_dir.path().join("inverse2.fasta"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--inverse-output2 requires paired input",
+        ));
+    assert!(!primary.exists());
 }

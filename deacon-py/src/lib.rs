@@ -111,6 +111,8 @@ impl Index {
         rename=false,
         output=None,
         output2=None,
+        inverse_output=None,
+        inverse_output2=None,
         summary=None,
         abs_threshold=2,
         rel_threshold=0.01,
@@ -135,6 +137,8 @@ impl Index {
         rename: bool,
         output: Option<PathBuf>,
         output2: Option<PathBuf>,
+        inverse_output: Option<PathBuf>,
+        inverse_output2: Option<PathBuf>,
         summary: Option<PathBuf>,
         abs_threshold: usize,
         rel_threshold: f64,
@@ -169,6 +173,9 @@ impl Index {
         let output2 = output2
             .map(|path| path_to_string(path, "output2"))
             .transpose()?;
+        let inverse_output2 = inverse_output2
+            .map(|path| path_to_string(path, "inverse_output2"))
+            .transpose()?;
 
         let cfg = FilterRunConfig {
             input_path: input,
@@ -177,6 +184,8 @@ impl Index {
             check_pairs,
             output_path: output,
             output2_path: output2,
+            inverse_output_path: inverse_output,
+            inverse_output2_path: inverse_output2,
             abs_threshold,
             rel_threshold,
             prefix_length,

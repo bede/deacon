@@ -74,40 +74,47 @@ struct ReadView<'a> {
 /// writers each processor clone merges into
 #[allow(clippy::large_enum_variant)] // mirrors binseq's BinseqWriter, which is not boxed upstream
 #[derive(Clone)]
-enum Output {
+enum OutputStream {
     Fastx {
+        discard_quality: bool,
         local: Vec<u8>,
         local2: Vec<u8>,
         pending: Vec<PendingRename>,
         pending2: Vec<PendingRename>,
-        batch_kept: u64,
+        batch_written: u64,
         shared: Arc<Mutex<BoxedWriter>>,
         shared2: Option<Arc<Mutex<BoxedWriter>>>,
     },
     Cbq {
+        discard_quality: bool,
         /// Thread-local block writer; completed blocks merge into the shared writer
         local: binseq::BinseqWriter<Vec<u8>>,
         shared: Arc<Mutex<CbqWriter>>,
     },
 }
 
-impl Output {
-    fn fastx(writer: BoxedWriter, writer2: Option<BoxedWriter>) -> Self {
-        Output::Fastx {
+impl OutputStream {
+    fn fastx(writer: BoxedWriter, writer2: Option<BoxedWriter>, discard_quality: bool) -> Self {
+        OutputStream::Fastx {
+            discard_quality,
             local: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
             local2: Vec::with_capacity(DEFAULT_BUFFER_SIZE),
             pending: Vec::new(),
             pending2: Vec::new(),
-            batch_kept: 0,
+            batch_written: 0,
             shared: Arc::new(Mutex::new(writer)),
             shared2: writer2.map(|w| Arc::new(Mutex::new(w))),
         }
     }
 
-    fn cbq(writer: CbqWriter) -> Result<Self> {
+    fn cbq(writer: CbqWriter, discard_quality: bool) -> Result<Self> {
         let shared = Arc::new(Mutex::new(writer));
         let local = shared.lock().new_headless_buffer()?;
-        Ok(Output::Cbq { local, shared })
+        Ok(OutputStream::Cbq {
+            discard_quality,
+            local,
+            shared,
+        })
     }
 
     /// Format one read into a FASTX local buffer, deferring the header to
@@ -115,7 +122,8 @@ impl Output {
     fn push_fastx(
         buffer: &mut Vec<u8>,
         pending: &mut Vec<PendingRename>,
-        batch_kept: u64,
+        ordinal: u64,
+        absolute_number: Option<u64>,
         read: &ReadView,
         suffix: &'static [u8],
         rename: bool,
@@ -126,7 +134,8 @@ impl Output {
         if rename {
             pending.push(PendingRename {
                 offset,
-                ordinal: batch_kept,
+                ordinal,
+                absolute_number,
                 marker,
                 suffix,
             });
@@ -139,36 +148,44 @@ impl Output {
         &mut self,
         read: &ReadView,
         rename: bool,
-        discard_quality: bool,
         rename_counter: &AtomicU64,
+        ordinal: Option<u64>,
+        absolute_number: Option<u64>,
     ) -> Result<()> {
         match self {
-            Output::Fastx {
+            OutputStream::Fastx {
+                discard_quality,
                 local,
                 pending,
-                batch_kept,
+                batch_written,
                 ..
             } => {
                 Self::push_fastx(
                     local,
                     pending,
-                    *batch_kept,
+                    ordinal.unwrap_or(*batch_written),
+                    absolute_number,
                     read,
                     b"",
                     rename,
-                    discard_quality,
+                    *discard_quality,
                 )?;
-                if rename {
-                    *batch_kept += 1;
+                if rename && ordinal.is_none() {
+                    *batch_written += 1;
                 }
             }
-            Output::Cbq { local, .. } => {
-                let number = rename.then(|| rename_counter.fetch_add(1, Ordering::Relaxed) + 1);
+            OutputStream::Cbq {
+                discard_quality,
+                local,
+                ..
+            } => {
+                let number = absolute_number
+                    .or_else(|| rename.then(|| rename_counter.fetch_add(1, Ordering::Relaxed) + 1));
                 let header = cbq_header(read.id, number, b"");
                 let seq_record = SequencingRecordBuilder::default()
                     .s_seq(read.seq)
                     .s_header(&header)
-                    .opt_s_qual(read.qual)
+                    .opt_s_qual((!*discard_quality).then_some(read.qual).flatten())
                     .opt_flag(read.flag)
                     .build()?;
                 local.push(seq_record)?;
@@ -177,73 +194,83 @@ impl Output {
         Ok(())
     }
 
-    /// Write a kept pair: one native CBQ record, two FASTX files, or
+    /// Write one pair: one native CBQ record, two FASTX files, or
     /// interleaved FASTX. Both mates take the pair's number when renaming.
     fn push_pair(
         &mut self,
         read1: &ReadView,
         read2: &ReadView,
         rename: bool,
-        discard_quality: bool,
         rename_counter: &AtomicU64,
+        ordinal: Option<u64>,
+        absolute_number: Option<u64>,
     ) -> Result<()> {
         match self {
-            Output::Fastx {
+            OutputStream::Fastx {
+                discard_quality,
                 local,
                 local2,
                 pending,
                 pending2,
-                batch_kept,
+                batch_written,
                 shared2,
                 ..
             } => {
                 Self::push_fastx(
                     local,
                     pending,
-                    *batch_kept,
+                    ordinal.unwrap_or(*batch_written),
+                    absolute_number,
                     read1,
                     b"/1",
                     rename,
-                    discard_quality,
+                    *discard_quality,
                 )?;
                 if shared2.is_some() {
                     // Separate outputs
                     Self::push_fastx(
                         local2,
                         pending2,
-                        *batch_kept,
+                        ordinal.unwrap_or(*batch_written),
+                        absolute_number,
                         read2,
                         b"/2",
                         rename,
-                        discard_quality,
+                        *discard_quality,
                     )?;
                 } else {
                     // Interleaved output
                     Self::push_fastx(
                         local,
                         pending,
-                        *batch_kept,
+                        ordinal.unwrap_or(*batch_written),
+                        absolute_number,
                         read2,
                         b"/2",
                         rename,
-                        discard_quality,
+                        *discard_quality,
                     )?;
                 }
-                if rename {
-                    *batch_kept += 1;
+                if rename && ordinal.is_none() {
+                    *batch_written += 1;
                 }
             }
-            Output::Cbq { local, .. } => {
-                let number = rename.then(|| rename_counter.fetch_add(1, Ordering::Relaxed) + 1);
+            OutputStream::Cbq {
+                discard_quality,
+                local,
+                ..
+            } => {
+                let number = absolute_number
+                    .or_else(|| rename.then(|| rename_counter.fetch_add(1, Ordering::Relaxed) + 1));
                 let header1 = cbq_header(read1.id, number, b"/1");
                 let header2 = cbq_header(read2.id, number, b"/2");
                 let seq_record = SequencingRecordBuilder::default()
                     .s_seq(read1.seq)
                     .s_header(&header1)
-                    .opt_s_qual(read1.qual)
+                    .opt_s_qual((!*discard_quality).then_some(read1.qual).flatten())
                     .x_seq(read2.seq)
                     .x_header(&header2)
-                    .opt_x_qual(read2.qual)
+                    .opt_x_qual((!*discard_quality).then_some(read2.qual).flatten())
                     .opt_flag(read1.flag)
                     .build()?;
                 local.push(seq_record)?;
@@ -252,17 +279,16 @@ impl Output {
         Ok(())
     }
 
-    /// Merge thread-local buffers into the shared writer(s) (per batch). Rename
-    /// numbers are claimed under the writer lock: monotone in output order, but
-    /// deterministic only with `--ordered` or `-t 1`.
+    /// Merge thread-local buffers into the shared writer(s) (per batch)
     fn flush_batch(
         &mut self,
         rename: bool,
         rename_counter: &AtomicU64,
         ordered: bool,
+        global_base: Option<u64>,
     ) -> Result<()> {
         match self {
-            Output::Cbq { local, shared } => {
+            OutputStream::Cbq { local, shared, .. } => {
                 let mut shared = shared.lock();
                 if ordered {
                     // Keep the shared partial block ahead of the next batch.
@@ -274,14 +300,15 @@ impl Output {
                     shared.ingest_completed(local)?;
                 }
             }
-            Output::Fastx {
+            OutputStream::Fastx {
                 local,
                 local2,
                 pending,
                 pending2,
-                batch_kept,
+                batch_written,
                 shared,
                 shared2,
+                ..
             } => {
                 if let Some(shared2) = shared2 {
                     // Atomic paired batch writing
@@ -291,7 +318,9 @@ impl Output {
 
                         if rename {
                             // Both mates share one block of numbers
-                            let base = rename_counter.fetch_add(*batch_kept, Ordering::Relaxed) + 1;
+                            let base = global_base.unwrap_or_else(|| {
+                                rename_counter.fetch_add(*batch_written, Ordering::Relaxed) + 1
+                            });
                             write_renamed(&mut writer1, local, pending, base)?;
                             write_renamed(&mut writer2, local2, pending2, base)?;
                         } else {
@@ -304,7 +333,9 @@ impl Output {
                 } else if !local.is_empty() {
                     let mut writer = shared.lock();
                     if rename {
-                        let base = rename_counter.fetch_add(*batch_kept, Ordering::Relaxed) + 1;
+                        let base = global_base.unwrap_or_else(|| {
+                            rename_counter.fetch_add(*batch_written, Ordering::Relaxed) + 1
+                        });
                         write_renamed(&mut writer, local, pending, base)?;
                     } else {
                         writer.write_all(local)?;
@@ -315,7 +346,7 @@ impl Output {
                 local2.clear();
                 pending.clear();
                 pending2.clear();
-                *batch_kept = 0;
+                *batch_written = 0;
             }
         }
         Ok(())
@@ -323,7 +354,7 @@ impl Output {
 
     /// Merge any remaining local CBQ blocks into the shared writer (per thread)
     fn flush_thread(&mut self) -> Result<()> {
-        if let Output::Cbq { local, shared } = self {
+        if let OutputStream::Cbq { local, shared, .. } = self {
             shared.lock().ingest(local)?;
         }
         Ok(())
@@ -331,8 +362,74 @@ impl Output {
 
     /// Finish a CBQ stream: flush remaining blocks and write the embedded index
     fn finish(&self) -> Result<()> {
-        if let Output::Cbq { shared, .. } = self {
+        if let OutputStream::Cbq { shared, .. } = self {
             shared.lock().finish()?;
+        }
+        Ok(())
+    }
+}
+
+/// Primary output plus an optional inverse output for discarded records
+#[derive(Clone)]
+struct FilterOutputs {
+    primary: OutputStream,
+    inverse: Option<OutputStream>,
+    /// Held while flushing so both outputs claim rename numbers together
+    rename_flush_lock: Arc<Mutex<()>>,
+}
+
+impl FilterOutputs {
+    fn has_inverse(&self) -> bool {
+        self.inverse.is_some()
+    }
+
+    fn has_cbq(&self) -> bool {
+        matches!(self.primary, OutputStream::Cbq { .. })
+            || self
+                .inverse
+                .as_ref()
+                .is_some_and(|output| matches!(output, OutputStream::Cbq { .. }))
+    }
+
+    fn selected(&mut self, keep: bool) -> Option<&mut OutputStream> {
+        if keep {
+            Some(&mut self.primary)
+        } else {
+            self.inverse.as_mut()
+        }
+    }
+
+    fn flush_batch(
+        &mut self,
+        rename: bool,
+        rename_counter: &AtomicU64,
+        ordered: bool,
+        batch_records: u64,
+    ) -> Result<()> {
+        let global_fastx_rename = rename && self.inverse.is_some() && !self.has_cbq();
+        let _rename_guard = global_fastx_rename.then(|| self.rename_flush_lock.lock());
+        let global_base = global_fastx_rename
+            .then(|| rename_counter.fetch_add(batch_records, Ordering::Relaxed) + 1);
+        self.primary
+            .flush_batch(rename, rename_counter, ordered, global_base)?;
+        if let Some(inverse) = &mut self.inverse {
+            inverse.flush_batch(rename, rename_counter, ordered, global_base)?;
+        }
+        Ok(())
+    }
+
+    fn flush_thread(&mut self) -> Result<()> {
+        self.primary.flush_thread()?;
+        if let Some(inverse) = &mut self.inverse {
+            inverse.flush_thread()?;
+        }
+        Ok(())
+    }
+
+    fn finish(&self) -> Result<()> {
+        self.primary.finish()?;
+        if let Some(inverse) = &self.inverse {
+            inverse.finish()?;
         }
         Ok(())
     }
@@ -369,6 +466,10 @@ pub struct FilterRunConfig {
     pub output_path: Option<PathBuf>,
     /// Path to optional second output fastx file for paired reads
     pub output2_path: Option<String>,
+    /// Path to inverse output file for discarded records (detects .gz/.zst/.xz/.cbq)
+    pub inverse_output_path: Option<PathBuf>,
+    /// Path to optional second paired inverse output fastx file
+    pub inverse_output2_path: Option<String>,
     /// Absolute threshold for filtering sequences
     pub abs_threshold: usize,
     /// Relative threshold for filtering sequences (0.0-1.0)
@@ -408,7 +509,6 @@ struct FilterProcessorConfig {
     prefix_length: usize,
     deplete: bool,
     rename: bool,
-    discard_quality: bool,
     debug: bool,
     check_pairs: bool,
     ordered: bool,
@@ -542,8 +642,8 @@ fn is_cba_path(path: &str) -> bool {
 }
 
 /// Resolve the output format from the output path suffix
-fn resolve_output_format(config: &FilterRunConfig) -> Format {
-    match config.output_path.as_deref() {
+fn resolve_output_format(path: Option<&std::path::Path>) -> Format {
+    match path {
         Some(path) if is_cbq_path(&path.to_string_lossy()) => Format::Cbq,
         _ => Format::Fastx,
     }
@@ -690,17 +790,16 @@ fn open_fastx(config: &FilterRunConfig, interleaved_input: bool) -> Result<(Inpu
 }
 
 /// Validate format combinations before any output file is opened or truncated
-fn validate_input_output(
-    layout: &InputLayout,
-    output_format: Format,
-    config: &FilterRunConfig,
-) -> Result<()> {
+fn validate_input_output(layout: &InputLayout, config: &FilterRunConfig) -> Result<()> {
     if layout.format == Format::Cbq && config.input2_path.is_some() {
         anyhow::bail!("CBQ input does not support INPUT2");
     }
     if layout.format == Format::Cbq && config.interleaved {
         anyhow::bail!("CBQ input does not support --interleaved");
     }
+    let output_format = resolve_output_format(config.output_path.as_deref());
+    let inverse_format = resolve_output_format(config.inverse_output_path.as_deref());
+
     if output_format == Format::Cbq && config.output2_path.is_some() {
         anyhow::bail!("CBQ output does not support OUTPUT2; CBQ pairing is native");
     }
@@ -713,11 +812,76 @@ fn validate_input_output(
             config.compression_level
         );
     }
+    if config.inverse_output_path.is_none() && config.inverse_output2_path.is_some() {
+        anyhow::bail!("--inverse-output2 requires --inverse-output");
+    }
+    if config.inverse_output2_path.is_some() && !layout.paired {
+        anyhow::bail!("--inverse-output2 requires paired input (INPUT2 or --interleaved)");
+    }
+    if inverse_format == Format::Cbq && config.inverse_output2_path.is_some() {
+        anyhow::bail!("CBQ inverse output stores pairs together and cannot use --inverse-output2");
+    }
+    if config
+        .inverse_output2_path
+        .as_deref()
+        .is_some_and(is_cbq_path)
+    {
+        anyhow::bail!("--inverse-output2 cannot be CBQ (use a single --inverse-output)");
+    }
+    if inverse_format == Format::Cbq && !(1..=22).contains(&config.compression_level) {
+        anyhow::bail!(
+            "Invalid CBQ compression level {} (must be 1-22)",
+            config.compression_level
+        );
+    }
+    if config
+        .inverse_output_path
+        .as_deref()
+        .is_some_and(|path| path == std::path::Path::new("-"))
+        || config.inverse_output2_path.as_deref() == Some("-")
+    {
+        anyhow::bail!("Inverse output must be a named file, not stdout (-)");
+    }
+
+    let paths: Vec<_> = output_paths(config).collect();
+    for (i, path) in paths.iter().enumerate() {
+        validate_output_compression(path, config.compression_level)?;
+        if paths[..i].contains(path) {
+            anyhow::bail!("Output paths must be distinct: {}", path.display());
+        }
+        if config.input_path != "-" && *path == std::path::Path::new(&config.input_path) {
+            anyhow::bail!("Output path is also an input path: {}", path.display());
+        }
+        if config
+            .input2_path
+            .as_deref()
+            .is_some_and(|input| *path == std::path::Path::new(input))
+        {
+            anyhow::bail!("Output path is also an input path: {}", path.display());
+        }
+    }
     if config.check_pairs && layout.format == Format::Cbq && !layout.headers {
         anyhow::bail!("--check-pairs requires CBQ input with headers");
     }
     validate_check_pairs_mode(config.check_pairs, layout.paired)?;
     Ok(())
+}
+
+/// Check the compression level against the codec named by the path suffix
+fn validate_output_compression(path: &std::path::Path, level: u8) -> Result<()> {
+    let path = path.to_string_lossy();
+    #[cfg(feature = "compression")]
+    match path.as_ref() {
+        path if path.ends_with(".gz") => validate_compression_level(level, 1, 9, "gzip"),
+        path if path.ends_with(".zst") => validate_compression_level(level, 1, 22, "zstd"),
+        path if path.ends_with(".xz") => validate_compression_level(level, 0, 9, "xz"),
+        _ => Ok(()),
+    }
+    #[cfg(not(feature = "compression"))]
+    {
+        let _ = (path, level);
+        Ok(())
+    }
 }
 
 /// A record buffered without its header, which is written later by [`write_renamed`]
@@ -726,8 +890,10 @@ fn validate_input_output(
 struct PendingRename {
     /// Start of the headerless body in the local buffer
     offset: usize,
-    /// Number relative to the first of its batch
+    /// Position in the input batch
     ordinal: u64,
+    /// Input-wide number used when either output is CBQ
+    absolute_number: Option<u64>,
     /// `>` for FASTA, `@` for FASTQ
     marker: u8,
     /// Mate suffix after the number, e.g. `/1`; empty when unpaired
@@ -781,7 +947,13 @@ fn write_renamed(
     for (i, record) in pending.iter().enumerate() {
         let end = pending.get(i + 1).map_or(buffer.len(), |next| next.offset);
         writer.write_all(&[record.marker])?;
-        writer.write_all((base + record.ordinal).to_string().as_bytes())?;
+        writer.write_all(
+            record
+                .absolute_number
+                .unwrap_or(base + record.ordinal)
+                .to_string()
+                .as_bytes(),
+        )?;
         if !record.suffix.is_empty() {
             writer.write_all(b" ")?;
             writer.write_all(record.suffix)?;
@@ -814,18 +986,26 @@ fn is_compressed_output(path: Option<&std::path::Path>) -> bool {
         .unwrap_or(false)
 }
 
-/// Number of compressed outputs from config (0, 1, or 2)
+/// Every named output path, primary then inverse
+fn output_paths(config: &FilterRunConfig) -> impl Iterator<Item = &std::path::Path> {
+    [
+        config.output_path.as_deref(),
+        config.output2_path.as_deref().map(std::path::Path::new),
+        config.inverse_output_path.as_deref(),
+        config
+            .inverse_output2_path
+            .as_deref()
+            .map(std::path::Path::new),
+    ]
+    .into_iter()
+    .flatten()
+}
+
+/// Number of compressed outputs from config (0-4)
 fn count_compressed_outputs(config: &FilterRunConfig) -> u8 {
-    let mut count = 0;
-    if is_compressed_output(config.output_path.as_deref()) {
-        count += 1;
-    }
-    if let Some(output2) = &config.output2_path
-        && is_compressed_output(Some(std::path::Path::new(output2)))
-    {
-        count += 1;
-    }
-    count
+    output_paths(config)
+        .filter(|path| is_compressed_output(Some(path)))
+        .count() as u8
 }
 
 /// Open unbuffered so embedded-index write errors surface from `finish`.
@@ -897,6 +1077,55 @@ fn get_writer(
     }
 }
 
+/// Open one output stream, resolving its format and quality from the path
+fn open_output_stream(
+    path: Option<&std::path::Path>,
+    path2: Option<&str>,
+    layout: &InputLayout,
+    config: &FilterRunConfig,
+    compression_threads: usize,
+) -> Result<OutputStream> {
+    let format = resolve_output_format(path);
+    let discard_quality =
+        config.discard_quality || path.is_some_and(|path| is_cba_path(&path.to_string_lossy()));
+
+    match format {
+        Format::Cbq => {
+            let path = path.expect("CBQ output implies a named path");
+            let writer = BinseqWriterBuilder::new(BinseqFormat::Cbq)
+                .paired(layout.paired)
+                .quality(layout.qualities && !discard_quality)
+                .headers(layout.headers || config.rename)
+                .flags(layout.flags)
+                .block_size(
+                    (config.cbq_block_size as usize * 1024 * 1024)
+                        .max(layout.block_size.unwrap_or(0)),
+                )
+                .compression_level(i32::from(config.compression_level))
+                .build(open_cbq_output(path)?)
+                .context("Failed to create CBQ writer")?;
+            OutputStream::cbq(writer, discard_quality)
+        }
+        Format::Fastx => {
+            let writer = get_writer(path, config.compression_level, compression_threads)?;
+            let writer2 = if layout.paired {
+                path2
+                    .map(|path| {
+                        get_writer(
+                            Some(std::path::Path::new(path)),
+                            config.compression_level,
+                            compression_threads,
+                        )
+                    })
+                    .transpose()?
+            } else {
+                None
+            };
+            Ok(OutputStream::fastx(writer, writer2, discard_quality))
+        }
+    }
+}
+
 // JSON summary struct
 #[derive(Serialize, Deserialize)]
 pub struct FilterSummary {
@@ -906,6 +1135,8 @@ pub struct FilterSummary {
     input2: Option<String>,
     output: String,
     output2: Option<String>,
+    inverse_output: Option<String>,
+    inverse_output2: Option<String>,
     k: u8,
     w: u8,
     abs_threshold: usize,
@@ -937,15 +1168,18 @@ struct FilterProcessor {
     // Minimizer matching parameters
     minimizers: Arc<MinimizerSet>,
     rename: bool,
-    discard_quality: bool,
+    global_rename: bool,
+    global_rename_cbq: bool,
     debug: bool,
     check_pairs: bool,
     /// Write batches in input order, not completion order
     ordered: bool,
     kernel: FilterKernel,
 
-    output: Output,
+    output: FilterOutputs,
     local_stats: ProcessingStats,
+    /// Records in this batch (pairs count once)
+    batch_records: u64,
 
     /// Shared across workers, handing out rename numbers
     rename_counter: Arc<AtomicU64>,
@@ -972,14 +1206,17 @@ impl FilterProcessor {
         kmer_length: u8,
         window_size: u8,
         config: &FilterProcessorConfig,
-        output: Output,
+        output: FilterOutputs,
         spinner: Option<Arc<Mutex<ProgressBar>>>,
         filtering_start_time: Instant,
     ) -> Result<Self> {
+        let global_rename = config.rename && output.has_inverse();
+        let global_rename_cbq = global_rename && output.has_cbq();
         Ok(Self {
             minimizers,
             rename: config.rename,
-            discard_quality: config.discard_quality,
+            global_rename,
+            global_rename_cbq,
             debug: config.debug,
             check_pairs: config.check_pairs,
             ordered: config.ordered,
@@ -995,6 +1232,7 @@ impl FilterProcessor {
             )?,
             output,
             local_stats: ProcessingStats::default(),
+            batch_records: 0,
             rename_counter: Arc::new(AtomicU64::new(0)),
             global_stats: Arc::new(Mutex::new(ProcessingStats::default())),
             spinner,
@@ -1067,16 +1305,25 @@ impl FilterProcessor {
 
         if decision.keep {
             self.local_stats.output_bp += read.seq.len() as u64;
-            self.output.push_read(
-                read,
-                self.rename,
-                self.discard_quality,
-                &self.rename_counter,
-            )?;
         } else {
             self.local_stats.filtered_seqs += 1;
             self.local_stats.filtered_bp += read.seq.len() as u64;
         }
+
+        let ordinal = (self.global_rename && !self.global_rename_cbq).then_some(self.batch_records);
+        let absolute_number = self
+            .global_rename_cbq
+            .then(|| self.rename_counter.fetch_add(1, Ordering::Relaxed) + 1);
+        if let Some(output) = self.output.selected(decision.keep) {
+            output.push_read(
+                read,
+                self.rename,
+                &self.rename_counter,
+                ordinal,
+                absolute_number,
+            )?;
+        }
+        self.batch_records += 1;
 
         Ok(())
     }
@@ -1111,24 +1358,37 @@ impl FilterProcessor {
 
         if decision.keep {
             self.local_stats.output_bp += (read1.seq.len() + read2.seq.len()) as u64;
-            self.output.push_pair(
-                read1,
-                read2,
-                self.rename,
-                self.discard_quality,
-                &self.rename_counter,
-            )?;
         } else {
             self.local_stats.filtered_seqs += 2;
             self.local_stats.filtered_bp += (read1.seq.len() + read2.seq.len()) as u64;
         }
 
+        let ordinal = (self.global_rename && !self.global_rename_cbq).then_some(self.batch_records);
+        let absolute_number = self
+            .global_rename_cbq
+            .then(|| self.rename_counter.fetch_add(1, Ordering::Relaxed) + 1);
+        if let Some(output) = self.output.selected(decision.keep) {
+            output.push_pair(
+                read1,
+                read2,
+                self.rename,
+                &self.rename_counter,
+                ordinal,
+                absolute_number,
+            )?;
+        }
+        self.batch_records += 1;
+
         Ok(())
     }
 
     fn flush_batch(&mut self) -> Result<()> {
-        self.output
-            .flush_batch(self.rename, &self.rename_counter, self.ordered)?;
+        self.output.flush_batch(
+            self.rename,
+            &self.rename_counter,
+            self.ordered,
+            self.batch_records,
+        )?;
 
         // Update global stats
         {
@@ -1145,6 +1405,7 @@ impl FilterProcessor {
 
         // Reset local stats
         self.local_stats = ProcessingStats::default();
+        self.batch_records = 0;
 
         Ok(())
     }
@@ -1274,6 +1535,8 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
         check_pairs: config.check_pairs,
         output_path: config.output_path.map(|p| p.to_path_buf()),
         output2_path: config.output2_path.map(str::to_string),
+        inverse_output_path: config.inverse_output_path.map(|p| p.to_path_buf()),
+        inverse_output2_path: config.inverse_output2_path.map(str::to_string),
         abs_threshold: config.abs_threshold,
         rel_threshold: config.rel_threshold,
         prefix_length: config.prefix_length,
@@ -1394,20 +1657,18 @@ pub fn run_with_index(
     // Resolve formats and input metadata before opening or truncating outputs
     let interleaved_stdin = config.input_path == "-" && config.input2_path.as_deref() == Some("-");
     let interleaved_input = config.interleaved || interleaved_stdin;
-    let output_format = resolve_output_format(config);
-    // `.cba` names a quality-free CBQ, implying --discard-quality for the output
-    let discard_quality = config.discard_quality
-        || config
-            .output_path
-            .as_deref()
-            .is_some_and(|path| is_cba_path(&path.to_string_lossy()));
+    let output_format = resolve_output_format(config.output_path.as_deref());
+    let inverse_format = resolve_output_format(config.inverse_output_path.as_deref());
     let (layout, input) = open_input(config, interleaved_input)?;
-    validate_input_output(&layout, output_format, config)?;
+    validate_input_output(&layout, config)?;
 
     // The binseq reader and CBQ rename numbering cannot honour --ordered
     // multithreaded
     let ordered_cbq = config.ordered
-        && (layout.format == Format::Cbq || (output_format == Format::Cbq && config.rename));
+        && (layout.format == Format::Cbq
+            || (config.rename
+                && (output_format == Format::Cbq
+                    || (config.inverse_output_path.is_some() && inverse_format == Format::Cbq))));
     let filtering_threads = if ordered_cbq && filtering_threads > 1 {
         if !quiet {
             eprintln!("Using 1 filtering thread: --ordered with CBQ input or renamed CBQ output");
@@ -1444,6 +1705,9 @@ pub fn run_with_index(
     if config.check_pairs {
         options.push("check-pairs".to_string());
     }
+    if config.inverse_output_path.is_some() {
+        options.push("inverse-output".to_string());
+    }
     if config.threads > 0 {
         let threads_str = if compressed_output_count > 0 {
             let compression_total =
@@ -1468,47 +1732,30 @@ pub fn run_with_index(
         );
     }
 
-    let output = match output_format {
-        Format::Cbq => {
-            let path = config
-                .output_path
-                .as_deref()
-                .expect("CBQ output implies a named path");
-            let cbq_writer = BinseqWriterBuilder::new(BinseqFormat::Cbq)
-                .paired(layout.paired)
-                .quality(layout.qualities && !discard_quality)
-                .headers(layout.headers || config.rename)
-                .flags(layout.flags)
-                .block_size(
-                    (config.cbq_block_size as usize * 1024 * 1024)
-                        .max(layout.block_size.unwrap_or(0)),
-                )
-                .compression_level(i32::from(config.compression_level))
-                .build(open_cbq_output(path)?)
-                .context("Failed to create CBQ writer")?;
-            Output::cbq(cbq_writer)?
-        }
-        Format::Fastx => {
-            let writer = get_writer(
-                config.output_path.as_deref(),
-                config.compression_level,
+    let primary = open_output_stream(
+        config.output_path.as_deref(),
+        config.output2_path.as_deref(),
+        &layout,
+        config,
+        compression_threads_per_output,
+    )?;
+    let inverse = config
+        .inverse_output_path
+        .as_deref()
+        .map(|path| {
+            open_output_stream(
+                Some(path),
+                config.inverse_output2_path.as_deref(),
+                &layout,
+                config,
                 compression_threads_per_output,
-            )?;
-            let writer2 = if let Some(output2) = config.output2_path.as_deref() {
-                if layout.paired {
-                    Some(get_writer(
-                        Some(std::path::Path::new(output2)),
-                        config.compression_level,
-                        compression_threads_per_output,
-                    )?)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            Output::fastx(writer, writer2)
-        }
+            )
+        })
+        .transpose()?;
+    let output = FilterOutputs {
+        primary,
+        inverse,
+        rename_flush_lock: Arc::new(Mutex::new(())),
     };
 
     // Progress bar setup if not quiet
@@ -1534,7 +1781,6 @@ pub fn run_with_index(
         prefix_length: config.prefix_length,
         deplete: config.deplete,
         rename: config.rename,
-        discard_quality,
         debug: config.debug,
         check_pairs: config.check_pairs,
         ordered: config.ordered,
@@ -1656,6 +1902,11 @@ pub fn run_with_index(
             .as_deref()
             .map_or("-".to_string(), |p| p.display().to_string()),
         output2: config.output2_path.clone(),
+        inverse_output: config
+            .inverse_output_path
+            .as_deref()
+            .map(|path| path.display().to_string()),
+        inverse_output2: config.inverse_output2_path.clone(),
         k: kmer_length,
         w: window_size,
         abs_threshold: config.abs_threshold,
@@ -1748,6 +1999,8 @@ mod tests {
             input2: Some("test2.fastq".to_string()),
             output: "output.fastq".to_string(),
             output2: Some("output2.fastq".to_string()),
+            inverse_output: Some("inverse.fastq".to_string()),
+            inverse_output2: Some("inverse2.fastq".to_string()),
             k: 31,
             w: 21,
             abs_threshold: 1,
@@ -1786,6 +2039,8 @@ mod tests {
         assert_eq!(parsed.input2, Some("test2.fastq".to_string()));
         assert_eq!(parsed.output, "output.fastq");
         assert_eq!(parsed.output2, Some("output2.fastq".to_string()));
+        assert_eq!(parsed.inverse_output, Some("inverse.fastq".to_string()));
+        assert_eq!(parsed.inverse_output2, Some("inverse2.fastq".to_string()));
     }
 
     #[cfg(feature = "compression")]

@@ -74,6 +74,14 @@ enum Command {
         #[arg(short = 'O', long = "output2")]
         output2: Option<String>,
 
+        /// Path to inverse output file for discarded records (detects .gz, .zst, .xz, .cbq, .cba)
+        #[arg(short = 'i', long = "inverse-output")]
+        inverse_output: Option<PathBuf>,
+
+        /// Optional path to second paired inverse output fastx file (detects .gz, .zst, .xz)
+        #[arg(short = 'I', long = "inverse-output2", requires = "inverse_output")]
+        inverse_output2: Option<String>,
+
         /// Path to JSON summary output file
         #[arg(short = 's', long = "summary")]
         summary: Option<PathBuf>,
@@ -555,6 +563,8 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
             interleaved,
             output,
             output2,
+            inverse_output,
+            inverse_output2,
             abs_threshold,
             rel_threshold,
             prefix_length,
@@ -587,6 +597,8 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
                 check_pairs: *check_pairs,
                 output_path: output.as_ref().map(|p| p.as_path()),
                 output2_path: output2.as_deref(),
+                inverse_output_path: inverse_output.as_deref(),
+                inverse_output2_path: inverse_output2.as_deref(),
                 abs_threshold: *abs_threshold as usize,
                 rel_threshold: *rel_threshold,
                 prefix_length: *prefix_length,
@@ -615,11 +627,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn check_pairs_survives_server_message_roundtrip() {
+    fn filter_options_survive_server_message_roundtrip() {
         let cli = Cli::try_parse_from([
             "deacon",
             "filter",
             "--check-pairs",
+            "--inverse-output",
+            "inverse1.fastq",
+            "--inverse-output2",
+            "inverse2.fastq",
             "index.idx",
             "r1.fastq",
             "r2.fastq",
@@ -632,8 +648,10 @@ mod tests {
             decoded,
             Command::Filter {
                 check_pairs: true,
+                inverse_output: Some(ref path),
+                inverse_output2: Some(ref path2),
                 ..
-            }
+            } if path == &PathBuf::from("inverse1.fastq") && path2 == "inverse2.fastq"
         ));
     }
 }
