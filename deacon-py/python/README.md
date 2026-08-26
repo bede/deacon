@@ -99,7 +99,7 @@ def filter(
 
 **Paired and CBQ input.** Use `input2=` for separate FASTA/FASTQ mates or `interleaved=True` for an interleaved stream. `check_pairs=True` validates Illumina CASAVA or `/1` and `/2` names. CBQ stores pairing internally, so CBQ input cannot be combined with `input2` or `interleaved`; paired CBQ output uses one `output` and cannot use `output2`.
 
-**Output.** When `output` is `None` retained records are written to stdout. Set `inverse_output=` to write discarded records. For paired FASTX, set `inverse_output2=` to use separate mate files. Otherwise the inverse output is interleaved. To count without keeping retained sequences, pass `output="/dev/null"`. Pass `summary=` to write the same statistics returned by the call as JSON. For CBQ output, `cbq_block_size` is a lower bound. A larger input block size is preserved.
+**Output.** When `output` is `None` retained records are written to stdout. Set `inverse_output=` to write discarded records. Primary and inverse outputs must both be FASTX or both be CBQ/CBA; compression and paired-file layout may differ. For paired FASTX, set `inverse_output2=` to use separate mate files. Otherwise the inverse output is interleaved. To count without keeping retained sequences, pass `output="/dev/null"`. Pass `summary=` to write the same statistics returned by the call as JSON. For CBQ output, `cbq_block_size` is a lower bound. A larger input block size is preserved.
 
 **Return value.** A `dict` including the run configuration (`version`, `index`, `input`/`input2`, `output`/`output2`, `inverse_output`/`inverse_output2`, `k`, `w`, `abs_threshold`, `rel_threshold`, `prefix_length`, `deplete`, `rename`, `ordered`, `check_pairs`) and the results:
 

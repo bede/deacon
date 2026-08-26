@@ -74,7 +74,7 @@ enum Command {
         #[arg(short = 'O', long = "output2")]
         output2: Option<String>,
 
-        /// Path to inverse output file for discarded records (detects .gz, .zst, .xz, .cbq, .cba)
+        /// Path to inverse output file; container format must match --output
         #[arg(short = 'i', long = "inverse-output")]
         inverse_output: Option<PathBuf>,
 

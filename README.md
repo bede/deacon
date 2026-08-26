@@ -90,7 +90,7 @@ Prebuilt pangenome indexes are provided. These can be downloaded using the links
 
 ### Filtering
 
-The main command `deacon filter` accepts an index path followed by up to two sequence file paths, depending on whether input sequences originate from stdin, a single file, or paired input files. Indexes are built with `deacon index build`.  Paired inputs are supported as either two separate or one interleaved file/stream when using `--interleaved`, and may be written either to separate paired output files or one interleaved file. For paired sequences, distinct minimizer hits originating from either mate are counted. Paired read headers can be validated using `--check-pairs`. By default, input sequences must meet both an absolute threshold of 2 minimizer hits (`-a 2`) and a relative threshold of 1% of minimizers (`-r 0.01`) to pass the filter. Filtering can be inverted for e.g. host depletion using the `--deplete` (`-d`) flag. Use `--inverse-output` to write discarded records at the same time. Gzip, Zstandard, and xz compressed FASTX formats are detected automatically by file extension. Single and paired [BINSEQ](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v2) CBQ files are natively supported for both input and output. CBQ input is detected by content rather than file extension, while a `.cbq` output path writes CBQ, and a `.cba` output path writes CBQ without quality.
+The main command `deacon filter` accepts an index path followed by up to two sequence file paths, depending on whether input sequences originate from stdin, a single file, or paired input files. Indexes are built with `deacon index build`.  Paired inputs are supported as either two separate or one interleaved file/stream when using `--interleaved`, and may be written either to separate paired output files or one interleaved file. For paired sequences, distinct minimizer hits originating from either mate are counted. Paired read headers can be validated using `--check-pairs`. By default, input sequences must meet both an absolute threshold of 2 minimizer hits (`-a 2`) and a relative threshold of 1% of minimizers (`-r 0.01`) to pass the filter. Filtering can be inverted for e.g. host depletion using the `--deplete` (`-d`) flag. Use `--inverse-output` to write discarded records at the same time; primary and inverse outputs must both be FASTX or both be CBQ/CBA, though their compression and paired-file layouts may differ. Gzip, Zstandard, and xz compressed FASTX formats are detected automatically by file extension. Single and paired [BINSEQ](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v2) CBQ files are natively supported for both input and output. CBQ input is detected by content rather than file extension, while a `.cbq` output path writes CBQ, and a `.cba` output path writes CBQ without quality.
 
 #### Examples
 
@@ -223,7 +223,7 @@ Options:
   -O, --output2 <OUTPUT2>
           Optional path to second paired output fastx file (detects .gz, .zst, .xz)
   -i, --inverse-output <INVERSE_OUTPUT>
-          Path to inverse output file for discarded records (detects .gz, .zst, .xz, .cbq, .cba)
+          Path to inverse output file; container format must match --output
   -I, --inverse-output2 <INVERSE_OUTPUT2>
           Optional path to second paired inverse output fastx file (detects .gz, .zst, .xz)
   -s, --summary <SUMMARY>

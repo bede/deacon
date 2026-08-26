@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `deacon filter --inverse-output` (`-i`) writes discarded records to a second file while filtering, with `--inverse-output2` (`-I`) for separate paired FASTX output. Primary and inverse outputs must both be FASTX or both be CBQ/CBA; compression and paired-file layout may differ, and a `.cba` output discards quality for that file alone. With `--rename`, records are numbered by input position across both outputs. Exposed in the JSON summary as `inverse_output`/`inverse_output2` and in the Python bindings.
+
+### Changed
+
+- `deacon filter` rejects output paths that duplicate one another or an input path, rather than overwriting them.
+
+### Fixed
+
+- A rejected `--compression-level` no longer truncates the output file before erroring.
+
 ## [0.17.0] - 2026-08-18
 
 ### Added

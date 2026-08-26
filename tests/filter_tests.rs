@@ -3985,32 +3985,6 @@ fn inverse_output_partitions_search_and_deplete() {
 }
 
 #[test]
-fn inverse_output_rename_uses_input_global_numbers() {
-    let temp_dir = tempdir().unwrap();
-    let reference = temp_dir.path().join("ref.fasta");
-    let reads = temp_dir.path().join("reads.fasta");
-    let index = temp_dir.path().join("ref.idx");
-    let primary = temp_dir.path().join("primary.fasta");
-    let inverse = temp_dir.path().join("inverse.fasta");
-    write_inverse_partition_fixture(&reference, &reads);
-    build_index(&reference, &index);
-
-    cargo::cargo_bin_cmd!("deacon")
-        .args(["filter", "-a", "1", "-r", "0", "--ordered", "--rename"])
-        .arg(&index)
-        .arg(&reads)
-        .args(["-o"])
-        .arg(&primary)
-        .args(["-i"])
-        .arg(&inverse)
-        .assert()
-        .success();
-
-    assert_eq!(fasta_ids(&primary), ["1"]);
-    assert_eq!(fasta_ids(&inverse), ["2", "3"]);
-}
-
-#[test]
 fn ordered_multibatch_inverse_rename_tracks_input_positions() {
     let temp_dir = tempdir().unwrap();
     let reference = temp_dir.path().join("ref.fasta");
@@ -4055,12 +4029,12 @@ fn ordered_multibatch_inverse_rename_tracks_input_positions() {
 }
 
 #[test]
-fn inverse_cbq_output_is_independent_and_finalized() {
+fn inverse_cbq_outputs_are_finalized() {
     let temp_dir = tempdir().unwrap();
     let reference = temp_dir.path().join("ref.fasta");
     let reads = temp_dir.path().join("reads.fasta");
     let index = temp_dir.path().join("ref.idx");
-    let primary = temp_dir.path().join("primary.fasta");
+    let primary = temp_dir.path().join("primary.cbq");
     let inverse = temp_dir.path().join("inverse.cbq");
     write_inverse_partition_fixture(&reference, &reads);
     build_index(&reference, &index);
@@ -4086,20 +4060,131 @@ fn inverse_cbq_output_is_independent_and_finalized() {
         .assert()
         .success();
 
-    assert_eq!(fasta_ids(&primary), ["1"]);
-    let reader = binseq::cbq::MmapReader::new(&inverse).unwrap();
-    assert_eq!(reader.num_records(), 2);
+    assert_eq!(
+        binseq::cbq::MmapReader::new(&primary)
+            .unwrap()
+            .num_records(),
+        1
+    );
+    assert_eq!(
+        binseq::cbq::MmapReader::new(&inverse)
+            .unwrap()
+            .num_records(),
+        2
+    );
+    assert_eq!(
+        cbq_ids(&index, &primary, &temp_dir.path().join("primary.fasta")),
+        ["1"]
+    );
+    assert_eq!(
+        cbq_ids(&index, &inverse, &temp_dir.path().join("inverse.fasta")),
+        ["2", "3"]
+    );
+}
 
-    let roundtrip = temp_dir.path().join("inverse.fasta");
+/// Decode a renamed CBQ back to FASTA and return its headers
+fn cbq_ids(index: &Path, cbq: &Path, decoded: &Path) -> Vec<String> {
     cargo::cargo_bin_cmd!("deacon")
         .args(["filter", "-d", "-a", "65535", "-r", "1", "-t", "1"])
-        .arg(&index)
-        .arg(&inverse)
+        .arg(index)
+        .arg(cbq)
         .arg("-o")
-        .arg(&roundtrip)
+        .arg(decoded)
         .assert()
         .success();
-    assert_eq!(fasta_ids(&roundtrip), ["2", "3"]);
+    fasta_ids(decoded)
+}
+
+#[test]
+fn mixed_fastx_cbq_outputs_are_rejected_before_creation() {
+    let temp_dir = tempdir().unwrap();
+    let reference = temp_dir.path().join("ref.fasta");
+    let reads = temp_dir.path().join("reads.fasta");
+    let index = temp_dir.path().join("ref.idx");
+    write_inverse_partition_fixture(&reference, &reads);
+    build_index(&reference, &index);
+
+    for (primary, inverse) in [
+        (
+            temp_dir.path().join("primary.fasta"),
+            temp_dir.path().join("inverse.cbq"),
+        ),
+        (
+            temp_dir.path().join("primary.cbq"),
+            temp_dir.path().join("inverse.fasta"),
+        ),
+    ] {
+        cargo::cargo_bin_cmd!("deacon")
+            .args(["filter", "-a", "1", "-r", "0"])
+            .arg(&index)
+            .arg(&reads)
+            .arg("-o")
+            .arg(&primary)
+            .arg("-i")
+            .arg(&inverse)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "Primary and inverse outputs must use the same container format",
+            ));
+        assert!(!primary.exists());
+        assert!(!inverse.exists());
+    }
+
+    let inverse = temp_dir.path().join("stdout-inverse.cbq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-a", "1", "-r", "0"])
+        .arg(&index)
+        .arg(&reads)
+        .arg("-i")
+        .arg(&inverse)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Primary and inverse outputs must use the same container format",
+        ));
+    assert!(!inverse.exists());
+}
+
+#[test]
+fn cbq_and_cba_inverse_outputs_keep_independent_quality_policy() {
+    let temp_dir = tempdir().unwrap();
+    let reference = temp_dir.path().join("ref.fasta");
+    let reads = temp_dir.path().join("reads.fastq");
+    let index = temp_dir.path().join("ref.idx");
+    let primary = temp_dir.path().join("primary.cbq");
+    let inverse = temp_dir.path().join("inverse.cba");
+    fs::write(&reference, format!(">ref\n{}\n", "A".repeat(100))).unwrap();
+    fs::write(
+        &reads,
+        format!(
+            "@match\n{}\n+\n{}\n@discarded\n{}\n+\n{}\n",
+            "A".repeat(60),
+            "I".repeat(60),
+            "C".repeat(60),
+            "I".repeat(60)
+        ),
+    )
+    .unwrap();
+    build_index(&reference, &index);
+
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-a", "1", "-r", "0"])
+        .arg(&index)
+        .arg(&reads)
+        .arg("-o")
+        .arg(&primary)
+        .arg("-i")
+        .arg(&inverse)
+        .assert()
+        .success();
+
+    let primary = binseq::cbq::MmapReader::new(&primary).unwrap();
+    let inverse = binseq::cbq::MmapReader::new(&inverse).unwrap();
+    assert!(primary.header().has_qualities());
+    assert!(!inverse.header().has_qualities());
+    assert_eq!(primary.num_records(), 1);
+    assert_eq!(inverse.num_records(), 1);
 }
 
 #[test]
