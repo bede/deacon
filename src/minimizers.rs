@@ -133,7 +133,8 @@ pub(crate) fn calculate_scaled_entropy(kmer: &[u8], kmer_length: u8) -> f32 {
 /// kdust: max-normalised DUST triplet score in [0,1] of a packed minimizer
 #[inline]
 pub(crate) fn calculate_kdust(code: u128, kmer_length: u8) -> f32 {
-    if kmer_length < 3 {
+    // k=3 divides by zero, k<3 has no triplets
+    if kmer_length < 4 {
         return 1.0;
     }
     let k = kmer_length as usize;
@@ -274,6 +275,18 @@ mod tests {
         for &base in b"nRrYySsWwKkMmBbDdHhVvUu-" {
             assert_eq!(minimizers(base), expected, "base {}", base as char);
         }
+    }
+
+    #[test]
+    fn test_kdust_short_kmers_are_not_nan() {
+        // k=3 divides by zero without the guard
+        for k in [1u8, 2, 3] {
+            let score = calculate_kdust(0, k);
+            assert!(score.is_finite(), "k={k} scored {score}");
+            assert_eq!(score, 1.0);
+        }
+        // k=4 is smallest valid k
+        assert_eq!(calculate_kdust(0, 4), 0.0); // AAAA
     }
 
     #[test]
