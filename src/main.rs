@@ -232,11 +232,11 @@ enum IndexCommand {
         /// Path to index file
         index: PathBuf,
 
-        /// Complexity measure (~0.9 recommended for kdust)
+        /// Complexity measure
         #[arg(short = 'a', long = "algorithm", value_enum, default_value_t = ComplexityAlgorithm::Kdust)]
         algorithm: ComplexityAlgorithm,
 
-        /// Discard minimizers with complexity below this threshold (0.0-1.0)
+        /// Discard minimizers with complexity below this threshold (0.0-1.0, ~0.9 recommended for kdust)
         #[arg(short = 'c', long = "complexity-threshold", value_parser = parse_unit_interval::<f32>)]
         threshold: f32,
 
