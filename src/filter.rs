@@ -19,7 +19,7 @@ use std::io::{self, BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const OUTPUT_BUFFER_SIZE: usize = 8 * 1024 * 1024; // Opt: 8MB output buffer
 const DEFAULT_BUFFER_SIZE: usize = 64 * 1024;
@@ -399,6 +399,8 @@ pub struct FilterRunConfig {
     pub quiet: bool,
     /// Label recorded in the summary's `index` field (no filesystem check)
     pub index_label: String,
+    /// Index load time, counted in the `*_total` rates (None if already loaded)
+    pub index_load_time: Option<Duration>,
 }
 
 /// Config for FilterProcessor
@@ -897,7 +899,7 @@ fn get_writer(
     }
 }
 
-// JSON summary struct
+// JSON summary struct. Paired and interleaved counts cover both mates, so a pair contributes 2
 #[derive(Serialize, Deserialize)]
 pub struct FilterSummary {
     version: String,
@@ -1267,7 +1269,7 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
     let quiet = config.quiet || config.debug;
     let load_start = Instant::now();
 
-    let run_config = FilterRunConfig {
+    let mut run_config = FilterRunConfig {
         input_path: config.input_path.to_string(),
         input2_path: config.input2_path.map(str::to_string),
         interleaved: config.interleaved,
@@ -1289,6 +1291,7 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
         debug: config.debug,
         quiet: config.quiet,
         index_label: config.minimizers_path.to_string_lossy().into_owned(),
+        index_load_time: None,
     };
 
     // Discard low-complexity (kdust) index minimizers once at load
@@ -1306,30 +1309,34 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
             threshold,
             false,
         )?;
+        let index_load_time = load_start.elapsed();
         if !quiet {
             eprintln!(
                 "Loaded index (k={}, w={}) in {:.2?}; kept {} of {} minimizers (kdust >= {})",
                 header.kmer_length(),
                 header.window_size(),
-                load_start.elapsed(),
+                index_load_time,
                 minimizers.len(),
                 before,
                 threshold
             );
         }
+        run_config.index_load_time = Some(index_load_time);
         return run_with_index(Arc::new(minimizers), &header, &run_config);
     }
 
     let (minimizers, header) = load_minimizers_cached(config.minimizers_path)?;
+    let index_load_time = load_start.elapsed();
     if !quiet {
         eprintln!(
             "Loaded index (k={}, w={}) in {:.2?}",
             header.kmer_length(),
             header.window_size(),
-            load_start.elapsed()
+            index_load_time
         );
     }
 
+    run_config.index_load_time = Some(index_load_time);
     run_with_index(minimizers, header, &run_config)
 }
 
@@ -1588,6 +1595,7 @@ pub fn run_with_index(
 
     let total_time = start_time.elapsed();
     let filtering_time = filtering_start_time.elapsed();
+    let time_total = config.index_load_time.unwrap_or_default() + total_time;
 
     // Based on filtering time excluding index loading
     let seqs_per_sec = total_seqs as f64 / filtering_time.as_secs_f64();
@@ -1595,8 +1603,8 @@ pub fn run_with_index(
     let mbp_per_sec = bp_per_sec / 1_000_000.0;
 
     // Based on total time, including index loading
-    let seqs_per_sec_total = total_seqs as f64 / total_time.as_secs_f64();
-    let bp_per_sec_total = total_bp as f64 / total_time.as_secs_f64();
+    let seqs_per_sec_total = total_seqs as f64 / time_total.as_secs_f64();
+    let bp_per_sec_total = total_bp as f64 / time_total.as_secs_f64();
 
     // Calculate proportions
     let filtered_proportion = if total_seqs > 0 {
@@ -1640,7 +1648,7 @@ pub fn run_with_index(
             output_bp,
             total_bp,
             output_bp_proportion * 100.0,
-            total_time,
+            filtering_time,
             seqs_per_sec,
             mbp_per_sec
         );
@@ -1675,7 +1683,7 @@ pub fn run_with_index(
         bp_out_proportion: output_bp_proportion,
         bp_removed: filtered_bp,
         bp_removed_proportion: filtered_bp_proportion,
-        time: total_time.as_secs_f64(),
+        time: time_total.as_secs_f64(),
         seqs_per_second: seqs_per_sec as u64,
         bp_per_second: bp_per_sec as u64,
         seqs_per_second_total: seqs_per_sec_total as u64,

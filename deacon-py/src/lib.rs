@@ -192,6 +192,7 @@ impl Index {
             debug,
             quiet,
             index_label: self.label.clone(),
+            index_load_time: None,
         };
 
         let mins = Arc::clone(&self.minimizers);

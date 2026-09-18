@@ -103,9 +103,9 @@ def filter(
 
 | Key | Meaning |
 | --- | --- |
-| `seqs_in`, `seqs_out`, `seqs_removed` | sequence counts |
+| `seqs_in`, `seqs_out`, `seqs_removed` | record counts; a pair contributes 2 |
 | `seqs_out_proportion`, `seqs_removed_proportion` | sequence proportions |
-| `bp_in`, `bp_out`, `bp_removed` | base-pair counts |
+| `bp_in`, `bp_out`, `bp_removed` | base-pair counts, covering both mates |
 | `bp_out_proportion`, `bp_removed_proportion` | base-pair proportions |
 | `time` | wall-clock seconds |
 | `seqs_per_second`, `bp_per_second` | throughput (filtering only) |

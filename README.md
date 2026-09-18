@@ -317,13 +317,17 @@ Use `-s summary.json` to save detailed filtering statistics:
   "bp_out_proportion": 0.001605090338682056,
   "bp_removed": 141247201,
   "bp_removed_proportion": 0.9983949096613179,
-  "time": 0.446945667,
-  "seqs_per_second": 84129,
-  "bp_per_second": 317392822,
-  "seqs_per_second_total": 83902,
-  "bp_per_second_total": 316535745
+  "time": 3.354754749,
+  "seqs_per_second": 83149,
+  "bp_per_second": 313694198,
+  "seqs_per_second_total": 11178,
+  "bp_per_second_total": 42171273
 }
 ```
+
+Paired and interleaved counts cover both mates, so a pair contributes 2 to `seqs_*` and both its
+sequences to `bp_*`. `time` and the `*_total` rates include index loading; `seqs_per_second` and
+`bp_per_second` cover filtering only.
 
 ## Server mode
 
