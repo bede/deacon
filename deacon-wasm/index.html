@@ -381,13 +381,14 @@
       setStatus("Filtering…");
     }
 
+    const relThreshold = parseFloat(document.getElementById("rel-threshold").value);
     worker.postMessage({
       type: MSG.FILTER,
       data: {
         file: readsFile,
         deplete: document.querySelector('input[name="mode"]:checked').value === "deplete",
         absThreshold: parseInt(document.getElementById("abs-threshold").value) || 2,
-        relThreshold: parseFloat(document.getElementById("rel-threshold").value) || 0.1,
+        relThreshold: Number.isNaN(relThreshold) ? 0.1 : relThreshold,
       }
     });
   });
