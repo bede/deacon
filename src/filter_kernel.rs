@@ -84,7 +84,10 @@ impl FilterKernel {
         let rel_required = if total_minimizers == 0 {
             0
         } else {
-            ((self.params.rel_threshold * total_minimizers as f64).round() as usize).max(1)
+            let lower = (self.params.rel_threshold * total_minimizers as f64) as usize;
+            (lower
+                + usize::from(lower as f64 / (total_minimizers as f64) < self.params.rel_threshold))
+            .max(1)
         };
         self.params.abs_threshold.max(rel_required)
     }
@@ -239,5 +242,41 @@ mod tests {
         )
         .unwrap();
         assert!(!kernel.classify_read(&index, b"ACGT", false).keep);
+    }
+
+    #[test]
+    fn relative_threshold_is_a_minimum_proportion() {
+        let kernel = FilterKernel::new(
+            31,
+            15,
+            FilterParams {
+                deplete: false,
+                abs_threshold: 1,
+                rel_threshold: 0.49,
+                prefix_length: 0,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(kernel.required_hits(5), 3);
+        assert!(!kernel.keep_from_counts(2, 5));
+        assert!(kernel.keep_from_counts(3, 5));
+    }
+
+    #[test]
+    fn relative_threshold_avoids_decimal_over_ceiling() {
+        let kernel = FilterKernel::new(
+            31,
+            15,
+            FilterParams {
+                deplete: false,
+                abs_threshold: 1,
+                rel_threshold: 0.1,
+                prefix_length: 0,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(kernel.required_hits(30), 3);
     }
 }
