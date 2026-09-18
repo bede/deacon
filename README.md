@@ -202,13 +202,13 @@ Arguments:
 
 Options:
   -a, --abs-threshold <ABS_THRESHOLD>
-          Minimum absolute number of minimizer hits for a match [default: 2]
+          Minimum absolute number of distinct minimizer hits for a match [default: 2]
   -r, --rel-threshold <REL_THRESHOLD>
-          Minimum relative proportion (0.0-1.0) of minimizer hits for a match [default: 0.01]
+          Minimum proportion of distinct minimizer hits for a match (0.0-1.0) [default: 0.01]
   -p, --prefix-length <PREFIX_LENGTH>
           Search only the first N nucleotides per sequence (0 = entire sequence) [default: 0]
   -c, --complexity-threshold <COMPLEXITY_THRESHOLD>
-          Ignore minimizers below this kdust complexity threshold (0.0-1.0)
+          Ignore minimizer hits below this kdust complexity threshold (0.0-1.0)
   -d, --deplete
           Discard matching sequences (invert filtering behaviour)
   -R, --rename

@@ -42,11 +42,11 @@ enum Command {
         /// Optional path to second paired fastx file
         input2: Option<String>,
 
-        /// Minimum absolute number of minimizer hits for a match
+        /// Minimum absolute number of distinct minimizer hits for a match
         #[arg(short = 'a', long = "abs-threshold", default_value_t = 2, value_parser = clap::value_parser!(u16).range(1..))]
         abs_threshold: u16,
 
-        /// Minimum relative proportion (0.0-1.0) of minimizer hits for a match
+        /// Minimum proportion of distinct minimizer hits for a match (0.0-1.0)
         #[arg(short = 'r', long = "rel-threshold", default_value_t = 0.01, value_parser = parse_unit_interval::<f64>)]
         rel_threshold: f64,
 
@@ -54,7 +54,7 @@ enum Command {
         #[arg(short = 'p', long = "prefix-length", default_value_t = 0)]
         prefix_length: usize,
 
-        /// Ignore minimizers below this kdust complexity threshold (0.0-1.0)
+        /// Ignore minimizer hits below this kdust complexity threshold (0.0-1.0)
         #[arg(short = 'c', long = "complexity-threshold", value_parser = parse_unit_interval::<f32>)]
         complexity_threshold: Option<f32>,
 
