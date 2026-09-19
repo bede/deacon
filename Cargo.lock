@@ -212,7 +212,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93612e75f32ab9cca9750b822f77c5dcf213782cfb67e12f6c8cf91679cb112a"
 dependencies = [
- "fearless_simd",
+ "fearless_simd 0.7.0",
  "thiserror 2.0.20",
 ]
 
@@ -449,9 +449,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.16"
+version = "0.5.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d85363c37faeca707aef026efa9f3b34d077bce547e48f770770625c6013679e"
+checksum = "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -585,9 +585,9 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "either"
-version = "1.17.0"
+version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d"
+checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
 name = "encode_unicode"
@@ -651,6 +651,12 @@ name = "fearless_simd"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f4beca3cb2444e3304ac30843cc091f44ed58932353cd492ce740067bfce6b12"
+
+[[package]]
+name = "fearless_simd"
+version = "1.0.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50a2d1ad65a201b433ff546990c72c804305bb2162f8c09707dd7f9125210b55"
 
 [[package]]
 name = "find-msvc-tools"
@@ -882,15 +888,6 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "itertools"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
@@ -1060,9 +1057,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.33"
+version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "mem_dbg"
@@ -1215,20 +1212,20 @@ dependencies = [
 
 [[package]]
 name = "paraseq"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c751f787344915f5ad2b86cab4ffe1e04169bb0f216b93965a642ef9b7da0417"
+checksum = "bcb142a898e1c9b06e84df178bb4e9ca0a89ed6c45c2ff3beb173bf27bb97a8f"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
  "either",
  "env_logger",
- "itertools 0.14.0",
+ "fearless_simd 1.0.0-rc.1",
+ "itertools",
  "log",
  "memchr",
  "niffler",
  "num_cpus",
- "parking_lot",
  "smallvec",
  "thiserror 2.0.20",
 ]
@@ -1864,7 +1861,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c12fab9a0e48100a6265b2cb9bb1a528307455cbd5c712735afa3c79a68a160"
 dependencies = [
  "clap",
- "itertools 0.15.0",
+ "itertools",
  "seq-hash",
 ]
 
@@ -1876,9 +1873,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
-version = "1.15.2"
+version = "1.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
 
 [[package]]
 name = "spin"

@@ -551,7 +551,7 @@ pub fn freeze(index_path: &Path, output_path: Option<&Path>, bits: u8) -> Result
 fn reader_with_inferred_batch_size(
     in_path: Option<&Path>,
 ) -> Result<paraseq::fastx::Reader<Box<dyn Read + Send>>> {
-    let mut reader = paraseq::fastx::Reader::from_optional_path(in_path).unwrap();
+    let mut reader = paraseq::ReaderBuilder::optional_path(in_path).build()?;
     reader.update_batch_size_in_bp(256 * 1024)?;
     Ok(reader)
 }
@@ -577,7 +577,7 @@ struct BuildIndexProcessor<'c> {
 
 #[cfg(feature = "cli")]
 impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
-    fn process_record(&mut self, record: Rf) -> paraseq::parallel::Result<()> {
+    fn process_record(&mut self, record: Rf) -> paraseq::Result<()> {
         let seq = record.seq();
         self.local_stats.total_seqs += 1;
         self.local_stats.total_bp += seq.len() as u64;
@@ -609,7 +609,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
         Ok(())
     }
 
-    fn on_batch_complete(&mut self) -> paraseq::parallel::Result<()> {
+    fn on_batch_complete(&mut self) -> paraseq::Result<()> {
         // Merge local minimizers into global set and get new total count
         let minimizer_count = if let Some(local) = &mut self.local_minimizers_u64 {
             let mut global = self.global_minimizers_u64.lock();
@@ -823,7 +823,7 @@ struct DiffIndexProcessor<'a> {
 
 #[cfg(feature = "cli")]
 impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor<'_> {
-    fn process_record(&mut self, record: Rf) -> paraseq::parallel::Result<()> {
+    fn process_record(&mut self, record: Rf) -> paraseq::Result<()> {
         let seq = record.seq();
         self.local_stats.total_seqs += 1;
         self.local_stats.total_bp += seq.len() as u64;
@@ -866,7 +866,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor<'_> {
         Ok(())
     }
 
-    fn on_batch_complete(&mut self) -> paraseq::parallel::Result<()> {
+    fn on_batch_complete(&mut self) -> paraseq::Result<()> {
         // Merge this batch's hits into the global set, holding the lock only for the
         // hits rather than for every minimizer seen
         let hits = {

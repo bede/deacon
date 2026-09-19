@@ -8,9 +8,9 @@ use binseq::cbq;
 use binseq::write::{BinseqWriterBuilder, Format as BinseqFormat};
 use binseq::{BinseqRecord, ParallelReader as BinseqParallelReader, SequencingRecordBuilder};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use paraseq::Record;
 use paraseq::fastx::Reader;
 use paraseq::parallel::{PairedParallelProcessor, ParallelProcessor, ParallelReader};
+use paraseq::{ReaderBuilder, Record};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -528,7 +528,9 @@ fn create_paraseq_reader(path: Option<&str>) -> Result<Reader<Box<dyn std::io::R
         }
         Some(p) => {
             // Use paraseq's from_path for files (internally uses niffler for compression detection)
-            Reader::from_path(p).map_err(|e| anyhow::anyhow!("Failed to open file {}: {}", p, e))
+            ReaderBuilder::path(p)
+                .build()
+                .map_err(|e| anyhow::anyhow!("Failed to open file {}: {}", p, e))
         }
     }
 }
@@ -1161,7 +1163,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for FilterProcessor {
         self.ordered
     }
 
-    fn process_record(&mut self, record: Rf) -> paraseq::parallel::Result<()> {
+    fn process_record(&mut self, record: Rf) -> paraseq::Result<()> {
         let seq = record.seq();
         self.handle_read(&ReadView {
             id: record.id(),
@@ -1172,12 +1174,12 @@ impl<Rf: Record> ParallelProcessor<Rf> for FilterProcessor {
         Ok(())
     }
 
-    fn on_batch_complete(&mut self) -> paraseq::parallel::Result<()> {
+    fn on_batch_complete(&mut self) -> paraseq::Result<()> {
         self.flush_batch()?;
         Ok(())
     }
 
-    fn on_thread_complete(&mut self) -> paraseq::parallel::Result<()> {
+    fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         self.flush_thread()?;
         Ok(())
     }
@@ -1188,7 +1190,7 @@ impl<Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor {
         self.ordered
     }
 
-    fn process_record_pair(&mut self, record1: Rf, record2: Rf) -> paraseq::parallel::Result<()> {
+    fn process_record_pair(&mut self, record1: Rf, record2: Rf) -> paraseq::Result<()> {
         let seq1 = record1.seq();
         let seq2 = record2.seq();
         self.handle_pair(
@@ -1208,12 +1210,12 @@ impl<Rf: Record> PairedParallelProcessor<Rf> for FilterProcessor {
         Ok(())
     }
 
-    fn on_batch_complete(&mut self) -> paraseq::parallel::Result<()> {
+    fn on_batch_complete(&mut self) -> paraseq::Result<()> {
         self.flush_batch()?;
         Ok(())
     }
 
-    fn on_thread_complete(&mut self) -> paraseq::parallel::Result<()> {
+    fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         self.flush_thread()?;
         Ok(())
     }
