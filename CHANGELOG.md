@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1] - 2026-09-20
+
+### Fixed
+
+- Sound handling of rare (and horrid) Windows line endings in fastx input ([#101](https://github.com/bede/deacon/issues/101)). Previously `\r` was treated as an ambiguous base and would break minimizer selection in wrapped multiline fastx. Fixed via paraseq 0.6.0.
+- Server mode continues after a failed request rather than exiting, and the client prints nicer errors.
+
 ## [0.17.0] - 2026-08-18
 
 ### Added

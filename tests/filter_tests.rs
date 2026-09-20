@@ -3886,3 +3886,51 @@ fn cbq_invalid_compression_level_rejected() {
         .stderr(predicate::str::contains("Invalid CBQ compression level"));
     assert!(!no_create.exists());
 }
+
+/// CRLF line endings must parse like LF, with or without a trailing newline.
+/// paraseq <0.6.0 kept the `\r`, inflating bp counts and leaking into output.
+#[test]
+fn test_filter_crlf_line_endings() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let lf_path = temp_dir.path().join("lf.fastq");
+
+    // All-A ref matches neither read, so --deplete echoes the input as LF
+    create_test_fasta_aaa(&fasta_path);
+    create_test_fastq(&lf_path);
+    build_index(&fasta_path, &bin_path);
+
+    let run = |name: &str, content: &str| -> (String, u64) {
+        let input = temp_dir.path().join(format!("{name}.fastq"));
+        let summary = temp_dir.path().join(format!("{name}.json"));
+        fs::write(&input, content).unwrap();
+        let out = cargo::cargo_bin_cmd!("deacon")
+            .args(["filter", "--deplete", "-t", "1", "--summary"])
+            .args([&summary, &bin_path, &input])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&summary).unwrap()).unwrap();
+        (
+            String::from_utf8(out).unwrap(),
+            json["bp_in"].as_u64().unwrap(),
+        )
+    };
+
+    // LF output is `\r`-free, so matching it proves no leak
+    let lf = fs::read_to_string(&lf_path).unwrap();
+    let (lf_out, lf_bp) = run("lf", &lf);
+    assert_eq!(lf_out, lf, "LF baseline must round-trip unchanged");
+
+    let crlf = lf.replace('\n', "\r\n");
+    let notrail = crlf.strip_suffix("\r\n").unwrap();
+    for (name, content) in [("crlf", crlf.as_str()), ("crlf_notrail", notrail)] {
+        let (out, bp) = run(name, content);
+        assert_eq!(out, lf_out, "{name}: output must match the LF equivalent");
+        assert_eq!(bp, lf_bp, "{name}: \\r must not be counted as a base");
+    }
+}
