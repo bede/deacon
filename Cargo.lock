@@ -483,7 +483,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "deacon"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -516,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "deacon-py"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "deacon",
@@ -528,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "deacon-wasm"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "console_error_panic_hook",
  "deacon",

@@ -292,7 +292,7 @@ Options:
 Use `-s summary.json` to save detailed filtering statistics:
 ```json
 {
-  "version": "deacon 0.17.0",
+  "version": "deacon 0.18.0",
   "index": "panhuman-1.k31w15.idx",
   "input": "HG02334.100MB.fastq.gz",
   "input2": null,
