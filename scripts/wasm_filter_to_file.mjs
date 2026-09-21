@@ -13,7 +13,7 @@ function parseArgs(argv) {
       throw new Error(`Invalid arguments near: ${key ?? "<end>"}`);
     }
     const name = key.slice(2);
-    if (name === "rename" || name === "fasta") {
+    if (name === "rename" || name === "discard-quality") {
       flags.add(name);
       continue;
     }
