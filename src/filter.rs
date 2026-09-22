@@ -1007,12 +1007,21 @@ impl FilterProcessor {
     }
 
     fn should_keep_sequence(&mut self, seq: &[u8]) -> FilterDecision {
-        self.kernel.classify_read(&self.minimizers, seq, self.debug)
+        if self.debug {
+            self.kernel
+                .classify_read_with_diagnostics(&self.minimizers, seq)
+        } else {
+            self.kernel.classify_read(&self.minimizers, seq)
+        }
     }
 
     fn should_keep_pair(&mut self, seq1: &[u8], seq2: &[u8]) -> FilterDecision {
-        self.kernel
-            .classify_pair(&self.minimizers, seq1, seq2, self.debug)
+        if self.debug {
+            self.kernel
+                .classify_pair_with_diagnostics(&self.minimizers, seq1, seq2)
+        } else {
+            self.kernel.classify_pair(&self.minimizers, seq1, seq2)
+        }
     }
 
     fn update_spinner(&self) {
@@ -1057,13 +1066,13 @@ impl FilterProcessor {
 
         let decision = self.should_keep_sequence(read.seq);
 
-        // Show debug info for sequences with hits
+        // Show debug info for sequences with hits (debug forces exact counts)
         if self.debug {
             eprintln!(
                 "DEBUG: {} hits={}/{} keep={} kmers=[{}]",
                 String::from_utf8_lossy(read.id),
-                decision.hit_count,
-                decision.total_minimizers,
+                decision.hit_count_lower_bound,
+                decision.minimizer_count_upper_bound,
                 decision.keep,
                 decision.hit_kmers.join(",")
             );
@@ -1100,14 +1109,14 @@ impl FilterProcessor {
 
         let decision = self.should_keep_pair(read1.seq, read2.seq);
 
-        // Debug info for interleaved pairs
-        if self.debug && decision.hit_count > 0 {
+        // Debug info for interleaved pairs (debug forces exact counts)
+        if self.debug && decision.hit_count_lower_bound > 0 {
             eprintln!(
                 "DEBUG: {}/{} hits={}/{} keep={} kmers=[{}]",
                 String::from_utf8_lossy(read1.id),
                 String::from_utf8_lossy(read2.id),
-                decision.hit_count,
-                decision.total_minimizers,
+                decision.hit_count_lower_bound,
+                decision.minimizer_count_upper_bound,
                 decision.keep,
                 decision.hit_kmers.join(",")
             );

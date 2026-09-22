@@ -5,12 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Faster search/depletion of sequences with many minimizer hits to the index by virtue of making fewer minimizer lookups and related optimisations. Paired filtering performance also increased for both low-hit and high-hit sequences.
+- `FilterDecision` now reports possibly bounded counts as `hit_count_lower_bound` and `minimizer_count_upper_bound`. Separate `classify_*()` methods with and without early exit / exact hit counts.
+
 ## [0.18.0] - 2026-09-21
 
 ### Changed
 
-- **Breaking:** the relative threshold (`-r`) denominator now always equals the distinct minimizer count in a given record, pooled across both mates for paired reads. Previously only adjacent minimizers were deduplicated. Highly repetitive long reads are now more likely to be matched. Short read classification is unaffected unless using an extremely high non-standard relative threshold (`-r`).
-- **Breaking:** `-r` is now evaluated without rounding, enforcing the stated minimum. For a short sequence with 5 distinct minimizers and `-r 0.49` (with default `-a 2`), 3 hits rather than 2 hits are now required for a match.
+- The relative threshold (`-r`) denominator now always equals the distinct minimizer count in a given record, pooled across both mates for paired reads. Previously only adjacent minimizers were deduplicated. Highly repetitive long reads are now more likely to be matched. Short read classification is unaffected unless using an extremely high non-standard relative threshold (`-r`).
+- Relative threshold `-r` is now evaluated without rounding, enforcing the stated minimum. For a short sequence with 5 distinct minimizers and `-r 0.49` (with default `-a 2`), 3 hits rather than 2 hits are now required for a match.
 
 ## [0.17.1] - 2026-09-20
 

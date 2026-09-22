@@ -251,9 +251,7 @@ impl FilterSession {
         self.stats.reads_in += 1;
         self.stats.bases_in += seq.len() as u64;
 
-        let decision = self
-            .kernel
-            .classify_read(&self.index.minimizers, seq, false);
+        let decision = self.kernel.classify_read(&self.index.minimizers, seq);
         if decision.keep {
             self.stats.reads_out += 1;
             self.stats.bases_out += seq.len() as u64;
@@ -454,7 +452,7 @@ impl PairedFilterSession {
 
         let decision =
             self.kernel
-                .classify_pair(&self.index.minimizers, &record1.seq, &record2.seq, false);
+                .classify_pair(&self.index.minimizers, &record1.seq, &record2.seq);
         if decision.keep {
             self.stats.reads_out += 2;
             self.stats.bases_out += (record1.seq.len() + record2.seq.len()) as u64;

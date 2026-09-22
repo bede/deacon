@@ -1,4 +1,6 @@
-use crate::minimizers::{Buffers, KmerHasher, decode_u64, decode_u128, fill_minimizers_unchecked};
+use crate::minimizers::{
+    Buffers, KmerHasher, decode_u64, decode_u128, extend_minimizers_unchecked,
+};
 use crate::{MinimizerSet, MinimizerVec, RapidHashSet, validate_unit_interval};
 
 #[derive(Clone, Copy, Debug)]
@@ -12,15 +14,15 @@ pub struct FilterParams {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FilterDecision {
     pub keep: bool,
-    pub hit_count: usize,
-    /// Distinct minimizer count, or an upper-bound positional count if the relative
-    /// threshold wasn't evaluated. debug forces distinct calculation
-    pub total_minimizers: usize,
+    /// Distinct index hits (a sufficient lower bound without diagnostics)
+    pub hit_count_lower_bound: usize,
+    /// Distinct minimizers (a positional upper bound when the exact count is unnecessary)
+    pub minimizer_count_upper_bound: usize,
+    /// Canonical hit k-mers, populated only with diagnostics
     pub hit_kmers: Vec<String>,
 }
 
-/// Reused per record: holds matching minimizers while counting hits, then every minimizer
-/// if `distinct_minimizers` has to compute an exact denominator.
+/// Reused per record for hit dedup, then for `count_distinct_minimizers`
 #[derive(Clone)]
 enum SeenMinimizers {
     U64(RapidHashSet<u64>),
@@ -83,42 +85,45 @@ impl FilterKernel {
         self.params
     }
 
-    /// Min hits needed to hit rel threshold. Never decreases as `total_minimizers` grows,
-    /// so `classify_seqs` can safely substitute the positional count for the distinct count.
+    /// Min hits needed to hit rel threshold. Never decreases as `minimizer_count` grows
     #[inline]
-    fn rel_required_hits(&self, total_minimizers: usize) -> usize {
-        if total_minimizers == 0 {
+    fn rel_required_hits(&self, minimizer_count: usize) -> usize {
+        if minimizer_count == 0 {
             0
         } else {
-            let lower = (self.params.rel_threshold * total_minimizers as f64) as usize;
+            let lower = (self.params.rel_threshold * minimizer_count as f64) as usize;
             (lower
-                + usize::from(lower as f64 / (total_minimizers as f64) < self.params.rel_threshold))
+                + usize::from(lower as f64 / (minimizer_count as f64) < self.params.rel_threshold))
             .max(1)
         }
     }
 
     #[inline]
-    fn required_hits(&self, total_minimizers: usize) -> usize {
+    fn required_hits(&self, minimizer_count: usize) -> usize {
         self.params
             .abs_threshold
-            .max(self.rel_required_hits(total_minimizers))
+            .max(self.rel_required_hits(minimizer_count))
     }
 
-    /// True if hit_count is between the absolute and relative floors, where swapping in
-    /// the positional count for the distinct count could change outcome.
+    /// True if hits are between the absolute and relative floors, so positions can't decide
     #[inline]
-    fn needs_distinct(&self, hit_count: usize, positions: usize) -> bool {
-        hit_count >= self.params.abs_threshold && hit_count < self.rel_required_hits(positions)
+    fn needs_exact_minimizer_count(
+        &self,
+        hit_count_lower_bound: usize,
+        positional_minimizer_count: usize,
+    ) -> bool {
+        hit_count_lower_bound >= self.params.abs_threshold
+            && hit_count_lower_bound < self.rel_required_hits(positional_minimizer_count)
     }
 
     #[inline]
-    fn keep_from_counts(&self, hit_count: usize, total_minimizers: usize) -> bool {
-        let required = self.required_hits(total_minimizers);
-        if self.params.deplete {
-            hit_count < required
-        } else {
-            hit_count >= required
-        }
+    fn is_index_match(
+        &self,
+        hit_count_lower_bound: usize,
+        minimizer_count_upper_bound: usize,
+    ) -> bool {
+        minimizer_count_upper_bound > 0
+            && hit_count_lower_bound >= self.required_hits(minimizer_count_upper_bound)
     }
 
     #[inline]
@@ -131,23 +136,38 @@ impl FilterKernel {
         seq.strip_suffix(b"\n").unwrap_or(seq)
     }
 
-    pub fn classify_read(
+    /// Classify with early exit and possibly bounded counts
+    pub fn classify_read(&mut self, index: &MinimizerSet, seq: &[u8]) -> FilterDecision {
+        self.classify_seqs(index, &[seq], false)
+    }
+
+    /// Classify with exact counts and hit k-mers
+    pub fn classify_read_with_diagnostics(
         &mut self,
         index: &MinimizerSet,
         seq: &[u8],
-        debug: bool,
     ) -> FilterDecision {
-        self.classify_seqs(index, &[seq], debug)
+        self.classify_seqs(index, &[seq], true)
     }
 
+    /// Classify a pair with early exit and possibly bounded counts
     pub fn classify_pair(
         &mut self,
         index: &MinimizerSet,
         seq1: &[u8],
         seq2: &[u8],
-        debug: bool,
     ) -> FilterDecision {
-        self.classify_seqs(index, &[seq1, seq2], debug)
+        self.classify_seqs(index, &[seq1, seq2], false)
+    }
+
+    /// Classify a pair with exact counts and hit k-mers
+    pub fn classify_pair_with_diagnostics(
+        &mut self,
+        index: &MinimizerSet,
+        seq1: &[u8],
+        seq2: &[u8],
+    ) -> FilterDecision {
+        self.classify_seqs(index, &[seq1, seq2], true)
     }
 
     /// Pool distinct minimizer hits across mates
@@ -155,75 +175,63 @@ impl FilterKernel {
         &mut self,
         index: &MinimizerSet,
         seqs: &[&[u8]],
-        debug: bool,
+        exact: bool,
     ) -> FilterDecision {
         self.seen_minimizers.clear();
-        let mut hit_count = 0;
-        let mut positions = 0;
-        let mut filled = 0;
+        // Records with no long enough mate skip the loop below, so clear here or they
+        // inherit the previous record's minimizers
+        self.buffers.minimizers.clear();
         let mut hit_kmers = Vec::new();
 
+        // Pool mates first: a per-mate `stop_at` would understate the denominator
         for &seq in seqs {
             let seq = self.seq_for_filter(seq);
             if seq.len() < self.kmer_length as usize {
                 continue;
             }
-            fill_minimizers_unchecked(
+            extend_minimizers_unchecked(
                 seq,
                 &self.hasher,
                 self.kmer_length,
                 self.window_size,
                 &mut self.buffers,
             );
-            positions += self.buffers.minimizers.len();
-            filled += 1;
-            hit_count += self.count_buffer_hits(index, debug, &mut hit_kmers);
         }
 
-        // Avoid costly distinct counting where poss
-        let total_minimizers = if debug || self.needs_distinct(hit_count, positions) {
-            self.distinct_minimizers(seqs, filled)
+        // Positions bound the distinct count and required_hits never decreases, so no
+        // denominator can ask for more hits than this: stop probing once it's reached
+        let positional_minimizer_count = self.buffers.minimizers.len();
+        let stop_at = if exact {
+            usize::MAX
         } else {
-            positions
+            self.required_hits(positional_minimizer_count)
+        };
+        let hit_count_lower_bound = self.count_hits_until(index, exact, stop_at, &mut hit_kmers);
+
+        // Avoid costly distinct counting where possible
+        let minimizer_count_upper_bound = if exact
+            || self.needs_exact_minimizer_count(hit_count_lower_bound, positional_minimizer_count)
+        {
+            self.count_distinct_minimizers()
+        } else {
+            positional_minimizer_count
         };
 
-        let keep = if total_minimizers == 0 {
-            // No minis (too short / all-ambiguous) means no possible index match: keep only when depleting
-            self.params.deplete
-        } else {
-            self.keep_from_counts(hit_count, total_minimizers)
-        };
+        let is_match = self.is_index_match(hit_count_lower_bound, minimizer_count_upper_bound);
+        let keep = is_match != self.params.deplete;
 
         FilterDecision {
             keep,
-            hit_count,
-            total_minimizers,
+            hit_count_lower_bound,
+            minimizer_count_upper_bound,
             hit_kmers,
         }
     }
 
     /// Exact distinct minimizer count pooled across mates. Expensive but should be rare
-    fn distinct_minimizers(&mut self, seqs: &[&[u8]], filled: usize) -> usize {
+    fn count_distinct_minimizers(&mut self) -> usize {
         self.seen_minimizers.clear();
-        if filled == 1 {
-            // Exactly one sequence produced minimizers, so the buffer still holds all of them
-            self.insert_buffer_minimizers();
-        } else {
-            for &seq in seqs {
-                let seq = self.seq_for_filter(seq);
-                if seq.len() < self.kmer_length as usize {
-                    continue;
-                }
-                fill_minimizers_unchecked(
-                    seq,
-                    &self.hasher,
-                    self.kmer_length,
-                    self.window_size,
-                    &mut self.buffers,
-                );
-                self.insert_buffer_minimizers();
-            }
-        }
+        self.insert_buffer_minimizers();
         self.seen_minimizers.len()
     }
 
@@ -243,23 +251,28 @@ impl FilterKernel {
         }
     }
 
-    fn count_buffer_hits(
+    /// Counts distinct hits, stopping at `stop_at` where the match is already decided
+    fn count_hits_until(
         &mut self,
         index: &MinimizerSet,
-        debug: bool,
+        exact: bool,
+        stop_at: usize,
         hit_kmers: &mut Vec<String>,
     ) -> usize {
-        let mut hit_count = 0;
+        let mut distinct_hits = 0;
         match (&self.buffers.minimizers, index, &mut self.seen_minimizers) {
             (MinimizerVec::U64(vec), MinimizerSet::U64(set), SeenMinimizers::U64(seen)) => {
                 for &minimizer in vec {
                     if set.contains(&minimizer) && seen.insert(minimizer) {
-                        hit_count += 1;
-                        if debug {
+                        distinct_hits += 1;
+                        if exact {
                             hit_kmers.push(
                                 String::from_utf8_lossy(&decode_u64(minimizer, self.kmer_length))
                                     .to_string(),
                             );
+                        }
+                        if distinct_hits >= stop_at {
+                            break;
                         }
                     }
                 }
@@ -267,12 +280,15 @@ impl FilterKernel {
             (MinimizerVec::U64(vec), MinimizerSet::Fuse(filter), SeenMinimizers::U64(seen)) => {
                 for &minimizer in vec {
                     if filter.contains(minimizer) && seen.insert(minimizer) {
-                        hit_count += 1;
-                        if debug {
+                        distinct_hits += 1;
+                        if exact {
                             hit_kmers.push(
                                 String::from_utf8_lossy(&decode_u64(minimizer, self.kmer_length))
                                     .to_string(),
                             );
+                        }
+                        if distinct_hits >= stop_at {
+                            break;
                         }
                     }
                 }
@@ -280,19 +296,22 @@ impl FilterKernel {
             (MinimizerVec::U128(vec), MinimizerSet::U128(set), SeenMinimizers::U128(seen)) => {
                 for &minimizer in vec {
                     if set.contains(&minimizer) && seen.insert(minimizer) {
-                        hit_count += 1;
-                        if debug {
+                        distinct_hits += 1;
+                        if exact {
                             hit_kmers.push(
                                 String::from_utf8_lossy(&decode_u128(minimizer, self.kmer_length))
                                     .to_string(),
                             );
+                        }
+                        if distinct_hits >= stop_at {
+                            break;
                         }
                     }
                 }
             }
             _ => unreachable!("minimizer width does not match index variant"),
         }
-        hit_count
+        distinct_hits
     }
 }
 
@@ -311,7 +330,7 @@ mod tests {
             prefix_length: 0,
         };
         let mut kernel = FilterKernel::new(31, 15, params).unwrap();
-        assert!(kernel.classify_read(&index, b"ACGT", false).keep);
+        assert!(kernel.classify_read(&index, b"ACGT").keep);
 
         let mut kernel = FilterKernel::new(
             31,
@@ -322,7 +341,26 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(!kernel.classify_read(&index, b"ACGT", false).keep);
+        assert!(!kernel.classify_read(&index, b"ACGT").keep);
+    }
+
+    #[test]
+    fn zero_minimizers_never_match() {
+        let index = MinimizerSet::U64(RapidHashSet::default());
+        for deplete in [false, true] {
+            let mut kernel = FilterKernel::new(
+                31,
+                15,
+                FilterParams {
+                    deplete,
+                    abs_threshold: 0,
+                    rel_threshold: 0.0,
+                    prefix_length: 0,
+                },
+            )
+            .unwrap();
+            assert_eq!(kernel.classify_read(&index, b"").keep, deplete);
+        }
     }
 
     #[test]
@@ -340,8 +378,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(kernel.required_hits(5), 3);
-        assert!(!kernel.keep_from_counts(2, 5));
-        assert!(kernel.keep_from_counts(3, 5));
+        assert!(!kernel.is_index_match(2, 5));
+        assert!(kernel.is_index_match(3, 5));
     }
 
     #[test]
@@ -370,9 +408,9 @@ mod tests {
         }
     }
 
-    /// Using positions instead of distinct count must never change outcome. `debug`
-    /// forces the real count so both paths agree, and the repeat read makes sure the
-    /// substitution actually happens.
+    /// Neither using positions instead of the distinct count nor exiting early once the
+    /// match is certain may change outcome. `exact` forces the exact path, and the repeat
+    /// read makes sure the substitution actually happens.
     #[test]
     fn positional_denominator_never_changes_the_verdict() {
         const K: u8 = 7;
@@ -390,6 +428,7 @@ mod tests {
         ];
 
         let mut substitution_observed = false;
+        let mut early_exit_observed = false;
         for &deplete in &[false, true] {
             for &abs_threshold in &[1usize, 2, 3, 5] {
                 for &rel_threshold in &[0.0, 0.01, 0.1, 0.25, 0.5, 0.9, 1.0] {
@@ -408,20 +447,37 @@ mod tests {
                         format!("deplete={deplete} abs={abs_threshold} rel={rel_threshold}");
 
                     for (i, read) in reads.iter().enumerate() {
-                        let fast = kernel.classify_read(&index, read, false);
-                        let exact = kernel.classify_read(&index, read, true);
+                        let fast = kernel.classify_read(&index, read);
+                        let exact = kernel.classify_read_with_diagnostics(&index, read);
                         assert_eq!(fast.keep, exact.keep, "read {i}, {context}");
-                        assert_eq!(fast.hit_count, exact.hit_count, "read {i}, {context}");
-                        substitution_observed |= fast.total_minimizers > exact.total_minimizers;
+                        assert_hits_sufficient(
+                            &kernel,
+                            &fast,
+                            &exact,
+                            &format!("read {i}, {context}"),
+                        );
+                        substitution_observed |=
+                            fast.minimizer_count_upper_bound > exact.minimizer_count_upper_bound;
+                        early_exit_observed |=
+                            fast.hit_count_lower_bound < exact.hit_count_lower_bound;
                     }
 
                     for (i, first) in reads.iter().enumerate() {
                         for (j, second) in reads.iter().enumerate() {
-                            let fast = kernel.classify_pair(&index, first, second, false);
-                            let exact = kernel.classify_pair(&index, first, second, true);
+                            let fast = kernel.classify_pair(&index, first, second);
+                            let exact =
+                                kernel.classify_pair_with_diagnostics(&index, first, second);
                             assert_eq!(fast.keep, exact.keep, "pair {i}/{j}, {context}");
-                            assert_eq!(fast.hit_count, exact.hit_count, "pair {i}/{j}, {context}");
-                            substitution_observed |= fast.total_minimizers > exact.total_minimizers;
+                            assert_hits_sufficient(
+                                &kernel,
+                                &fast,
+                                &exact,
+                                &format!("pair {i}/{j}, {context}"),
+                            );
+                            substitution_observed |= fast.minimizer_count_upper_bound
+                                > exact.minimizer_count_upper_bound;
+                            early_exit_observed |=
+                                fast.hit_count_lower_bound < exact.hit_count_lower_bound;
                         }
                     }
                 }
@@ -431,11 +487,67 @@ mod tests {
             substitution_observed,
             "positional count never stood in for the distinct count, so nothing was tested"
         );
+        assert!(
+            early_exit_observed,
+            "hit counting never exited early, so nothing was tested"
+        );
     }
 
-    /// `needs_distinct` relies on `rel_required_hits` being monotone -- check that here.
+    /// The fast path may stop counting hits early, but only once it has enough of them to
+    /// match under the exact distinct denominator, and it must never invent hits
+    fn assert_hits_sufficient(
+        kernel: &FilterKernel,
+        fast: &FilterDecision,
+        exact: &FilterDecision,
+        context: &str,
+    ) {
+        assert!(
+            fast.hit_count_lower_bound <= exact.hit_count_lower_bound,
+            "{context}"
+        );
+        assert!(
+            fast.hit_count_lower_bound == exact.hit_count_lower_bound
+                || fast.hit_count_lower_bound
+                    >= kernel.required_hits(exact.minimizer_count_upper_bound),
+            "{context}"
+        );
+    }
+
+    /// A record without minimizers must not inherit the previous record's pooled buffer
     #[test]
-    fn rel_required_hits_is_monotone() {
+    fn short_record_after_long_record_has_no_hits() {
+        const K: u8 = 7;
+        const W: u8 = 3;
+        let reference: &[u8] = b"ACGTTGCAAGGCTTAACCGGTTACGATCGATCGGATCCTAGCTAGCTTAACCGGATCGTA";
+        let index = index_of(reference, K, W);
+        let mut kernel = FilterKernel::new(
+            K,
+            W,
+            FilterParams {
+                deplete: true,
+                abs_threshold: 1,
+                rel_threshold: 0.0,
+                prefix_length: 0,
+            },
+        )
+        .unwrap();
+
+        assert!(!kernel.classify_read(&index, reference).keep);
+        let decision = kernel.classify_read(&index, b"ACG");
+        assert_eq!(decision.hit_count_lower_bound, 0);
+        assert_eq!(decision.minimizer_count_upper_bound, 0);
+        assert!(decision.keep);
+
+        assert!(!kernel.classify_pair(&index, reference, reference).keep);
+        let decision = kernel.classify_pair(&index, b"ACG", b"");
+        assert_eq!(decision.hit_count_lower_bound, 0);
+        assert_eq!(decision.minimizer_count_upper_bound, 0);
+        assert!(decision.keep);
+    }
+
+    /// `needs_exact_minimizer_count` relies on `rel_required_hits` never decreasing
+    #[test]
+    fn rel_required_hits_never_decreases() {
         for &rel_threshold in &[0.0, 0.01, 0.1, 0.5, 0.99, 1.0] {
             let kernel = FilterKernel::new(
                 31,
@@ -449,11 +561,11 @@ mod tests {
             )
             .unwrap();
             let mut previous = 0;
-            for total in 0..2000 {
+            for total in 0..20000 {
                 let required = kernel.rel_required_hits(total);
                 assert!(
                     required >= previous,
-                    "rel_required_hits not monotone at total={total} (rel={rel_threshold})"
+                    "rel_required_hits decreased at total={total} (rel={rel_threshold})"
                 );
                 previous = required;
             }
@@ -475,9 +587,9 @@ mod tests {
         )
         .unwrap();
 
-        let decision = kernel.classify_pair(&index, b"AAAAA", b"AAAAA", false);
-        assert_eq!(decision.hit_count, 1);
-        assert_eq!(decision.total_minimizers, 1);
+        let decision = kernel.classify_pair(&index, b"AAAAA", b"AAAAA");
+        assert_eq!(decision.hit_count_lower_bound, 1);
+        assert_eq!(decision.minimizer_count_upper_bound, 1);
         assert!(decision.keep);
     }
 }
