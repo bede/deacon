@@ -648,9 +648,9 @@ struct BuildIndexProcessor<'c> {
     local_minimizers_u64: Option<RapidHashSet<u64>>,
     local_minimizers_u128: Option<RapidHashSet<u128>>,
     // Global state
-    global_stats: Arc<Mutex<ProcessingStats>>,
-    global_minimizers_u64: Arc<Mutex<Option<RapidHashSet<u64>>>>,
-    global_minimizers_u128: Arc<Mutex<Option<RapidHashSet<u128>>>>,
+    global_stats: &'c Mutex<ProcessingStats>,
+    global_minimizers_u64: &'c Mutex<Option<RapidHashSet<u64>>>,
+    global_minimizers_u128: &'c Mutex<Option<RapidHashSet<u128>>>,
 }
 
 #[cfg(feature = "cli")]
@@ -763,7 +763,12 @@ pub fn build(config: &IndexConfig) -> Result<()> {
         config.kmer_length, config.window_size
     );
 
+    let mut global_stats = Mutex::new(ProcessingStats::default());
+    let mut global_minimizers_u64 = Mutex::new(None);
+    let mut global_minimizers_u128 = Mutex::new(None);
+
     let mut processor = if config.kmer_length <= 32 {
+        global_minimizers_u64 = Mutex::new(Some(RapidHashSet::default()));
         BuildIndexProcessor {
             config,
             hasher: KmerHasher::new(config.kmer_length as usize),
@@ -771,11 +776,12 @@ pub fn build(config: &IndexConfig) -> Result<()> {
             buffers: Buffers::new_u64(),
             local_minimizers_u64: Some(RapidHashSet::default()),
             local_minimizers_u128: None,
-            global_stats: Arc::new(Mutex::new(ProcessingStats::default())),
-            global_minimizers_u64: Arc::new(Mutex::new(Some(RapidHashSet::default()))),
-            global_minimizers_u128: Arc::new(Mutex::new(None)),
+            global_stats: &global_stats,
+            global_minimizers_u64: &global_minimizers_u64,
+            global_minimizers_u128: &global_minimizers_u128,
         }
     } else {
+        global_minimizers_u128 = Mutex::new(Some(RapidHashSet::default()));
         BuildIndexProcessor {
             config,
             hasher: KmerHasher::new(config.kmer_length as usize),
@@ -783,29 +789,22 @@ pub fn build(config: &IndexConfig) -> Result<()> {
             buffers: Buffers::new_u128(),
             local_minimizers_u64: None,
             local_minimizers_u128: Some(RapidHashSet::default()),
-            global_stats: Arc::new(Mutex::new(ProcessingStats::default())),
-            global_minimizers_u64: Arc::new(Mutex::new(None)),
-            global_minimizers_u128: Arc::new(Mutex::new(Some(RapidHashSet::default()))),
+            global_stats: &global_stats,
+            global_minimizers_u64: &global_minimizers_u64,
+            global_minimizers_u128: &global_minimizers_u128,
         }
     };
     reader.process_parallel(&mut processor, config.threads as usize)?;
+    drop(processor);
 
     let mut all_minimizers = if config.kmer_length <= 32 {
-        let set = Arc::try_unwrap(processor.global_minimizers_u64)
-            .unwrap()
-            .into_inner()
-            .unwrap();
+        let set = global_minimizers_u64.get_mut().take().unwrap();
         crate::MinimizerSet::U64(set)
     } else {
-        let set = Arc::try_unwrap(processor.global_minimizers_u128)
-            .unwrap()
-            .into_inner()
-            .unwrap();
+        let set = global_minimizers_u128.get_mut().take().unwrap();
         crate::MinimizerSet::U128(set)
     };
-    let stats = Arc::try_unwrap(processor.global_stats)
-        .unwrap()
-        .into_inner();
+    let stats = global_stats.get_mut();
 
     eprintln!(
         "Indexed {} minimizers from {} record(s) ({}bp)",
