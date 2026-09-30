@@ -4,14 +4,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [0.18.1] - 2026-09-30
 
-### Added
-
-- `deacon index reorder` takes an existing deacon index and writes it out with normalised *k*-mer ordering for fastest loading during filtering.
-
 ### Changed
 
 - `deacon index build` is much faster and uses less memory. Minimizers are now partitioned by suffix across 1024 bins per worker thread, before being combined, sorted, and deduplicated without hashing. Indexing performance was previously limited by global HashSet contention.
-- Index minimizers are written to disk in the same order that `deacon filter` inserts them into the HashSet, reducing load time by ~25% in the case of panhuman-1. Output of `deacon index diff`, `union`, `intersect` and `filter` is now deterministically ordered regardless of thread count.
+- Index minimizers are written to disk in the same order that `deacon filter` inserts them into the HashSet, reducing load time by ~25% in the case of panhuman-1. Output of `deacon index diff`, `union`, `intersect` and `filter` is now deterministically ordered regardless of thread count, so `deacon index union old.idx -o new.idx` brings an older index up to date.
 - Faster search/depletion of sequences with many minimizer hits to the index by virtue of making fewer minimizer lookups, and related optimisations. Paired filtering performance also increased for both low-hit and high-hit sequences.
 - `FilterDecision` now reports possibly bounded counts as `hit_count_lower_bound` and `minimizer_count_upper_bound`. Separate `classify_*()` methods operate with and without early exit / exact hit counts.
 

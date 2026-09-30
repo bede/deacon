@@ -991,7 +991,7 @@ fn test_index_filter_complexity() {
 }
 
 #[test]
-fn test_index_reorder_preserves_contents() {
+fn test_index_union_of_one_is_deterministic() {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("test.fasta");
     let idx_path = temp_dir.path().join("test.idx");
@@ -1004,7 +1004,7 @@ fn test_index_reorder_preserves_contents() {
     for output in [&reordered_path, &again_path] {
         cargo::cargo_bin_cmd!("deacon")
             .arg("index")
-            .arg("reorder")
+            .arg("union")
             .arg(&idx_path)
             .arg("-o")
             .arg(output)
@@ -1012,7 +1012,7 @@ fn test_index_reorder_preserves_contents() {
             .success();
     }
 
-    // Same minimizers, and reordering is deterministic
+    // Same minimizers, written in the same order each time
     assert_eq!(
         fs::read(&idx_path).unwrap().len(),
         fs::read(&reordered_path).unwrap().len()
@@ -1038,7 +1038,7 @@ fn test_index_reorder_preserves_contents() {
 }
 
 #[test]
-fn test_index_reorder_rejects_bff() {
+fn test_index_union_rejects_bff() {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("test.fasta");
     let idx_path = temp_dir.path().join("test.idx");
@@ -1058,7 +1058,7 @@ fn test_index_reorder_rejects_bff() {
 
     cargo::cargo_bin_cmd!("deacon")
         .arg("index")
-        .arg("reorder")
+        .arg("union")
         .arg(&bff_path)
         .assert()
         .failure();
