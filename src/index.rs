@@ -1,6 +1,8 @@
 use crate::{FixedRapidHasher, RapidHashSet};
 use anyhow::{Context, Result};
 use bincode::serde::{decode_from_std_read, encode_into_std_write};
+#[cfg(feature = "cli")]
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -646,13 +648,16 @@ struct BuildIndexProcessor<'c> {
     // Local buffers
     buffers: Buffers,
     local_stats: ProcessingStats,
-    local_minimizers_u64: Option<RapidHashSet<u64>>,
-    local_minimizers_u128: Option<RapidHashSet<u128>>,
+    local_minimizers_u64: Option<Vec<RapidHashSet<u64>>>,
+    local_minimizers_u128: Option<Vec<RapidHashSet<u128>>>,
     // Global state
     global_stats: &'c Mutex<ProcessingStats>,
-    global_minimizers_u64: &'c Mutex<Option<RapidHashSet<u64>>>,
-    global_minimizers_u128: &'c Mutex<Option<RapidHashSet<u128>>>,
+    global_minimizers_u64: &'c [Mutex<RapidHashSet<u64>>],
+    global_minimizers_u128: &'c [Mutex<RapidHashSet<u128>>],
 }
+
+#[cfg(feature = "cli")]
+const SHARDS: usize = 1024;
 
 #[cfg(feature = "cli")]
 impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
@@ -669,19 +674,22 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
             &mut self.buffers,
         );
 
-        // Extend appropriate local set based on type
+        // Partition minimizers by value so each worker can merge its shards
+        // independently at thread completion.
         match &mut self.buffers.minimizers {
             crate::MinimizerVec::U64(vec) => {
-                self.local_minimizers_u64
-                    .as_mut()
-                    .unwrap()
-                    .extend(vec.iter());
+                let local = self.local_minimizers_u64.as_mut().unwrap();
+                for &minimizer in vec.iter() {
+                    let shard = (minimizer % SHARDS as u64) as usize;
+                    local[shard].insert(minimizer);
+                }
             }
             crate::MinimizerVec::U128(vec) => {
-                self.local_minimizers_u128
-                    .as_mut()
-                    .unwrap()
-                    .extend(vec.iter());
+                let local = self.local_minimizers_u128.as_mut().unwrap();
+                for &minimizer in vec.iter() {
+                    let shard = (minimizer % SHARDS as u128) as usize;
+                    local[shard].insert(minimizer);
+                }
             }
         }
 
@@ -689,22 +697,6 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
-        // Merge local minimizers into global set and get new total count
-        let minimizer_count = if let Some(local) = &mut self.local_minimizers_u64 {
-            let mut global = self.global_minimizers_u64.lock();
-            global.as_mut().unwrap().extend(local.iter());
-            local.clear();
-            global.as_ref().unwrap().len()
-        } else {
-            let mut global = self.global_minimizers_u128.lock();
-            global
-                .as_mut()
-                .unwrap()
-                .extend(self.local_minimizers_u128.as_ref().unwrap().iter());
-            self.local_minimizers_u128.as_mut().unwrap().clear();
-            global.as_ref().unwrap().len()
-        };
-
         // Tick to stderr once every Gbp
         {
             let mut stats = self.global_stats.lock();
@@ -714,9 +706,9 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
             if !self.config.quiet {
                 let current_gb = stats.total_bp / 1_000_000_000;
                 if current_gb > stats.last_reported {
-                    eprintln!(
-                        "  Processed {} sequences ({}bp), {} minimizers",
-                        stats.total_seqs, stats.total_bp, minimizer_count
+                    info!(
+                        "  Processed {} sequences ({}bp)",
+                        stats.total_seqs, stats.total_bp
                     );
                     stats.last_reported = current_gb;
                 }
@@ -725,6 +717,27 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
             self.local_stats = ProcessingStats::default();
         }
 
+        Ok(())
+    }
+
+    fn on_thread_complete(&mut self) -> paraseq::Result<()> {
+        // Randomize the order of shards to avoid all threads waiting on a single one.
+        let mut shard_order: Vec<_> = (0..SHARDS).collect();
+        shard_order.shuffle(&mut rand::rng());
+        if let Some(local) = &mut self.local_minimizers_u64 {
+            for shard in shard_order {
+                self.global_minimizers_u64[shard]
+                    .lock()
+                    .extend(std::mem::take(&mut local[shard]));
+            }
+        } else {
+            let local = self.local_minimizers_u128.as_mut().unwrap();
+            for shard in shard_order {
+                self.global_minimizers_u128[shard]
+                    .lock()
+                    .extend(std::mem::take(&mut local[shard]));
+            }
+        }
         Ok(())
     }
 }
@@ -764,32 +777,34 @@ pub fn build(config: &IndexConfig) -> Result<()> {
         config.kmer_length, config.window_size
     );
 
-    let mut global_stats = Mutex::new(ProcessingStats::default());
-    let mut global_minimizers_u64 = Mutex::new(None);
-    let mut global_minimizers_u128 = Mutex::new(None);
+    let global_stats = Mutex::new(ProcessingStats::default());
+    let global_minimizers_u64: Vec<Mutex<RapidHashSet<u64>>> = (0..SHARDS)
+        .map(|_| Mutex::new(RapidHashSet::default()))
+        .collect();
+    let global_minimizers_u128: Vec<Mutex<RapidHashSet<u128>>> = (0..SHARDS)
+        .map(|_| Mutex::new(RapidHashSet::default()))
+        .collect();
 
     let mut processor = if config.kmer_length <= 32 {
-        global_minimizers_u64 = Mutex::new(Some(RapidHashSet::default()));
         BuildIndexProcessor {
             config,
             hasher: KmerHasher::new(config.kmer_length as usize),
             local_stats: ProcessingStats::default(),
             buffers: Buffers::new_u64(),
-            local_minimizers_u64: Some(RapidHashSet::default()),
+            local_minimizers_u64: Some((0..SHARDS).map(|_| RapidHashSet::default()).collect()),
             local_minimizers_u128: None,
             global_stats: &global_stats,
             global_minimizers_u64: &global_minimizers_u64,
             global_minimizers_u128: &global_minimizers_u128,
         }
     } else {
-        global_minimizers_u128 = Mutex::new(Some(RapidHashSet::default()));
         BuildIndexProcessor {
             config,
             hasher: KmerHasher::new(config.kmer_length as usize),
             local_stats: ProcessingStats::default(),
             buffers: Buffers::new_u128(),
             local_minimizers_u64: None,
-            local_minimizers_u128: Some(RapidHashSet::default()),
+            local_minimizers_u128: Some((0..SHARDS).map(|_| RapidHashSet::default()).collect()),
             global_stats: &global_stats,
             global_minimizers_u64: &global_minimizers_u64,
             global_minimizers_u128: &global_minimizers_u128,
@@ -800,10 +815,16 @@ pub fn build(config: &IndexConfig) -> Result<()> {
 
     info!("Collecting minimizers into a single set");
     let mut all_minimizers = if config.kmer_length <= 32 {
-        let set = global_minimizers_u64.get_mut().take().unwrap();
+        let mut set = RapidHashSet::default();
+        for shard in global_minimizers_u64 {
+            set.extend(shard.into_inner());
+        }
         crate::MinimizerSet::U64(set)
     } else {
-        let set = global_minimizers_u128.get_mut().take().unwrap();
+        let mut set = RapidHashSet::default();
+        for shard in global_minimizers_u128 {
+            set.extend(shard.into_inner());
+        }
         crate::MinimizerSet::U128(set)
     };
     let stats = global_stats.into_inner();
