@@ -1,3 +1,5 @@
+#[cfg(feature = "cli")]
+use crate::dedupping_vec::DeduppingVec;
 use crate::{FixedRapidHasher, MinimizerSet, MinimizerVecVec, RapidHashSet};
 use anyhow::{Context, Result};
 use bincode::serde::{decode_from_std_read, encode_into_std_write};
@@ -742,8 +744,8 @@ struct BuildIndexProcessor<'c> {
     local_minimizers_u128: Option<Vec<Vec<u128>>>,
     // Global state
     global_stats: &'c Mutex<ProcessingStats>,
-    global_minimizers_u64: &'c [Mutex<Vec<u64>>],
-    global_minimizers_u128: &'c [Mutex<Vec<u128>>],
+    global_minimizers_u64: &'c [Mutex<DeduppingVec<u64>>],
+    global_minimizers_u128: &'c [Mutex<DeduppingVec<u128>>],
 }
 
 #[cfg(feature = "cli")]
@@ -873,10 +875,12 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     );
 
     let global_stats = Mutex::new(ProcessingStats::default());
-    let global_minimizers_u64: Vec<Mutex<Vec<u64>>> =
-        (0..SHARDS).map(|_| Mutex::new(vec![])).collect();
-    let global_minimizers_u128: Vec<Mutex<Vec<u128>>> =
-        (0..SHARDS).map(|_| Mutex::new(vec![])).collect();
+    let global_minimizers_u64: Vec<Mutex<DeduppingVec<u64>>> = (0..SHARDS)
+        .map(|_| Mutex::new(Default::default()))
+        .collect();
+    let global_minimizers_u128: Vec<Mutex<DeduppingVec<u128>>> = (0..SHARDS)
+        .map(|_| Mutex::new(Default::default()))
+        .collect();
 
     let mut processor = if config.kmer_length <= 32 {
         BuildIndexProcessor {
@@ -906,16 +910,17 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     reader.process_parallel(&mut processor, config.threads as usize)?;
     drop(processor);
 
+    info!("Dedup shards");
     let all_minimizers = if config.kmer_length <= 32 {
         let shards: Vec<_> = global_minimizers_u64
-            .into_iter()
-            .map(|mutex| mutex.into_inner())
+            .into_par_iter()
+            .map(|mutex| mutex.into_inner().finish())
             .collect();
         MinimizerVecVec::U64(sort_sharded_lists(shards))
     } else {
         let shards: Vec<_> = global_minimizers_u128
-            .into_iter()
-            .map(|mutex| mutex.into_inner())
+            .into_par_iter()
+            .map(|mutex| mutex.into_inner().finish())
             .collect();
         MinimizerVecVec::U128(sort_sharded_lists(shards))
     };
