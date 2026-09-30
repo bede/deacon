@@ -2,6 +2,7 @@ use crate::{FixedRapidHasher, RapidHashSet};
 use anyhow::{Context, Result};
 use bincode::serde::{decode_from_std_read, encode_into_std_write};
 use serde::{Deserialize, Serialize};
+use std::hash::{BuildHasher, Hasher};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
@@ -338,7 +339,7 @@ pub fn load_index_from_path_auto(path: &Path) -> Result<(crate::MinimizerSet, In
 
 /// Helper function to write minimizers to output file or stdout
 pub fn dump_minimizers(
-    minimizers: &crate::MinimizerSet,
+    minimizers: &mut crate::MinimizerSet,
     header: &IndexHeader,
     output_path: Option<&Path>,
 ) -> Result<()> {
@@ -364,7 +365,9 @@ pub fn dump_minimizers(
     let bytes_per_minimizer = (header.kmer_length as usize).div_ceil(4);
     match minimizers {
         crate::MinimizerSet::U64(set) => {
-            for &val in set {
+            let sorted = sort_hashset(set);
+            eprintln!("Writing minimizers..");
+            for val in sorted {
                 // Write only the required bytes (little-endian)
                 let bytes = val.to_le_bytes();
                 writer
@@ -373,7 +376,9 @@ pub fn dump_minimizers(
             }
         }
         crate::MinimizerSet::U128(set) => {
-            for &val in set {
+            let sorted = sort_hashset(set);
+            eprintln!("Writing minimizers..");
+            for val in sorted {
                 // Write only the required bytes (little-endian)
                 let bytes = val.to_le_bytes();
                 writer
@@ -388,6 +393,67 @@ pub fn dump_minimizers(
         }
     }
     Ok(())
+}
+
+/// Sort the values in the hashset by (bucket, value).
+///
+/// This way, the output is deterministic, and construction from an index file
+/// is fast because the data is already in the right order.
+///
+/// This works by first shrinking the input hashset to fit so it has the correct final size.
+/// Then, we collect all elements to a vector by iteration order,
+/// which _mostly_ but not exactly returns them by order of target bucket.
+/// We end with a naive insertion sort to precisely sort all values by their target bucket.
+fn sort_hashset<T>(set: &mut RapidHashSet<T>) -> Vec<T>
+where
+    T: Copy + std::hash::Hash + Ord + Send + Sync,
+{
+    eprintln!("Sorting minimizers..");
+    // Note that this might differ from the current capacity if elements were deleted.
+    set.shrink_to_fit();
+
+    // Copied from hashbrown hash table.
+    let num_buckets = (set.len() * 8 / 7).next_power_of_two();
+    assert_eq!(
+        num_buckets,
+        set.capacity() / 7 * 8,
+        "The hashbrown implementation has a different capacity and/or number of buckets than expected."
+    );
+
+    let bucket = |x: &T| -> usize {
+        let mut hasher = FixedRapidHasher::default().build_hasher();
+        x.hash(&mut hasher);
+        let hash = hasher.finish() as usize;
+        hash & (num_buckets - 1)
+    };
+
+    // Get a vec of values, and do a silly but fast insertion sort on it,
+    // since the vec is already mostly sorted by bucket anyway.
+    let mut vals: Vec<_> = set.iter().copied().collect();
+
+    // insertion sort
+    for i in 1..vals.len() {
+        let x = (bucket(&vals[i]), vals[i]);
+
+        // where does x go? iterate backwards
+        let mut j = i;
+        while j > 0 {
+            let y = (bucket(&vals[j - 1]), vals[j - 1]);
+            if x >= y {
+                break;
+            }
+            j -= 1;
+        }
+
+        // rotate x to the right slot.
+        if j != i {
+            vals[j..=i].rotate_right(1);
+        }
+    }
+
+    assert!(vals.is_sorted_by_key(|x| (bucket(x), x)));
+
+    vals
 }
 
 /// Dump indexed minimizers to FASTA
@@ -714,7 +780,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     };
     reader.process_parallel(&mut processor, config.threads as usize)?;
 
-    let all_minimizers = if config.kmer_length <= 32 {
+    let mut all_minimizers = if config.kmer_length <= 32 {
         let set = Arc::try_unwrap(processor.global_minimizers_u64)
             .unwrap()
             .into_inner()
@@ -741,7 +807,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     let header = IndexHeader::new(config.kmer_length, config.window_size);
 
     // Write to output path or stdout
-    dump_minimizers(&all_minimizers, &header, config.output_path.as_deref())?;
+    dump_minimizers(&mut all_minimizers, &header, config.output_path.as_deref())?;
 
     let total_time = start_time.elapsed();
     eprintln!("Completed build in {:.2?}", total_time);
@@ -1022,7 +1088,7 @@ pub fn diff(
             first_minimizers.len()
         );
 
-        dump_minimizers(&first_minimizers, &header, output)?;
+        dump_minimizers(&mut first_minimizers, &header, output)?;
 
         let total_time = start_time.elapsed();
         eprintln!("Completed diff in {:.2?}", total_time);
@@ -1070,7 +1136,7 @@ pub fn diff(
                 first_minimizers.len()
             );
 
-            dump_minimizers(&first_minimizers, &header, output)?;
+            dump_minimizers(&mut first_minimizers, &header, output)?;
 
             let total_time = start_time.elapsed();
             eprintln!("Completed diff in {:.2?}", total_time);
@@ -1093,7 +1159,7 @@ pub fn diff(
         first_minimizers.len()
     );
 
-    dump_minimizers(&first_minimizers, &header, output)?;
+    dump_minimizers(&mut first_minimizers, &header, output)?;
 
     let total_time = start_time.elapsed();
     eprintln!("Completed diff in {:.2?}", total_time);
@@ -1189,7 +1255,7 @@ pub fn filter(
     minimizers.retain_complexity(header.kmer_length(), algorithm, threshold, invert)?;
     let after = minimizers.len();
 
-    dump_minimizers(&minimizers, &header, output)?;
+    dump_minimizers(&mut minimizers, &header, output)?;
 
     eprintln!(
         "Kept {} of {} minimizers ({} removed) in {:.2?}",
@@ -1269,7 +1335,7 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
         );
     }
 
-    dump_minimizers(&all_minimizers, header, output)?;
+    dump_minimizers(&mut all_minimizers, header, output)?;
 
     let total_time = start_time.elapsed();
     eprintln!(
@@ -1347,7 +1413,7 @@ pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
         );
     }
 
-    dump_minimizers(&result_minimizers, header, output)?;
+    dump_minimizers(&mut result_minimizers, header, output)?;
 
     let total_time = start_time.elapsed();
     eprintln!(
