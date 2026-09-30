@@ -50,7 +50,7 @@ pub fn validate_unit_interval<T: Into<f64> + Copy + std::fmt::Display>(
 
 #[cfg(feature = "cli")]
 use anyhow::Result;
-use std::collections::HashSet;
+use hashbrown::HashSet;
 use std::hash::BuildHasher;
 #[cfg(feature = "cli")]
 use std::path::{Path, PathBuf};
@@ -68,6 +68,8 @@ impl BuildHasher for FixedRapidHasher {
 }
 
 /// RapidHashSet using rapidhash with fixed seed for fast init
+///
+/// We directly use the hashbrown version for stability of the number of slots in the data structure.
 pub type RapidHashSet<T> = HashSet<T, FixedRapidHasher>;
 
 /// Binary fuse filter (BFF) index: no false negatives, k<=32.

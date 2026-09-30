@@ -50,6 +50,7 @@ flate2 = { version = "1.1", features = ["zlib-rs"], optional = true }
 zstd = { version = "0.14", optional = true }
 gzp = { version = "2.0", default-features = false, features = ["deflate_rust"], optional = true }
 minreq = { version = "3", features = ["https-rustls-probe"], optional = true }
+hashbrown = "0.17.1"
 
 [lints.clippy]
 too_many_arguments = "allow"
