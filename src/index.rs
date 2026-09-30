@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
-use tracing::info;
+use tracing::{debug, info};
 
 #[cfg(feature = "cli")]
 use rayon::prelude::*;
@@ -482,17 +482,26 @@ where
 /// Takes a bunch of shards and re-shards those according to the high bits of the target bucket.
 /// We again use 1024 target shards, and use multithreading to distribute the values.
 /// Then, we sort each target shard inside a thread and end by concatenating all Vecs.
-fn sort_sharded_hashsets<T>(shards: &mut [RapidHashSet<T>]) -> Vec<Vec<T>>
+fn sort_sharded_lists<T>(mut shards: Vec<Vec<T>>) -> Vec<Vec<T>>
 where
     T: Copy + std::hash::Hash + Ord + Send + Sync,
 {
-    let total_len: usize = shards.iter().map(RapidHashSet::len).sum();
-    if total_len == 0 {
-        return vec![];
-    }
+    info!("Dedup shards");
+    shards.par_iter_mut().for_each(|shard| {
+        shard.sort_unstable();
+        let len = shard.len();
+        shard.dedup();
+        debug!(
+            "Deduped shard of length {:>8} to {:>8} unique values ({:2.0}%)",
+            len,
+            shard.len(),
+            100.0 * shard.len() as f64 / len as f64
+        );
+    });
 
     // Match the bucket count of the single, final hash set used by
     // sort_hashset so concatenating these vectors preserves its ordering.
+    let total_len: usize = shards.iter().map(Vec::len).sum();
     let num_buckets = (total_len * 8 / 7).next_power_of_two();
     let bucket = |x: &T| -> usize {
         let mut hasher = FixedRapidHasher::default().build_hasher();
@@ -509,12 +518,14 @@ where
     let sorted_shards: Vec<Mutex<Vec<T>>> = (0..SHARDS).map(|_| Mutex::new(Vec::new())).collect();
     shards.into_par_iter().for_each(|shard| {
         let mut buffers = (0..SHARDS).map(|_| vec![]).collect::<Vec<_>>();
-        for value in shard.drain() {
+        for value in shard {
             let target_shard = bucket(&value) >> shift;
             buffers[target_shard].push(value);
         }
-        for shard in random_shard_order() {
-            sorted_shards[shard].lock().extend(buffers[shard].drain(..));
+        for shard_idx in random_shard_order() {
+            sorted_shards[shard_idx]
+                .lock()
+                .extend(buffers[shard_idx].drain(..));
         }
     });
 
@@ -727,12 +738,12 @@ struct BuildIndexProcessor<'c> {
     // Local buffers
     buffers: Buffers,
     local_stats: ProcessingStats,
-    local_minimizers_u64: Option<Vec<RapidHashSet<u64>>>,
-    local_minimizers_u128: Option<Vec<RapidHashSet<u128>>>,
+    local_minimizers_u64: Option<Vec<Vec<u64>>>,
+    local_minimizers_u128: Option<Vec<Vec<u128>>>,
     // Global state
     global_stats: &'c Mutex<ProcessingStats>,
-    global_minimizers_u64: &'c [Mutex<RapidHashSet<u64>>],
-    global_minimizers_u128: &'c [Mutex<RapidHashSet<u128>>],
+    global_minimizers_u64: &'c [Mutex<Vec<u64>>],
+    global_minimizers_u128: &'c [Mutex<Vec<u128>>],
 }
 
 #[cfg(feature = "cli")]
@@ -760,14 +771,14 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
                 let local = self.local_minimizers_u64.as_mut().unwrap();
                 for &minimizer in vec.iter() {
                     let shard = (minimizer % SHARDS as u64) as usize;
-                    local[shard].insert(minimizer);
+                    local[shard].push(minimizer);
                 }
             }
             crate::MinimizerVec::U128(vec) => {
                 let local = self.local_minimizers_u128.as_mut().unwrap();
                 for &minimizer in vec.iter() {
                     let shard = (minimizer % SHARDS as u128) as usize;
-                    local[shard].insert(minimizer);
+                    local[shard].push(minimizer);
                 }
             }
         }
@@ -862,12 +873,10 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     );
 
     let global_stats = Mutex::new(ProcessingStats::default());
-    let global_minimizers_u64: Vec<Mutex<RapidHashSet<u64>>> = (0..SHARDS)
-        .map(|_| Mutex::new(RapidHashSet::default()))
-        .collect();
-    let global_minimizers_u128: Vec<Mutex<RapidHashSet<u128>>> = (0..SHARDS)
-        .map(|_| Mutex::new(RapidHashSet::default()))
-        .collect();
+    let global_minimizers_u64: Vec<Mutex<Vec<u64>>> =
+        (0..SHARDS).map(|_| Mutex::new(vec![])).collect();
+    let global_minimizers_u128: Vec<Mutex<Vec<u128>>> =
+        (0..SHARDS).map(|_| Mutex::new(vec![])).collect();
 
     let mut processor = if config.kmer_length <= 32 {
         BuildIndexProcessor {
@@ -875,7 +884,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
             hasher: KmerHasher::new(config.kmer_length as usize),
             local_stats: ProcessingStats::default(),
             buffers: Buffers::new_u64(),
-            local_minimizers_u64: Some((0..SHARDS).map(|_| RapidHashSet::default()).collect()),
+            local_minimizers_u64: Some((0..SHARDS).map(|_| vec![]).collect()),
             local_minimizers_u128: None,
             global_stats: &global_stats,
             global_minimizers_u64: &global_minimizers_u64,
@@ -888,7 +897,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
             local_stats: ProcessingStats::default(),
             buffers: Buffers::new_u128(),
             local_minimizers_u64: None,
-            local_minimizers_u128: Some((0..SHARDS).map(|_| RapidHashSet::default()).collect()),
+            local_minimizers_u128: Some((0..SHARDS).map(|_| vec![]).collect()),
             global_stats: &global_stats,
             global_minimizers_u64: &global_minimizers_u64,
             global_minimizers_u128: &global_minimizers_u128,
@@ -898,17 +907,17 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     drop(processor);
 
     let all_minimizers = if config.kmer_length <= 32 {
-        let mut shards: Vec<_> = global_minimizers_u64
+        let shards: Vec<_> = global_minimizers_u64
             .into_iter()
             .map(|mutex| mutex.into_inner())
             .collect();
-        MinimizerVecVec::U64(sort_sharded_hashsets(&mut shards))
+        MinimizerVecVec::U64(sort_sharded_lists(shards))
     } else {
-        let mut shards: Vec<_> = global_minimizers_u128
+        let shards: Vec<_> = global_minimizers_u128
             .into_iter()
             .map(|mutex| mutex.into_inner())
             .collect();
-        MinimizerVecVec::U128(sort_sharded_hashsets(&mut shards))
+        MinimizerVecVec::U128(sort_sharded_lists(shards))
     };
 
     let stats = global_stats.into_inner();
