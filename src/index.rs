@@ -780,8 +780,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
 
                     if local[shard].len() >= LOCAL_BUF_SIZE {
                         let mut global = self.global_minimizers_u64[shard].lock();
-                        global.extend(local[shard].iter().copied());
-                        local[shard].clear();
+                        global.extend(&mut local[shard]);
                     }
                 }
             }
@@ -793,8 +792,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
 
                     if local[shard].len() >= LOCAL_BUF_SIZE {
                         let mut global = self.global_minimizers_u128[shard].lock();
-                        global.extend(local[shard].iter().copied());
-                        local[shard].clear();
+                        global.extend(&mut local[shard]);
                     }
                 }
             }
@@ -832,14 +830,14 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
             for shard in random_shard_order() {
                 self.global_minimizers_u64[shard]
                     .lock()
-                    .extend(std::mem::take(&mut local[shard]));
+                    .extend(&mut local[shard]);
             }
         } else {
             let local = self.local_minimizers_u128.as_mut().unwrap();
             for shard in random_shard_order() {
                 self.global_minimizers_u128[shard]
                     .lock()
-                    .extend(std::mem::take(&mut local[shard]));
+                    .extend(&mut local[shard]);
             }
         }
         Ok(())

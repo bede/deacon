@@ -11,7 +11,7 @@ impl<T: Ord + Clone> Default for DeduppingVec<T> {
         DeduppingVec {
             data: Vec::new(),
             // Only start dedupping once shards hit 1M elements, or ~8MB, for 8GB total memory.
-            limit: 1 << 20,
+            limit: 1 << 22,
         }
     }
 }
@@ -19,8 +19,9 @@ impl<T: Ord + Clone> Default for DeduppingVec<T> {
 impl<T: Ord + Clone> DeduppingVec<T> {
     /// Hand a full staging buffer to its shard, compacting the shard if it has grown
     #[inline]
-    pub fn extend(&mut self, values: impl IntoIterator<Item = T>) {
-        self.data.extend(values);
+    pub fn extend(&mut self, values: &mut Vec<T>) {
+        self.data.extend_from_slice(values);
+        values.clear();
 
         if self.data.len() >= self.limit {
             self.data.sort_unstable();
