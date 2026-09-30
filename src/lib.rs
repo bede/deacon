@@ -393,6 +393,7 @@ impl FilterConfig<'_> {
 }
 
 #[cfg(feature = "cli")]
+#[derive(Clone)]
 pub struct IndexConfig {
     /// Path to input fastx file
     pub input_path: PathBuf,

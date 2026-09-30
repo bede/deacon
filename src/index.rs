@@ -19,6 +19,8 @@ use crate::IndexConfig;
 #[cfg(feature = "cli")]
 use crate::minimizers::{Buffers, KmerHasher};
 #[cfg(feature = "cli")]
+use binseq::{BinseqRecord, ParallelReader as BinSeqParalleReader, cbq};
+#[cfg(feature = "cli")]
 use paraseq::Record;
 #[cfg(feature = "cli")]
 use paraseq::prelude::{ParallelProcessor, ParallelReader};
@@ -722,18 +724,19 @@ use crate::filter::ProcessingStats;
 
 #[cfg(feature = "cli")]
 #[derive(Clone)]
-struct BuildIndexProcessor<'c> {
-    config: &'c IndexConfig,
+struct BuildIndexProcessor {
+    config: IndexConfig,
     hasher: KmerHasher,
     // Local buffers
+    seq: Vec<u8>,
     buffers: Buffers,
     local_stats: ProcessingStats,
     local_minimizers_u64: Option<Vec<Vec<u64>>>,
     local_minimizers_u128: Option<Vec<Vec<u128>>>,
     // Global state
-    global_stats: &'c Mutex<ProcessingStats>,
-    global_minimizers_u64: &'c [Mutex<DeduppingVec<u64>>],
-    global_minimizers_u128: &'c [Mutex<DeduppingVec<u128>>],
+    global_stats: Arc<Mutex<ProcessingStats>>,
+    global_minimizers_u64: Arc<Vec<Mutex<DeduppingVec<u64>>>>,
+    global_minimizers_u128: Arc<Vec<Mutex<DeduppingVec<u128>>>>,
 }
 
 #[cfg(feature = "cli")]
@@ -743,7 +746,7 @@ const SHARDS: usize = 1024;
 const LOCAL_BUF_SIZE: usize = 1024;
 
 #[cfg(feature = "cli")]
-impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
+impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor {
     fn process_record(&mut self, record: Rf) -> paraseq::Result<()> {
         let seq = record.seq();
         self.local_stats.total_seqs += 1;
@@ -832,6 +835,98 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
     }
 }
 
+#[cfg(feature = "cli")]
+impl binseq::ParallelProcessor for BuildIndexProcessor {
+    fn process_record<R: BinseqRecord>(&mut self, record: R) -> binseq::Result<()> {
+        self.seq.clear();
+        record.decode_s(&mut self.seq).unwrap();
+        let seq = &self.seq;
+        self.local_stats.total_seqs += 1;
+        self.local_stats.total_bp += seq.len() as u64;
+
+        crate::minimizers::fill_minimizers(
+            &seq,
+            &self.hasher,
+            self.config.kmer_length,
+            self.config.window_size,
+            &mut self.buffers,
+        );
+
+        // Partition minimizers by value so each worker can merge its shards
+        // independently at thread completion.
+        match &mut self.buffers.minimizers {
+            crate::MinimizerVec::U64(vec) => {
+                let local = self.local_minimizers_u64.as_mut().unwrap();
+                for &minimizer in vec.iter() {
+                    let shard = (minimizer % SHARDS as u64) as usize;
+                    local[shard].push(minimizer);
+
+                    if local[shard].len() >= LOCAL_BUF_SIZE {
+                        let mut global = self.global_minimizers_u64[shard].lock();
+                        global.extend(&mut local[shard]);
+                    }
+                }
+            }
+            crate::MinimizerVec::U128(vec) => {
+                let local = self.local_minimizers_u128.as_mut().unwrap();
+                for &minimizer in vec.iter() {
+                    let shard = (minimizer % SHARDS as u128) as usize;
+                    local[shard].push(minimizer);
+
+                    if local[shard].len() >= LOCAL_BUF_SIZE {
+                        let mut global = self.global_minimizers_u128[shard].lock();
+                        global.extend(&mut local[shard]);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn on_batch_complete(&mut self) -> binseq::Result<()> {
+        // Tick to stderr once every Gbp
+        {
+            let mut stats = self.global_stats.lock();
+            stats.total_seqs += self.local_stats.total_seqs;
+            stats.total_bp += self.local_stats.total_bp;
+
+            if !self.config.quiet {
+                let current_gb = stats.total_bp / 1_000_000_000;
+                if current_gb > stats.last_reported {
+                    info!(
+                        "  Processed {} sequences ({}bp)",
+                        stats.total_seqs, stats.total_bp
+                    );
+                    stats.last_reported = current_gb;
+                }
+            }
+
+            self.local_stats = ProcessingStats::default();
+        }
+
+        Ok(())
+    }
+
+    fn on_thread_complete(&mut self) -> binseq::Result<()> {
+        if let Some(local) = &mut self.local_minimizers_u64 {
+            for shard in random_shard_order() {
+                self.global_minimizers_u64[shard]
+                    .lock()
+                    .extend(&mut local[shard]);
+            }
+        } else {
+            let local = self.local_minimizers_u128.as_mut().unwrap();
+            for shard in random_shard_order() {
+                self.global_minimizers_u128[shard]
+                    .lock()
+                    .extend(&mut local[shard]);
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Randomize the order of shards to avoid all threads waiting on a single one.
 #[cfg(feature = "cli")]
 fn random_shard_order() -> Vec<usize> {
@@ -868,7 +963,6 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     } else {
         Some(path.as_path())
     };
-    let reader = reader_with_inferred_batch_size(in_path)?;
 
     info!(
         "Building index (k={}, w={})",
@@ -885,9 +979,10 @@ pub fn build(config: &IndexConfig) -> Result<()> {
 
     let mut processor = if config.kmer_length <= 32 {
         BuildIndexProcessor {
-            config,
+            config: config.clone(),
             hasher: KmerHasher::new(config.kmer_length as usize),
             local_stats: ProcessingStats::default(),
+            seq: vec![],
             buffers: Buffers::new_u64(),
             local_minimizers_u64: Some(
                 (0..SHARDS)
@@ -895,15 +990,16 @@ pub fn build(config: &IndexConfig) -> Result<()> {
                     .collect(),
             ),
             local_minimizers_u128: None,
-            global_stats: &global_stats,
-            global_minimizers_u64: &global_minimizers_u64,
-            global_minimizers_u128: &global_minimizers_u128,
+            global_stats: Arc::new(global_stats),
+            global_minimizers_u64: Arc::new(global_minimizers_u64),
+            global_minimizers_u128: Arc::new(global_minimizers_u128),
         }
     } else {
         BuildIndexProcessor {
-            config,
+            config: config.clone(),
             hasher: KmerHasher::new(config.kmer_length as usize),
             local_stats: ProcessingStats::default(),
+            seq: vec![],
             buffers: Buffers::new_u128(),
             local_minimizers_u64: None,
             local_minimizers_u128: Some(
@@ -911,13 +1007,24 @@ pub fn build(config: &IndexConfig) -> Result<()> {
                     .map(|_| Vec::with_capacity(LOCAL_BUF_SIZE))
                     .collect(),
             ),
-            global_stats: &global_stats,
-            global_minimizers_u64: &global_minimizers_u64,
-            global_minimizers_u128: &global_minimizers_u128,
+            global_stats: Arc::new(global_stats),
+            global_minimizers_u64: Arc::new(global_minimizers_u64),
+            global_minimizers_u128: Arc::new(global_minimizers_u128),
         }
     };
-    reader.process_parallel(&mut processor, config.threads as usize)?;
-    drop(processor);
+    if path.extension().is_some_and(|ext| ext == "cbq") {
+        let reader = cbq::MmapReader::new(path).context("Failed to open CBQ input")?;
+        reader.process_parallel(processor.clone(), config.threads as usize)?;
+    } else {
+        let reader = reader_with_inferred_batch_size(in_path)?;
+        reader.process_parallel(&mut processor, config.threads as usize)?;
+    }
+    let global_stats = Arc::try_unwrap(processor.global_stats).unwrap();
+    let global_minimizers_u64 =
+        Arc::try_unwrap(processor.global_minimizers_u64).unwrap_or_default();
+    let global_minimizers_u128 =
+        Arc::try_unwrap(processor.global_minimizers_u128).unwrap_or_default();
+    // drop(processor);
 
     info!("Dedup shards");
     let all_minimizers = if config.kmer_length <= 32 {
