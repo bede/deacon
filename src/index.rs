@@ -752,6 +752,9 @@ struct BuildIndexProcessor<'c> {
 const SHARDS: usize = 1024;
 
 #[cfg(feature = "cli")]
+const LOCAL_BUF_SIZE: usize = 1024;
+
+#[cfg(feature = "cli")]
 impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
     fn process_record(&mut self, record: Rf) -> paraseq::Result<()> {
         let seq = record.seq();
@@ -774,6 +777,12 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
                 for &minimizer in vec.iter() {
                     let shard = (minimizer % SHARDS as u64) as usize;
                     local[shard].push(minimizer);
+
+                    if local[shard].len() >= LOCAL_BUF_SIZE {
+                        let mut global = self.global_minimizers_u64[shard].lock();
+                        global.extend(local[shard].iter().copied());
+                        local[shard].clear();
+                    }
                 }
             }
             crate::MinimizerVec::U128(vec) => {
@@ -781,6 +790,12 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
                 for &minimizer in vec.iter() {
                     let shard = (minimizer % SHARDS as u128) as usize;
                     local[shard].push(minimizer);
+
+                    if local[shard].len() >= LOCAL_BUF_SIZE {
+                        let mut global = self.global_minimizers_u128[shard].lock();
+                        global.extend(local[shard].iter().copied());
+                        local[shard].clear();
+                    }
                 }
             }
         }
