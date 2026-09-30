@@ -8,7 +8,7 @@ use deacon::{
     index_intersect, index_reorder, index_union,
 };
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -327,6 +327,15 @@ fn print_citation() {
     println!("https://doi.org/10.1101/2025.06.09.658732");
 }
 
+/// Refuse to write binary index data directly to an interactive terminal.
+fn ensure_index_output_is_redirected(output: &mut Option<PathBuf>) -> Result<()> {
+    if output.is_none() && std::io::stdout().is_terminal() {
+        tracing::error!("Inhibiting binary index output to stdout. Redirecting to /dev/null.");
+        *output = Some(PathBuf::from("/dev/null"));
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .compact()
@@ -430,7 +439,7 @@ fn main() -> Result<()> {
                     break;
                 }
                 command => {
-                    let result = process_command(&command);
+                    let result = process_command(command);
                     let reply = match result {
                         Ok(()) => Reply::Done,
                         Err(e) => Reply::Error(format!("{e:#}")),
@@ -474,13 +483,13 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    process_command(&cli.command)?;
+    process_command(cli.command)?;
 
     Ok(())
 }
 
-fn process_command(command: &Command) -> Result<(), anyhow::Error> {
-    match &command {
+fn process_command(command: Command) -> Result<(), anyhow::Error> {
+    match command {
         Command::Cite => {
             print_citation();
         }
@@ -492,24 +501,25 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
                 input,
                 kmer_length,
                 window_size,
-                output,
+                mut output,
                 threads,
                 quiet,
             } => {
+                ensure_index_output_is_redirected(&mut output)?;
                 let config = IndexConfig {
                     input_path: input.clone(),
-                    kmer_length: *kmer_length,
-                    window_size: *window_size,
+                    kmer_length,
+                    window_size,
                     output_path: output.clone(),
-                    threads: *threads,
-                    quiet: *quiet,
+                    threads,
+                    quiet,
                 };
                 config
                     .execute()
                     .context("Failed to run index build command")?;
             }
             IndexCommand::Info { index } => {
-                index_info(index).context("Failed to run index info command")?;
+                index_info(&index).context("Failed to run index info command")?;
             }
             #[cfg(feature = "fetch")]
             IndexCommand::Fetch {
@@ -518,50 +528,56 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
                 window_size,
                 output,
             } => {
-                index_fetch(index_name, *kmer_length, *window_size, output.as_deref())
+                index_fetch(&index_name, kmer_length, window_size, output.as_deref())
                     .context("Failed to run index fetch command")?;
             }
-            IndexCommand::Union { inputs, output } => {
-                index_union(inputs, output.as_deref())
+            IndexCommand::Union { inputs, mut output } => {
+                ensure_index_output_is_redirected(&mut output)?;
+                index_union(&inputs, output.as_deref())
                     .context("Failed to run index union command")?;
             }
-            IndexCommand::Intersect { inputs, output } => {
-                index_intersect(inputs, output.as_deref())
+            IndexCommand::Intersect { inputs, mut output } => {
+                ensure_index_output_is_redirected(&mut output)?;
+                index_intersect(&inputs, output.as_deref())
                     .context("Failed to run index intersect command")?;
             }
             IndexCommand::Diff {
                 first,
                 second,
                 window_size,
-                output,
+                mut output,
                 threads,
             } => {
-                index_diff(first, second, *window_size, *threads, output.as_deref())
+                ensure_index_output_is_redirected(&mut output)?;
+                index_diff(&first, &second, window_size, threads, output.as_deref())
                     .context("Failed to run index diff command")?;
             }
             IndexCommand::Dump { index, output } => {
-                index_dump(index, output.as_deref()).context("Failed to run index dump command")?;
+                index_dump(&index, output.as_deref())
+                    .context("Failed to run index dump command")?;
             }
             IndexCommand::Filter {
                 index,
                 algorithm,
                 threshold,
                 invert,
-                output,
+                mut output,
             } => {
-                index_filter(index, output.as_deref(), *algorithm, *threshold, *invert)
+                ensure_index_output_is_redirected(&mut output)?;
+                index_filter(&index, output.as_deref(), algorithm, threshold, invert)
                     .context("Failed to run index filter command")?;
             }
             IndexCommand::Freeze {
                 index,
-                output,
+                mut output,
                 bits,
             } => {
-                index_freeze(index, output.as_deref(), *bits)
+                ensure_index_output_is_redirected(&mut output)?;
+                index_freeze(&index, output.as_deref(), bits)
                     .context("Failed to run index freeze command")?;
             }
             IndexCommand::Reorder { index } => {
-                index_reorder(index).context("Failed to reorder index")?;
+                index_reorder(&index).context("Failed to reorder index")?;
             }
         },
         Command::Filter {
@@ -596,28 +612,28 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
             }
 
             let config = FilterConfig {
-                minimizers_path: minimizers,
-                input_path: input,
+                minimizers_path: &minimizers,
+                input_path: &input,
                 input2_path: input2.as_deref(),
-                interleaved: *interleaved,
-                check_pairs: *check_pairs,
+                interleaved,
+                check_pairs,
                 output_path: output.as_ref().map(|p| p.as_path()),
                 output2_path: output2.as_deref(),
-                abs_threshold: *abs_threshold as usize,
-                rel_threshold: *rel_threshold,
-                prefix_length: *prefix_length,
-                complexity_threshold: *complexity_threshold,
+                abs_threshold: abs_threshold as usize,
+                rel_threshold,
+                prefix_length,
+                complexity_threshold,
                 summary_path: summary.as_ref(),
-                deplete: *deplete,
-                rename: *rename,
-                discard_quality: *discard_quality,
-                ordered: *ordered,
-                threads: *threads,
-                compression_level: *compression_level,
-                cbq_block_size: *cbq_block_size,
-                compression_threads: *compression_threads,
-                debug: *debug,
-                quiet: *quiet,
+                deplete,
+                rename,
+                discard_quality,
+                ordered,
+                threads,
+                compression_level,
+                cbq_block_size,
+                compression_threads,
+                debug,
+                quiet,
             };
             config.execute().context("Failed to run filter command")?;
         }
