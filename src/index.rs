@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
-use tracing::{debug, info};
+use tracing::info;
 
 #[cfg(feature = "cli")]
 use rayon::prelude::*;
@@ -484,23 +484,10 @@ where
 /// Takes a bunch of shards and re-shards those according to the high bits of the target bucket.
 /// We again use 1024 target shards, and use multithreading to distribute the values.
 /// Then, we sort each target shard inside a thread and end by concatenating all Vecs.
-fn sort_sharded_lists<T>(mut shards: Vec<Vec<T>>) -> Vec<Vec<T>>
+fn sort_sharded_lists<T>(shards: Vec<Vec<T>>) -> Vec<Vec<T>>
 where
     T: Copy + std::hash::Hash + Ord + Send + Sync,
 {
-    info!("Dedup shards");
-    shards.par_iter_mut().for_each(|shard| {
-        shard.sort_unstable();
-        let len = shard.len();
-        shard.dedup();
-        debug!(
-            "Deduped shard of length {:>8} to {:>8} unique values ({:2.0}%)",
-            len,
-            shard.len(),
-            100.0 * shard.len() as f64 / len as f64
-        );
-    });
-
     // Match the bucket count of the single, final hash set used by
     // sort_hashset so concatenating these vectors preserves its ordering.
     let total_len: usize = shards.iter().map(Vec::len).sum();
@@ -519,6 +506,7 @@ where
     info!("Re-shard minimizers");
     let sorted_shards: Vec<Mutex<Vec<T>>> = (0..SHARDS).map(|_| Mutex::new(Vec::new())).collect();
     shards.into_par_iter().for_each(|shard| {
+        debug_assert!(shard.array_windows().all(|[v1, v2]| v1 < v2));
         let mut buffers = (0..SHARDS).map(|_| vec![]).collect::<Vec<_>>();
         for value in shard {
             let target_shard = bucket(&value) >> shift;
