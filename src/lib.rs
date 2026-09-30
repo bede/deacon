@@ -297,6 +297,22 @@ impl MinimizerVec {
     }
 }
 
+/// Zero-cost (hopefully?) abstraction over u64 and u128 minimizer sets
+#[derive(Clone)]
+enum MinimizerVecVec {
+    U64(Vec<Vec<u64>>),
+    U128(Vec<Vec<u128>>),
+}
+
+impl MinimizerVecVec {
+    pub fn len(&self) -> usize {
+        match self {
+            MinimizerVecVec::U64(v) => v.iter().map(|inner| inner.len()).sum(),
+            MinimizerVecVec::U128(v) => v.iter().map(|inner| inner.len()).sum(),
+        }
+    }
+}
+
 #[cfg(feature = "cli")]
 pub struct FilterConfig<'a> {
     /// Minimizer index file path

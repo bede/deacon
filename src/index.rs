@@ -1,4 +1,4 @@
-use crate::{FixedRapidHasher, MinimizerSet, MinimizerVec, RapidHashSet};
+use crate::{FixedRapidHasher, MinimizerSet, MinimizerVecVec, RapidHashSet};
 use anyhow::{Context, Result};
 use bincode::serde::{decode_from_std_read, encode_into_std_write};
 #[cfg(feature = "cli")]
@@ -8,6 +8,9 @@ use std::hash::{BuildHasher, Hasher};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use tracing::info;
+
+#[cfg(feature = "cli")]
+use rayon::prelude::*;
 
 #[cfg(feature = "cli")]
 use crate::IndexConfig;
@@ -347,21 +350,21 @@ pub fn dump_minimizers(
     output_path: Option<&Path>,
 ) -> Result<()> {
     let minimizer_list = match minimizers {
-        MinimizerSet::U64(set) => MinimizerVec::U64(sort_hashset(set)),
-        MinimizerSet::U128(set) => MinimizerVec::U128(sort_hashset(set)),
+        MinimizerSet::U64(set) => MinimizerVecVec::U64(vec![sort_hashset(set)]),
+        MinimizerSet::U128(set) => MinimizerVecVec::U128(vec![sort_hashset(set)]),
         MinimizerSet::Fuse(_) => {
             return Err(anyhow::anyhow!(
                 "Cannot serialise a BFF index in the exact index format"
             ));
         }
     };
-    dump_minimizer_lists(&[minimizer_list], header, output_path)
+    dump_minimizer_lists(minimizer_list, header, output_path)
 }
 
 /// Write an index for the given minimizers.
 /// Takes a list of lists so it can be used with multiple shards.
 fn dump_minimizer_lists(
-    minimizers: &[MinimizerVec],
+    minimizers: MinimizerVecVec,
     header: &IndexHeader,
     output_path: Option<&Path>,
 ) -> Result<()> {
@@ -379,16 +382,16 @@ fn dump_minimizer_lists(
         .context("Failed to serialise index header")?;
 
     // Serialise the count of minimizers first (as u64 for cross-platform compatibility)
-    let count = minimizers.iter().map(MinimizerVec::len).sum::<usize>() as u64;
+    let count = minimizers.len();
     encode_into_std_write(count, &mut writer, config)
         .context("Failed to serialise minimizer count")?;
 
     // Serialise minimizers in byte-aligned packed format
     let bytes_per_minimizer = (header.kmer_length as usize).div_ceil(4);
-    for minimizers in minimizers {
-        match minimizers {
-            MinimizerVec::U64(list) => {
-                info!("Writing minimizers..");
+    match minimizers {
+        MinimizerVecVec::U64(minimizers) => {
+            info!("Writing minimizers..");
+            for list in minimizers {
                 for val in list {
                     // Write only the required bytes (little-endian)
                     let bytes = val.to_le_bytes();
@@ -397,8 +400,10 @@ fn dump_minimizer_lists(
                         .context("Failed to write minimizer")?;
                 }
             }
-            MinimizerVec::U128(list) => {
-                info!("Writing minimizers..");
+        }
+        MinimizerVecVec::U128(minimizers) => {
+            info!("Writing minimizers..");
+            for list in minimizers {
                 for val in list {
                     // Write only the required bytes (little-endian)
                     let bytes = val.to_le_bytes();
@@ -468,9 +473,69 @@ where
         }
     }
 
+    info!("Checking that values are sorted by hash.");
     assert!(vals.is_sorted_by_key(|x| (bucket(x), x)));
 
     vals
+}
+
+/// Takes a bunch of shards and re-shards those according to the high bits of the target bucket.
+/// We again use 1024 target shards, and use multithreading to distribute the values.
+/// Then, we sort each target shard inside a thread and end by concatenating all Vecs.
+fn sort_sharded_hashsets<T>(shards: &mut [RapidHashSet<T>]) -> Vec<Vec<T>>
+where
+    T: Copy + std::hash::Hash + Ord + Send + Sync,
+{
+    let total_len: usize = shards.iter().map(RapidHashSet::len).sum();
+    if total_len == 0 {
+        return vec![];
+    }
+
+    // Match the bucket count of the single, final hash set used by
+    // sort_hashset so concatenating these vectors preserves its ordering.
+    let num_buckets = (total_len * 8 / 7).next_power_of_two();
+    let bucket = |x: &T| -> usize {
+        let mut hasher = FixedRapidHasher::default().build_hasher();
+        x.hash(&mut hasher);
+        hasher.finish() as usize & (num_buckets - 1)
+    };
+    assert!(num_buckets.is_power_of_two());
+    assert!(SHARDS.is_power_of_two());
+    let shift = (num_buckets / SHARDS).trailing_zeros() as usize;
+
+    // Assign contiguous ranges of target buckets to each output shard.
+    // Multiplication also handles tables with fewer than 1024 buckets.
+    info!("Re-shard minimizers");
+    let sorted_shards: Vec<Mutex<Vec<T>>> = (0..SHARDS).map(|_| Mutex::new(Vec::new())).collect();
+    shards.into_par_iter().for_each(|shard| {
+        let mut buffers = (0..SHARDS).map(|_| vec![]).collect::<Vec<_>>();
+        for value in shard.drain() {
+            let target_shard = bucket(&value) >> shift;
+            buffers[target_shard].push(value);
+        }
+        for shard in random_shard_order() {
+            sorted_shards[shard].lock().extend(buffers[shard].drain(..));
+        }
+    });
+
+    info!("Sort shards");
+    let mut sorted_shards = sorted_shards
+        .into_iter()
+        .map(|mutex| mutex.into_inner())
+        .collect::<Vec<_>>();
+
+    sorted_shards.par_iter_mut().for_each(|values| {
+        values.sort_unstable_by_key(|value| (bucket(value), *value));
+    });
+
+    for [s1, s2] in sorted_shards.array_windows() {
+        assert!(s1.last().map_or(true, |v1| {
+            s2.first()
+                .map_or(true, |v2| (bucket(v1), v1) <= (bucket(v2), v2))
+        }));
+    }
+
+    sorted_shards
 }
 
 /// Dump indexed minimizers to FASTA
@@ -735,18 +800,15 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
     }
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
-        // Randomize the order of shards to avoid all threads waiting on a single one.
-        let mut shard_order: Vec<_> = (0..SHARDS).collect();
-        shard_order.shuffle(&mut rand::rng());
         if let Some(local) = &mut self.local_minimizers_u64 {
-            for shard in shard_order {
+            for shard in random_shard_order() {
                 self.global_minimizers_u64[shard]
                     .lock()
                     .extend(std::mem::take(&mut local[shard]));
             }
         } else {
             let local = self.local_minimizers_u128.as_mut().unwrap();
-            for shard in shard_order {
+            for shard in random_shard_order() {
                 self.global_minimizers_u128[shard]
                     .lock()
                     .extend(std::mem::take(&mut local[shard]));
@@ -754,6 +816,14 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
         }
         Ok(())
     }
+}
+
+/// Randomize the order of shards to avoid all threads waiting on a single one.
+#[cfg(feature = "cli")]
+fn random_shard_order() -> Vec<usize> {
+    let mut shard_order: Vec<_> = (0..SHARDS).collect();
+    shard_order.shuffle(&mut rand::rng());
+    shard_order
 }
 
 /// Build an index of minimizers from a fastx file
@@ -827,22 +897,21 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     reader.process_parallel(&mut processor, config.threads as usize)?;
     drop(processor);
 
-    info!("Collecting minimizers into a single set");
-    let mut all_minimizers = if config.kmer_length <= 32 {
-        let mut set = RapidHashSet::default();
-        for shard in global_minimizers_u64 {
-            set.extend(shard.into_inner());
-        }
-        crate::MinimizerSet::U64(set)
+    let all_minimizers = if config.kmer_length <= 32 {
+        let mut shards: Vec<_> = global_minimizers_u64
+            .into_iter()
+            .map(|mutex| mutex.into_inner())
+            .collect();
+        MinimizerVecVec::U64(sort_sharded_hashsets(&mut shards))
     } else {
-        let mut set = RapidHashSet::default();
-        for shard in global_minimizers_u128 {
-            set.extend(shard.into_inner());
-        }
-        crate::MinimizerSet::U128(set)
+        let mut shards: Vec<_> = global_minimizers_u128
+            .into_iter()
+            .map(|mutex| mutex.into_inner())
+            .collect();
+        MinimizerVecVec::U128(sort_sharded_hashsets(&mut shards))
     };
-    let stats = global_stats.into_inner();
 
+    let stats = global_stats.into_inner();
     info!(
         "Indexed {} minimizers from {} record(s) ({}bp)",
         all_minimizers.len(),
@@ -853,7 +922,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     let header = IndexHeader::new(config.kmer_length, config.window_size);
 
     // Write to output path or stdout
-    dump_minimizers(&mut all_minimizers, &header, config.output_path.as_deref())?;
+    dump_minimizer_lists(all_minimizers, &header, config.output_path.as_deref())?;
 
     let total_time = start_time.elapsed();
     info!("Completed build in {:.2?}", total_time);
