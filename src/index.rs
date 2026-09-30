@@ -1,4 +1,4 @@
-use crate::{FixedRapidHasher, RapidHashSet};
+use crate::{FixedRapidHasher, MinimizerSet, MinimizerVec, RapidHashSet};
 use anyhow::{Context, Result};
 use bincode::serde::{decode_from_std_read, encode_into_std_write};
 #[cfg(feature = "cli")]
@@ -346,6 +346,25 @@ pub fn dump_minimizers(
     header: &IndexHeader,
     output_path: Option<&Path>,
 ) -> Result<()> {
+    let minimizer_list = match minimizers {
+        MinimizerSet::U64(set) => MinimizerVec::U64(sort_hashset(set)),
+        MinimizerSet::U128(set) => MinimizerVec::U128(sort_hashset(set)),
+        MinimizerSet::Fuse(_) => {
+            return Err(anyhow::anyhow!(
+                "Cannot serialise a BFF index in the exact index format"
+            ));
+        }
+    };
+    dump_minimizer_lists(&[minimizer_list], header, output_path)
+}
+
+/// Write an index for the given minimizers.
+/// Takes a list of lists so it can be used with multiple shards.
+fn dump_minimizer_lists(
+    minimizers: &[MinimizerVec],
+    header: &IndexHeader,
+    output_path: Option<&Path>,
+) -> Result<()> {
     // Create writer based on output path
     let mut writer: BufWriter<Box<dyn Write>> = match output_path {
         Some(path) if path.as_os_str() != "-" => BufWriter::new(Box::new(
@@ -360,39 +379,34 @@ pub fn dump_minimizers(
         .context("Failed to serialise index header")?;
 
     // Serialise the count of minimizers first (as u64 for cross-platform compatibility)
-    let count = minimizers.len() as u64;
+    let count = minimizers.iter().map(MinimizerVec::len).sum::<usize>() as u64;
     encode_into_std_write(count, &mut writer, config)
         .context("Failed to serialise minimizer count")?;
 
     // Serialise minimizers in byte-aligned packed format
     let bytes_per_minimizer = (header.kmer_length as usize).div_ceil(4);
-    match minimizers {
-        crate::MinimizerSet::U64(set) => {
-            let sorted = sort_hashset(set);
-            info!("Writing minimizers..");
-            for val in sorted {
-                // Write only the required bytes (little-endian)
-                let bytes = val.to_le_bytes();
-                writer
-                    .write_all(&bytes[..bytes_per_minimizer])
-                    .context("Failed to write minimizer")?;
+    for minimizers in minimizers {
+        match minimizers {
+            MinimizerVec::U64(list) => {
+                info!("Writing minimizers..");
+                for val in list {
+                    // Write only the required bytes (little-endian)
+                    let bytes = val.to_le_bytes();
+                    writer
+                        .write_all(&bytes[..bytes_per_minimizer])
+                        .context("Failed to write minimizer")?;
+                }
             }
-        }
-        crate::MinimizerSet::U128(set) => {
-            let sorted = sort_hashset(set);
-            info!("Writing minimizers..");
-            for val in sorted {
-                // Write only the required bytes (little-endian)
-                let bytes = val.to_le_bytes();
-                writer
-                    .write_all(&bytes[..bytes_per_minimizer])
-                    .context("Failed to write minimizer")?;
+            MinimizerVec::U128(list) => {
+                info!("Writing minimizers..");
+                for val in list {
+                    // Write only the required bytes (little-endian)
+                    let bytes = val.to_le_bytes();
+                    writer
+                        .write_all(&bytes[..bytes_per_minimizer])
+                        .context("Failed to write minimizer")?;
+                }
             }
-        }
-        crate::MinimizerSet::Fuse(_) => {
-            return Err(anyhow::anyhow!(
-                "Cannot serialise a BFF index in the exact index format"
-            ));
         }
     }
     Ok(())
