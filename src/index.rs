@@ -903,7 +903,11 @@ pub fn build(config: &IndexConfig) -> Result<()> {
             hasher: KmerHasher::new(config.kmer_length as usize),
             local_stats: ProcessingStats::default(),
             buffers: Buffers::new_u64(),
-            local_minimizers_u64: Some((0..SHARDS).map(|_| vec![]).collect()),
+            local_minimizers_u64: Some(
+                (0..SHARDS)
+                    .map(|_| Vec::with_capacity(LOCAL_BUF_SIZE))
+                    .collect(),
+            ),
             local_minimizers_u128: None,
             global_stats: &global_stats,
             global_minimizers_u64: &global_minimizers_u64,
@@ -916,7 +920,11 @@ pub fn build(config: &IndexConfig) -> Result<()> {
             local_stats: ProcessingStats::default(),
             buffers: Buffers::new_u128(),
             local_minimizers_u64: None,
-            local_minimizers_u128: Some((0..SHARDS).map(|_| vec![]).collect()),
+            local_minimizers_u128: Some(
+                (0..SHARDS)
+                    .map(|_| Vec::with_capacity(LOCAL_BUF_SIZE))
+                    .collect(),
+            ),
             global_stats: &global_stats,
             global_minimizers_u64: &global_minimizers_u64,
             global_minimizers_u128: &global_minimizers_u128,
