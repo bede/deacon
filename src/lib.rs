@@ -30,7 +30,7 @@ pub use index::{
 pub use index::{
     build as index_build, current_index_path, diff as index_diff, dump as index_dump,
     filter as index_filter, freeze as index_freeze, info as index_info,
-    intersect as index_intersect, union as index_union,
+    intersect as index_intersect, reorder as index_reorder, union as index_union,
 };
 pub use minimizers::{
     Buffers, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, KmerHasher, compute_minimizers, decode_u64,

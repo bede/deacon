@@ -5,7 +5,7 @@ use deacon::index_fetch;
 use deacon::{
     ComplexityAlgorithm, DEFAULT_CBQ_BLOCK_SIZE_MIB, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE,
     FilterConfig, IndexConfig, index_diff, index_dump, index_filter, index_freeze, index_info,
-    index_intersect, index_union,
+    index_intersect, index_reorder, index_union,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -243,6 +243,15 @@ enum IndexCommand {
         /// Invert: keep only minimizers below the threshold
         #[arg(short = 'i', long = "invert")]
         invert: bool,
+
+        /// Path to output file (stdout if not specified)
+        #[arg(short = 'o', long = "output")]
+        output: Option<PathBuf>,
+    },
+    /// Rewrite an index in the order it loads fastest
+    Reorder {
+        /// Path to index file
+        index: PathBuf,
 
         /// Path to output file (stdout if not specified)
         #[arg(short = 'o', long = "output")]
@@ -525,6 +534,10 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
             } => {
                 index_diff(first, second, *window_size, *threads, output.as_deref())
                     .context("Failed to run index diff command")?;
+            }
+            IndexCommand::Reorder { index, output } => {
+                index_reorder(index, output.as_deref())
+                    .context("Failed to run index reorder command")?;
             }
             IndexCommand::Dump { index, output } => {
                 index_dump(index, output.as_deref()).context("Failed to run index dump command")?;

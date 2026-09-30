@@ -2,6 +2,7 @@ use crate::{FixedRapidHasher, RapidHashSet};
 use anyhow::{Context, Result};
 use bincode::serde::{decode_from_std_read, encode_into_std_write};
 use serde::{Deserialize, Serialize};
+use std::hash::BuildHasher;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
@@ -15,6 +16,8 @@ use paraseq::Record;
 use paraseq::prelude::{ParallelProcessor, ParallelReader};
 #[cfg(feature = "cli")]
 use parking_lot::Mutex;
+#[cfg(feature = "cli")]
+use rayon::prelude::*;
 #[cfg(feature = "cli")]
 use std::fs::File;
 #[cfg(feature = "cli")]
@@ -336,57 +339,107 @@ pub fn load_index_from_path_auto(path: &Path) -> Result<(crate::MinimizerSet, In
     load_index_auto(&mut file)
 }
 
-/// Helper function to write minimizers to output file or stdout
+/// Minimizer bytes buffered before hitting the writer
+const WRITE_CHUNK: usize = 4 << 20;
+
+fn index_writer(output_path: Option<&Path>) -> Result<BufWriter<Box<dyn Write>>> {
+    Ok(match output_path {
+        Some(path) if path.as_os_str() != "-" => BufWriter::new(Box::new(
+            std::fs::File::create(path).context("Failed to create output file")?,
+        )),
+        _ => BufWriter::new(Box::new(io::stdout())),
+    })
+}
+
+/// Write the header and the minimizer count, returning the bytes used per minimizer
+fn write_index_preamble(
+    writer: &mut impl Write,
+    header: &IndexHeader,
+    count: u64,
+) -> Result<usize> {
+    // Use fixed-width little-endian encoding for all values.
+    let config = bincode::config::standard().with_fixed_int_encoding();
+    encode_into_std_write(header, writer, config).context("Failed to serialise index header")?;
+    // Serialise the count of minimizers first (as u64 for cross-platform compatibility)
+    encode_into_std_write(count, writer, config).context("Failed to serialise minimizer count")?;
+    Ok((header.kmer_length as usize).div_ceil(4))
+}
+
 pub fn dump_minimizers(
     minimizers: &crate::MinimizerSet,
     header: &IndexHeader,
     output_path: Option<&Path>,
 ) -> Result<()> {
-    // Create writer based on output path
-    let mut writer: BufWriter<Box<dyn Write>> = match output_path {
-        Some(path) if path.as_os_str() != "-" => BufWriter::new(Box::new(
-            std::fs::File::create(path).context("Failed to create output file")?,
-        )),
-        _ => BufWriter::new(Box::new(io::stdout())),
-    };
+    if let crate::MinimizerSet::Fuse(_) = minimizers {
+        return Err(anyhow::anyhow!(
+            "Cannot serialise a BFF index in the exact index format"
+        ));
+    }
 
-    // Use fixed-width little-endian encoding for all values.
-    let config = bincode::config::standard().with_fixed_int_encoding();
-    encode_into_std_write(header, &mut writer, config)
-        .context("Failed to serialise index header")?;
+    let mut writer = index_writer(output_path)?;
+    let bytes = write_index_preamble(&mut writer, header, minimizers.len() as u64)?;
 
-    // Serialise the count of minimizers first (as u64 for cross-platform compatibility)
-    let count = minimizers.len() as u64;
-    encode_into_std_write(count, &mut writer, config)
-        .context("Failed to serialise minimizer count")?;
-
-    // Serialise minimizers in byte-aligned packed format
-    let bytes_per_minimizer = (header.kmer_length as usize).div_ceil(4);
     match minimizers {
-        crate::MinimizerSet::U64(set) => {
-            for &val in set {
-                // Write only the required bytes (little-endian)
-                let bytes = val.to_le_bytes();
-                writer
-                    .write_all(&bytes[..bytes_per_minimizer])
-                    .context("Failed to write minimizer")?;
-            }
-        }
-        crate::MinimizerSet::U128(set) => {
-            for &val in set {
-                // Write only the required bytes (little-endian)
-                let bytes = val.to_le_bytes();
-                writer
-                    .write_all(&bytes[..bytes_per_minimizer])
-                    .context("Failed to write minimizer")?;
-            }
-        }
-        crate::MinimizerSet::Fuse(_) => {
-            return Err(anyhow::anyhow!(
-                "Cannot serialise a BFF index in the exact index format"
-            ));
+        crate::MinimizerSet::U64(set) => write_load_ordered(&mut writer, set, bytes)?,
+        crate::MinimizerSet::U128(set) => write_load_ordered(&mut writer, set, bytes)?,
+        crate::MinimizerSet::Fuse(_) => unreachable!("rejected above"),
+    }
+    writer.flush().context("Failed to flush index")?;
+    Ok(())
+}
+
+/// Write a set in the order `load_minimizers` will insert it
+#[cfg(feature = "cli")]
+fn write_load_ordered<K: Key>(
+    writer: &mut impl Write,
+    set: &RapidHashSet<K>,
+    bytes: usize,
+) -> Result<()> {
+    let partitions = load_order(set.iter().copied(), set.len());
+    write_packed(writer, partitions.iter().flatten().copied(), bytes)
+}
+
+/// Without threads there is nothing to gain from ordering the output
+#[cfg(not(feature = "cli"))]
+fn write_load_ordered<K: Key>(
+    writer: &mut impl Write,
+    set: &RapidHashSet<K>,
+    bytes: usize,
+) -> Result<()> {
+    write_packed(writer, set.iter().copied(), bytes)
+}
+
+/// Write minimizers back to back in byte-aligned packed format
+fn write_packed<K: Key>(
+    writer: &mut impl Write,
+    minimizers: impl Iterator<Item = K>,
+    bytes: usize,
+) -> Result<()> {
+    let mut buf: Vec<u8> = Vec::with_capacity(WRITE_CHUNK + 16);
+    for minimizer in minimizers {
+        minimizer.push_le(&mut buf, bytes);
+        if buf.len() >= WRITE_CHUNK {
+            writer
+                .write_all(&buf)
+                .context("Failed to write minimizers")?;
+            buf.clear();
         }
     }
+    writer.write_all(&buf).context("Failed to write minimizers")
+}
+
+/// Write shards already in load order
+#[cfg(feature = "cli")]
+fn dump_shards<K: Key>(
+    shards: &[Vec<K>],
+    header: &IndexHeader,
+    output_path: Option<&Path>,
+) -> Result<()> {
+    let mut writer = index_writer(output_path)?;
+    let count: u64 = shards.iter().map(|shard| shard.len() as u64).sum();
+    let bytes = write_index_preamble(&mut writer, header, count)?;
+    write_packed(&mut writer, shards.iter().flatten().copied(), bytes)?;
+    writer.flush().context("Failed to flush index")?;
     Ok(())
 }
 
@@ -461,6 +514,28 @@ pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
 }
 
 /// Freeze an exact index into a BFF (binary fuse filter) index (k<=32)
+/// Rewrite an index in the order it loads fastest, for indexes built before deacon
+/// wrote them that way
+#[cfg(feature = "cli")]
+pub fn reorder(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
+    let start_time = Instant::now();
+    reject_bff(index_path, "reorder")?;
+
+    let (minimizers, header) =
+        load_minimizers_from_path(index_path).context("Failed to load index")?;
+    eprintln!(
+        "Loaded {} minimizers (k={}, w={})",
+        minimizers.len(),
+        header.kmer_length,
+        header.window_size
+    );
+
+    dump_minimizers(&minimizers, &header, output_path)?;
+
+    eprintln!("Completed reorder in {:.2?}", start_time.elapsed());
+    Ok(())
+}
+
 #[cfg(feature = "cli")]
 pub fn freeze(index_path: &Path, output_path: Option<&Path>, bits: u8) -> Result<()> {
     let start_time = Instant::now();
@@ -561,24 +636,264 @@ fn reader_with_inferred_batch_size(
 #[cfg(feature = "cli")]
 use crate::filter::ProcessingStats;
 
+/// Minimizers are partitioned twice, both times into `SHARDS` parts: first by k-mer
+/// value, so that deduplication is a parallel sort per part, and then by hash bucket,
+/// so that the index file is in the order `load_minimizers` inserts it.
+const SHARD_BITS: u32 = 10;
+const SHARDS: usize = 1 << SHARD_BITS;
+/// Values a thread stages for one part before flushing them
 #[cfg(feature = "cli")]
-#[derive(Clone)]
-struct BuildIndexProcessor<'c> {
+const STAGE_CAP: usize = 1024;
+
+/// Bits a k-mer of length `kmer_length` occupies
+#[cfg(feature = "cli")]
+fn used_bits(kmer_length: u8) -> u32 {
+    2 * kmer_length as u32
+}
+/// Values a shard may hold before it is sorted and deduplicated in place
+#[cfg(feature = "cli")]
+const COMPACT_MIN: usize = 1 << 22;
+
+/// Minimizer width handled by the index writers
+pub(crate) trait Key: Copy + Ord + std::hash::Hash + Send + Sync + 'static {
+    fn from_minimizers(minimizers: &crate::MinimizerVec) -> &Vec<Self>;
+    fn shard(self, shift: u32) -> usize;
+    fn push_le(self, out: &mut Vec<u8>, bytes: usize);
+}
+
+impl Key for u64 {
+    #[inline]
+    fn from_minimizers(minimizers: &crate::MinimizerVec) -> &Vec<Self> {
+        match minimizers {
+            crate::MinimizerVec::U64(vec) => vec,
+            crate::MinimizerVec::U128(_) => unreachable!("u128 minimizers in a u64 build"),
+        }
+    }
+    #[inline]
+    fn shard(self, shift: u32) -> usize {
+        (self >> shift) as usize
+    }
+    #[inline]
+    fn push_le(self, out: &mut Vec<u8>, bytes: usize) {
+        out.extend_from_slice(&self.to_le_bytes()[..bytes]);
+    }
+}
+
+impl Key for u128 {
+    #[inline]
+    fn from_minimizers(minimizers: &crate::MinimizerVec) -> &Vec<Self> {
+        match minimizers {
+            crate::MinimizerVec::U128(vec) => vec,
+            crate::MinimizerVec::U64(_) => unreachable!("u64 minimizers in a u128 build"),
+        }
+    }
+    #[inline]
+    fn shard(self, shift: u32) -> usize {
+        (self >> shift) as usize
+    }
+    #[inline]
+    fn push_le(self, out: &mut Vec<u8>, bytes: usize) {
+        out.extend_from_slice(&self.to_le_bytes()[..bytes]);
+    }
+}
+
+#[cfg(feature = "cli")]
+struct Shard<K> {
+    values: Vec<K>,
+    /// Length at which the shard is compacted, doubling after each compaction
+    limit: usize,
+}
+
+/// Minimizers partitioned by value range. Threads append to their own shard buffers
+/// and only take a shard's lock to hand over a full buffer, so there is no global
+/// set to contend on and no hashing: duplicates go once the shards are sorted.
+#[cfg(feature = "cli")]
+struct Shards<K> {
+    shards: Vec<Mutex<Shard<K>>>,
+    shift: u32,
+}
+
+#[cfg(feature = "cli")]
+impl<K: Key> Shards<K> {
+    fn new(kmer_length: u8) -> Self {
+        Shards {
+            shards: (0..SHARDS)
+                .map(|_| {
+                    Mutex::new(Shard {
+                        values: Vec::new(),
+                        limit: COMPACT_MIN,
+                    })
+                })
+                .collect(),
+            shift: used_bits(kmer_length).saturating_sub(SHARD_BITS),
+        }
+    }
+
+    /// Hand a full staging buffer to its shard, compacting the shard if it has grown
+    #[inline]
+    fn flush(&self, shard: usize, staged: &mut Vec<K>) {
+        let mut shard = self.shards[shard].lock();
+        shard.values.extend_from_slice(staged);
+        staged.clear();
+        if shard.values.len() >= shard.limit {
+            shard.values.sort_unstable();
+            shard.values.dedup();
+            shard.limit = (2 * shard.values.len()).max(COMPACT_MIN);
+        }
+    }
+
+    /// Sort and deduplicate every shard in parallel
+    fn finish(self) -> Vec<Vec<K>> {
+        let mut values: Vec<Vec<K>> = self
+            .shards
+            .into_iter()
+            .map(|shard| shard.into_inner().values)
+            .collect();
+        values.par_iter_mut().for_each(|shard| {
+            shard.sort_unstable();
+            shard.dedup();
+        });
+        values
+    }
+}
+
+#[cfg(feature = "cli")]
+fn staging<K>() -> Vec<Vec<K>> {
+    (0..SHARDS).map(|_| Vec::with_capacity(STAGE_CAP)).collect()
+}
+
+/// Buckets hashbrown allocates for `count` keys, matching its 7/8 load factor.
+/// Only affects how fast an index loads, never what it contains.
+#[cfg(feature = "cli")]
+fn table_buckets(count: usize) -> usize {
+    if count < 15 {
+        // Small tables keep at least one empty bucket
+        match count.max(3) {
+            0..=3 => 4,
+            4..=7 => 8,
+            _ => 16,
+        }
+    } else {
+        (count * 8 / 7).next_power_of_two()
+    }
+}
+
+/// The partitioning `load_minimizers` inserts in: minimizers grouped by the bucket
+/// range they land in, so that each run of inserts stays within one slice of the hash
+/// table instead of jumping across all of it.
+#[cfg(feature = "cli")]
+struct LoadOrder {
+    mask: usize,
+    shift: u32,
+}
+
+#[cfg(feature = "cli")]
+impl LoadOrder {
+    fn new(count: usize) -> Self {
+        let buckets = table_buckets(count);
+        LoadOrder {
+            mask: buckets - 1,
+            shift: buckets.trailing_zeros().saturating_sub(SHARD_BITS),
+        }
+    }
+
+    #[inline]
+    fn partition<K: Key>(&self, minimizer: K) -> usize {
+        (FixedRapidHasher.hash_one(minimizer) as usize & self.mask) >> self.shift
+    }
+}
+
+#[cfg(feature = "cli")]
+fn new_parts<K>() -> Vec<Mutex<Vec<K>>> {
+    (0..SHARDS).map(|_| Mutex::new(Vec::new())).collect()
+}
+
+/// Append minimizers to the part they belong in, batching through thread-local buffers
+/// so a part's lock is taken once per `STAGE_CAP` values rather than once per value
+#[cfg(feature = "cli")]
+fn route<K: Key>(minimizers: impl Iterator<Item = K>, order: &LoadOrder, parts: &[Mutex<Vec<K>>]) {
+    let mut staged: Vec<Vec<K>> = staging();
+    for minimizer in minimizers {
+        let part = order.partition(minimizer);
+        staged[part].push(minimizer);
+        if staged[part].len() == STAGE_CAP {
+            parts[part].lock().extend_from_slice(&staged[part]);
+            staged[part].clear();
+        }
+    }
+    for (part, staged) in staged.iter().enumerate() {
+        if !staged.is_empty() {
+            parts[part].lock().extend_from_slice(staged);
+        }
+    }
+}
+
+/// Sort within each part. Value order is uncorrelated with bucket order, so this keeps
+/// the locality, avoids inserting in exact bucket order (which clusters and costs ~25%),
+/// and makes the index byte-identical from run to run.
+#[cfg(feature = "cli")]
+fn finish_parts<K: Key>(parts: Vec<Mutex<Vec<K>>>) -> Vec<Vec<K>> {
+    let mut partitions: Vec<Vec<K>> = parts
+        .into_iter()
+        .map(|part| part.into_inner())
+        .collect();
+    partitions
+        .par_iter_mut()
+        .for_each(|partition| partition.sort_unstable());
+    partitions
+}
+
+/// Put a set of minimizers into load order
+#[cfg(feature = "cli")]
+fn load_order<K: Key>(minimizers: impl Iterator<Item = K>, count: usize) -> Vec<Vec<K>> {
+    let parts = new_parts();
+    route(minimizers, &LoadOrder::new(count), &parts);
+    finish_parts(parts)
+}
+
+/// Put deduplicated shards into load order in parallel, consuming them as it goes so
+/// that both copies are never live at once
+#[cfg(feature = "cli")]
+fn load_order_shards<K: Key>(shards: Vec<Vec<K>>, count: usize) -> Vec<Vec<K>> {
+    let order = LoadOrder::new(count);
+    let parts = new_parts();
+    shards
+        .into_par_iter()
+        .for_each(|shard| route(shard.into_iter(), &order, &parts));
+    finish_parts(parts)
+}
+
+#[cfg(feature = "cli")]
+struct BuildIndexProcessor<'c, K: Key> {
     config: &'c IndexConfig,
     hasher: KmerHasher,
     // Local buffers
     buffers: Buffers,
     local_stats: ProcessingStats,
-    local_minimizers_u64: Option<RapidHashSet<u64>>,
-    local_minimizers_u128: Option<RapidHashSet<u128>>,
+    /// Minimizers waiting to be handed over, one buffer per shard
+    staged: Vec<Vec<K>>,
     // Global state
+    shards: Arc<Shards<K>>,
     global_stats: Arc<Mutex<ProcessingStats>>,
-    global_minimizers_u64: Arc<Mutex<Option<RapidHashSet<u64>>>>,
-    global_minimizers_u128: Arc<Mutex<Option<RapidHashSet<u128>>>>,
 }
 
 #[cfg(feature = "cli")]
-impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
+impl<K: Key> Clone for BuildIndexProcessor<'_, K> {
+    fn clone(&self) -> Self {
+        BuildIndexProcessor {
+            config: self.config,
+            hasher: self.hasher.clone(),
+            buffers: self.buffers.clone(),
+            local_stats: ProcessingStats::default(),
+            staged: staging(),
+            shards: Arc::clone(&self.shards),
+            global_stats: Arc::clone(&self.global_stats),
+        }
+    }
+}
+
+#[cfg(feature = "cli")]
+impl<Rf: Record, K: Key> ParallelProcessor<Rf> for BuildIndexProcessor<'_, K> {
     fn process_record(&mut self, record: Rf) -> paraseq::Result<()> {
         let seq = record.seq();
         self.local_stats.total_seqs += 1;
@@ -592,19 +907,19 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
             &mut self.buffers,
         );
 
-        // Extend appropriate local set based on type
-        match &mut self.buffers.minimizers {
-            crate::MinimizerVec::U64(vec) => {
-                self.local_minimizers_u64
-                    .as_mut()
-                    .unwrap()
-                    .extend(vec.iter());
-            }
-            crate::MinimizerVec::U128(vec) => {
-                self.local_minimizers_u128
-                    .as_mut()
-                    .unwrap()
-                    .extend(vec.iter());
+        let Self {
+            buffers,
+            staged,
+            shards,
+            ..
+        } = self;
+        let shift = shards.shift;
+        for &minimizer in K::from_minimizers(&buffers.minimizers) {
+            let shard = minimizer.shard(shift);
+            let staged = &mut staged[shard];
+            staged.push(minimizer);
+            if staged.len() == STAGE_CAP {
+                shards.flush(shard, staged);
             }
         }
 
@@ -612,42 +927,33 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor<'_> {
     }
 
     fn on_batch_complete(&mut self) -> paraseq::Result<()> {
-        // Merge local minimizers into global set and get new total count
-        let minimizer_count = if let Some(local) = &mut self.local_minimizers_u64 {
-            let mut global = self.global_minimizers_u64.lock();
-            global.as_mut().unwrap().extend(local.iter());
-            local.clear();
-            global.as_ref().unwrap().len()
-        } else {
-            let mut global = self.global_minimizers_u128.lock();
-            global
-                .as_mut()
-                .unwrap()
-                .extend(self.local_minimizers_u128.as_ref().unwrap().iter());
-            self.local_minimizers_u128.as_mut().unwrap().clear();
-            global.as_ref().unwrap().len()
-        };
-
         // Tick to stderr once every Gbp
-        {
-            let mut stats = self.global_stats.lock();
-            stats.total_seqs += self.local_stats.total_seqs;
-            stats.total_bp += self.local_stats.total_bp;
+        let mut stats = self.global_stats.lock();
+        stats.total_seqs += self.local_stats.total_seqs;
+        stats.total_bp += self.local_stats.total_bp;
 
-            if !self.config.quiet {
-                let current_gb = stats.total_bp / 1_000_000_000;
-                if current_gb > stats.last_reported {
-                    eprintln!(
-                        "  Processed {} sequences ({}bp), {} minimizers",
-                        stats.total_seqs, stats.total_bp, minimizer_count
-                    );
-                    stats.last_reported = current_gb;
-                }
+        if !self.config.quiet {
+            let current_gb = stats.total_bp / 1_000_000_000;
+            if current_gb > stats.last_reported {
+                eprintln!(
+                    "  Processed {} sequences ({}bp)",
+                    stats.total_seqs, stats.total_bp
+                );
+                stats.last_reported = current_gb;
             }
-
-            self.local_stats = ProcessingStats::default();
         }
 
+        self.local_stats = ProcessingStats::default();
+        Ok(())
+    }
+
+    fn on_thread_complete(&mut self) -> paraseq::Result<()> {
+        let Self { staged, shards, .. } = self;
+        for (shard, staged) in staged.iter_mut().enumerate() {
+            if !staged.is_empty() {
+                shards.flush(shard, staged);
+            }
+        }
         Ok(())
     }
 }
@@ -687,66 +993,58 @@ pub fn build(config: &IndexConfig) -> Result<()> {
         config.kmer_length, config.window_size
     );
 
-    let mut processor = if config.kmer_length <= 32 {
-        BuildIndexProcessor {
-            config,
-            hasher: KmerHasher::new(config.kmer_length as usize),
-            local_stats: ProcessingStats::default(),
-            buffers: Buffers::new_u64(),
-            local_minimizers_u64: Some(RapidHashSet::default()),
-            local_minimizers_u128: None,
-            global_stats: Arc::new(Mutex::new(ProcessingStats::default())),
-            global_minimizers_u64: Arc::new(Mutex::new(Some(RapidHashSet::default()))),
-            global_minimizers_u128: Arc::new(Mutex::new(None)),
-        }
+    // One pool for the parallel phases; already set when running under the server
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(config.threads as usize)
+        .build_global();
+
+    let header = IndexHeader::new(config.kmer_length, config.window_size);
+    if config.kmer_length <= 32 {
+        build_shards::<u64>(config, reader, &header)?;
     } else {
-        BuildIndexProcessor {
-            config,
-            hasher: KmerHasher::new(config.kmer_length as usize),
-            local_stats: ProcessingStats::default(),
-            buffers: Buffers::new_u128(),
-            local_minimizers_u64: None,
-            local_minimizers_u128: Some(RapidHashSet::default()),
-            global_stats: Arc::new(Mutex::new(ProcessingStats::default())),
-            global_minimizers_u64: Arc::new(Mutex::new(None)),
-            global_minimizers_u128: Arc::new(Mutex::new(Some(RapidHashSet::default()))),
-        }
+        build_shards::<u128>(config, reader, &header)?;
+    }
+
+    eprintln!("Completed build in {:.2?}", start_time.elapsed());
+    Ok(())
+}
+
+#[cfg(feature = "cli")]
+fn build_shards<K: Key>(
+    config: &IndexConfig,
+    reader: paraseq::fastx::Reader<Box<dyn Read + Send>>,
+    header: &IndexHeader,
+) -> Result<()> {
+    let mut processor = BuildIndexProcessor::<K> {
+        config,
+        hasher: KmerHasher::new(config.kmer_length as usize),
+        buffers: if config.kmer_length <= 32 {
+            Buffers::new_u64()
+        } else {
+            Buffers::new_u128()
+        },
+        local_stats: ProcessingStats::default(),
+        staged: staging(),
+        shards: Arc::new(Shards::new(config.kmer_length)),
+        global_stats: Arc::new(Mutex::new(ProcessingStats::default())),
     };
     reader.process_parallel(&mut processor, config.threads as usize)?;
 
-    let all_minimizers = if config.kmer_length <= 32 {
-        let set = Arc::try_unwrap(processor.global_minimizers_u64)
-            .unwrap()
-            .into_inner()
-            .unwrap();
-        crate::MinimizerSet::U64(set)
-    } else {
-        let set = Arc::try_unwrap(processor.global_minimizers_u128)
-            .unwrap()
-            .into_inner()
-            .unwrap();
-        crate::MinimizerSet::U128(set)
-    };
-    let stats = Arc::try_unwrap(processor.global_stats)
-        .unwrap()
+    let stats = Arc::into_inner(processor.global_stats)
+        .expect("stats outlived the workers")
         .into_inner();
+    let shards = Arc::into_inner(processor.shards)
+        .expect("shards outlived the workers")
+        .finish();
 
+    let count: usize = shards.iter().map(|shard| shard.len()).sum();
     eprintln!(
         "Indexed {} minimizers from {} record(s) ({}bp)",
-        all_minimizers.len(),
-        stats.total_seqs,
-        stats.total_bp
+        count, stats.total_seqs, stats.total_bp
     );
 
-    let header = IndexHeader::new(config.kmer_length, config.window_size);
-
-    // Write to output path or stdout
-    dump_minimizers(&all_minimizers, &header, config.output_path.as_deref())?;
-
-    let total_time = start_time.elapsed();
-    eprintln!("Completed build in {:.2?}", total_time);
-
-    Ok(())
+    let shards = load_order_shards(shards, count);
+    dump_shards(&shards, header, config.output_path.as_deref())
 }
 
 /// Minimizers found in the index being diffed
@@ -1418,6 +1716,21 @@ pub fn fetch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "cli")]
+    fn table_buckets_matches_the_real_table() {
+        for count in [1usize, 3, 7, 8, 14, 15, 16, 100, 1000, 12345, 1 << 20] {
+            let set = RapidHashSet::<u64>::with_capacity_and_hasher(count, FixedRapidHasher);
+            let buckets = table_buckets(count);
+            let usable = if buckets >= 8 {
+                buckets - buckets / 8
+            } else {
+                3
+            };
+            assert_eq!(set.capacity(), usable, "count={count}");
+        }
+    }
 
     #[test]
     fn test_header_creation() {

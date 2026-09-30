@@ -989,3 +989,77 @@ fn test_index_filter_complexity() {
         "filter and its inverse must partition the index"
     );
 }
+
+#[test]
+fn test_index_reorder_preserves_contents() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("test.fasta");
+    let idx_path = temp_dir.path().join("test.idx");
+    let reordered_path = temp_dir.path().join("reordered.idx");
+    let again_path = temp_dir.path().join("again.idx");
+
+    create_diverse_fasta(&fasta_path);
+    build_index(&fasta_path, &idx_path);
+
+    for output in [&reordered_path, &again_path] {
+        cargo::cargo_bin_cmd!("deacon")
+            .arg("index")
+            .arg("reorder")
+            .arg(&idx_path)
+            .arg("-o")
+            .arg(output)
+            .assert()
+            .success();
+    }
+
+    // Same minimizers, and reordering is deterministic
+    assert_eq!(
+        fs::read(&idx_path).unwrap().len(),
+        fs::read(&reordered_path).unwrap().len()
+    );
+    assert_eq!(
+        fs::read(&reordered_path).unwrap(),
+        fs::read(&again_path).unwrap()
+    );
+
+    for (first, second) in [(&idx_path, &reordered_path), (&reordered_path, &idx_path)] {
+        let output = cargo::cargo_bin_cmd!("deacon")
+            .arg("index")
+            .arg("diff")
+            .arg(first)
+            .arg(second)
+            .arg("-o")
+            .arg(temp_dir.path().join("diff.idx"))
+            .assert()
+            .success();
+        let stderr = String::from_utf8_lossy(&output.get_output().stderr).to_string();
+        assert!(stderr.contains("0 remaining"), "unexpected diff: {stderr}");
+    }
+}
+
+#[test]
+fn test_index_reorder_rejects_bff() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("test.fasta");
+    let idx_path = temp_dir.path().join("test.idx");
+    let bff_path = temp_dir.path().join("test.pidx");
+
+    create_test_fasta(&fasta_path, 1);
+    build_index(&fasta_path, &idx_path);
+
+    cargo::cargo_bin_cmd!("deacon")
+        .arg("index")
+        .arg("freeze")
+        .arg(&idx_path)
+        .arg("-o")
+        .arg(&bff_path)
+        .assert()
+        .success();
+
+    cargo::cargo_bin_cmd!("deacon")
+        .arg("index")
+        .arg("reorder")
+        .arg(&bff_path)
+        .assert()
+        .failure();
+}
