@@ -526,6 +526,16 @@ pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+/// Reorder an older exact index in place. Newly written indexes are ordered automatically.
+#[cfg(feature = "cli")]
+pub fn reorder(index_path: &Path) -> Result<()> {
+    reject_bff(index_path, "reorder")?;
+    let (mut minimizers, header) =
+        load_minimizers_from_path(index_path).context("Failed to load index")?;
+    dump_minimizers(&mut minimizers, &header, Some(index_path))
+        .context("Failed to write reordered index")
+}
+
 /// Freeze an exact index into a BFF (binary fuse filter) index (k<=32)
 #[cfg(feature = "cli")]
 pub fn freeze(index_path: &Path, output_path: Option<&Path>, bits: u8) -> Result<()> {

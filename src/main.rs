@@ -5,7 +5,7 @@ use deacon::index_fetch;
 use deacon::{
     ComplexityAlgorithm, DEFAULT_CBQ_BLOCK_SIZE_MIB, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE,
     FilterConfig, IndexConfig, index_diff, index_dump, index_filter, index_freeze, index_info,
-    index_intersect, index_union,
+    index_intersect, index_reorder, index_union,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -285,6 +285,11 @@ enum IndexCommand {
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
     },
+    /// Reorder the minimizers in an existing index for faster loading
+    Reorder {
+        /// Path to the index file to reorder *in place*
+        index: PathBuf,
+    },
 }
 
 /// client -> server
@@ -546,6 +551,9 @@ fn process_command(command: &Command) -> Result<(), anyhow::Error> {
             } => {
                 index_freeze(index, output.as_deref(), *bits)
                     .context("Failed to run index freeze command")?;
+            }
+            IndexCommand::Reorder { index } => {
+                index_reorder(index).context("Failed to reorder index")?;
             }
         },
         Command::Filter {
