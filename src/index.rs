@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
+use tracing::info;
 
 #[cfg(feature = "cli")]
 use crate::IndexConfig;
@@ -366,7 +367,7 @@ pub fn dump_minimizers(
     match minimizers {
         crate::MinimizerSet::U64(set) => {
             let sorted = sort_hashset(set);
-            eprintln!("Writing minimizers..");
+            info!("Writing minimizers..");
             for val in sorted {
                 // Write only the required bytes (little-endian)
                 let bytes = val.to_le_bytes();
@@ -377,7 +378,7 @@ pub fn dump_minimizers(
         }
         crate::MinimizerSet::U128(set) => {
             let sorted = sort_hashset(set);
-            eprintln!("Writing minimizers..");
+            info!("Writing minimizers..");
             for val in sorted {
                 // Write only the required bytes (little-endian)
                 let bytes = val.to_le_bytes();
@@ -408,7 +409,7 @@ fn sort_hashset<T>(set: &mut RapidHashSet<T>) -> Vec<T>
 where
     T: Copy + std::hash::Hash + Ord + Send + Sync,
 {
-    eprintln!("Sorting minimizers..");
+    info!("Sorting minimizers..");
     // Note that this might differ from the current capacity if elements were deleted.
     set.shrink_to_fit();
 
@@ -742,7 +743,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
         options.push(format!("threads={}", config.threads));
     }
 
-    eprintln!(
+    info!(
         "Deacon v{}; mode: build; input: single; options: {}",
         version,
         options.join(", ")
@@ -758,7 +759,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     };
     let reader = reader_with_inferred_batch_size(in_path)?;
 
-    eprintln!(
+    info!(
         "Building index (k={}, w={})",
         config.kmer_length, config.window_size
     );
@@ -797,6 +798,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     reader.process_parallel(&mut processor, config.threads as usize)?;
     drop(processor);
 
+    info!("Collecting minimizers into a single set");
     let mut all_minimizers = if config.kmer_length <= 32 {
         let set = global_minimizers_u64.get_mut().take().unwrap();
         crate::MinimizerSet::U64(set)
@@ -804,9 +806,9 @@ pub fn build(config: &IndexConfig) -> Result<()> {
         let set = global_minimizers_u128.get_mut().take().unwrap();
         crate::MinimizerSet::U128(set)
     };
-    let stats = global_stats.get_mut();
+    let stats = global_stats.into_inner();
 
-    eprintln!(
+    info!(
         "Indexed {} minimizers from {} record(s) ({}bp)",
         all_minimizers.len(),
         stats.total_seqs,
@@ -819,7 +821,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     dump_minimizers(&mut all_minimizers, &header, config.output_path.as_deref())?;
 
     let total_time = start_time.elapsed();
-    eprintln!("Completed build in {:.2?}", total_time);
+    info!("Completed build in {:.2?}", total_time);
 
     Ok(())
 }

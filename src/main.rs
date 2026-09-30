@@ -328,6 +328,14 @@ fn print_citation() {
 }
 
 fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .compact()
+        .with_target(false)
+        .with_timer(tracing_subscriber::fmt::time::ChronoLocal::new(
+            "%H:%M:%S".to_string(),
+        ))
+        .init();
+
     // Check we have either AVX2 or NEON
     #[cfg(not(any(target_feature = "avx2", target_feature = "neon")))]
     {
