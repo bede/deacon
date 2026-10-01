@@ -421,6 +421,16 @@ fn dump_minimizer_lists(
     Ok(())
 }
 
+/// Hashbrown's bucket count for `len` items, guarded by `test_table_buckets_matches_hashbrown`
+fn table_buckets(len: usize) -> usize {
+    match len {
+        0..4 => 4,
+        4..8 => 8,
+        8..15 => 16,
+        _ => (len * 8 / 7).next_power_of_two(),
+    }
+}
+
 /// Sort the values in the hashset by (bucket, value).
 ///
 /// This way, the output is deterministic, and construction from an index file
@@ -435,16 +445,10 @@ where
     T: Copy + std::hash::Hash + Ord + Send + Sync,
 {
     info!("Sorting minimizers..");
-    // Note that this might differ from the current capacity if elements were deleted.
+    // Shrink so iteration follows table_buckets(len). capacity() is unreliable after removals
     set.shrink_to_fit();
 
-    // Copied from hashbrown hash table.
-    let num_buckets = (set.len() * 8 / 7).next_power_of_two();
-    assert_eq!(
-        num_buckets,
-        set.capacity() / 7 * 8,
-        "The hashbrown implementation has a different capacity and/or number of buckets than expected."
-    );
+    let num_buckets = table_buckets(set.len());
 
     let bucket = |x: &T| -> usize {
         let mut hasher = FixedRapidHasher::default().build_hasher();
@@ -494,7 +498,7 @@ where
     // Match the bucket count of the single, final hash set used by
     // sort_hashset so concatenating these vectors preserves its ordering.
     let total_len: usize = shards.iter().map(Vec::len).sum();
-    let num_buckets = (total_len * 8 / 7).next_power_of_two();
+    let num_buckets = table_buckets(total_len);
     let bucket = |x: &T| -> usize {
         let mut hasher = FixedRapidHasher::default().build_hasher();
         x.hash(&mut hasher);
@@ -1739,6 +1743,34 @@ mod tests {
         assert_eq!(header.format_version, 3);
         assert_eq!(header.kmer_length(), 31);
         assert_eq!(header.window_size(), 21);
+    }
+
+    /// Check hashbrown hasn't changed its table sizing which would break stuff
+    #[test]
+    fn test_table_buckets_matches_hashbrown() {
+        for len in (1..2000).chain([1 << 16, 100_000]) {
+            let buckets = table_buckets(len);
+            let capacity = if buckets <= 8 {
+                buckets - 1
+            } else {
+                buckets / 8 * 7
+            };
+            let set = RapidHashSet::<u64>::with_capacity_and_hasher(len, FixedRapidHasher);
+            assert_eq!(set.capacity(), capacity, "u64 len={len}");
+            let set = RapidHashSet::<u128>::with_capacity_and_hasher(len, FixedRapidHasher);
+            assert_eq!(set.capacity(), capacity, "u128 len={len}");
+        }
+    }
+
+    /// Tiny sets and sets with removal tombstones must not panic
+    #[test]
+    fn test_sort_hashset_small_and_after_removals() {
+        for len in [0, 1, 2, 3, 4, 5, 7, 8, 14, 15, 1000, 100_000] {
+            let mut set: RapidHashSet<u64> = (0..len + len / 10).collect();
+            set.retain(|&x| x < len);
+            let vals = sort_hashset(&mut set);
+            assert_eq!(vals.len(), len as usize);
+        }
     }
 
     #[test]
