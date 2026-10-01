@@ -486,6 +486,7 @@ where
 /// Takes a bunch of shards and re-shards those according to the high bits of the target bucket.
 /// We again use 1024 target shards, and use multithreading to distribute the values.
 /// Then, we sort each target shard inside a thread and end by concatenating all Vecs.
+#[cfg(feature = "cli")]
 fn sort_sharded_lists<T>(shards: Vec<Vec<T>>) -> Vec<Vec<T>>
 where
     T: Copy + std::hash::Hash + Ord + Send + Sync,

@@ -8,6 +8,7 @@
 #![doc = include_str!("../README.md")]
 
 // Re-export public functionality
+#[cfg(feature = "cli")]
 mod dedupping_vec;
 #[cfg(feature = "cli")]
 mod filter;
