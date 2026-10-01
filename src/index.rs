@@ -501,10 +501,12 @@ where
     };
     assert!(num_buckets.is_power_of_two());
     assert!(SHARDS.is_power_of_two());
-    let shift = (num_buckets / SHARDS).trailing_zeros() as usize;
-
     // Assign contiguous ranges of target buckets to each output shard.
-    // Multiplication also handles tables with fewer than 1024 buckets.
+    // Tables with fewer buckets than shards use one shard per bucket.
+    let shift = num_buckets
+        .trailing_zeros()
+        .saturating_sub(SHARDS.trailing_zeros());
+
     info!("Re-shard minimizers");
     let sorted_shards: Vec<Mutex<Vec<T>>> = (0..SHARDS).map(|_| Mutex::new(Vec::new())).collect();
     shards.into_par_iter().for_each(|shard| {
