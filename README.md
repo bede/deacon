@@ -67,11 +67,12 @@ deacon index build amr-genes.fa > amr-genes.idx
 deacon filter amr-genes.idx AllTheBacteria.fa.zst > hits.fa
 ```
 
-*N.B. Indexing a 3Gbp human genome takes ~30s using 18GB of RAM with default parameters. Filtering uses 5GB.*
+> [!TIP]
+> If searching large sequence collections, consider encoding them as Binseq cbq for dramatically improved search throughput with Deacon.
 
 ## Prebuilt indexes
 
-Prebuilt pangenome indexes are provided. These can be downloaded using the links below, or with `deacon index fetch <name>`.  These may alternatively be reproduced using workflows in [deacon-indexes](https://github.com/bede/deacon-indexes). 
+Prebuilt pangenome indexes can be downloaded using the links below, or with `deacon index fetch <name>`.  These may alternatively be reproduced using workflows in [deacon-indexes](https://github.com/bede/deacon-indexes). 
 
 |                          Name & URL                          |                         Composition                          | Minimizers  | Subtracted minimizers | Size  | Date    |
 | :----------------------------------------------------------: | :----------------------------------------------------------: | ----------- | --------------------- | ----- | ------- |
@@ -167,6 +168,10 @@ zcat *.fa.gz | deacon index build - > genomes.idx
 ```
 
 `deacon index build` accepts either a FASTA/FASTQ file or a stdin stream (`-`), enabling convenient indexing of compressed sequences in one or many files with a single step. Indexing a human genome takes a few seconds. Indexing uses 2-4x as much RAM as filtering. For indexing large collections approaching terabase scale—such as mammalian pangenomes—it may be practical to index genomes individually in parallel and later combine them using the `deacon index union` set operation, described below.
+
+> [!NOTE]
+>
+Indexing a 3 Gbp human genome takes ~5s and 8 GB of RAM with default parameters
 
 #### Set operations
 
