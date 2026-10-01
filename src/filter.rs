@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+use tracing::{info, warn};
 
 const OUTPUT_BUFFER_SIZE: usize = 8 * 1024 * 1024; // Opt: 8MB output buffer
 const DEFAULT_BUFFER_SIZE: usize = 64 * 1024;
@@ -1322,7 +1323,7 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
         )?;
         let index_load_time = load_start.elapsed();
         if !quiet {
-            eprintln!(
+            info!(
                 "Loaded index (k={}, w={}) in {:.2?}; kept {} of {} minimizers (kdust >= {})",
                 header.kmer_length(),
                 header.window_size(),
@@ -1339,7 +1340,7 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
     let (minimizers, header) = load_minimizers_cached(config.minimizers_path)?;
     let index_load_time = load_start.elapsed();
     if !quiet {
-        eprintln!(
+        info!(
             "Loaded index (k={}, w={}) in {:.2?}",
             header.kmer_length(),
             header.window_size(),
@@ -1428,7 +1429,7 @@ pub fn run_with_index(
         && (layout.format == Format::Cbq || (output_format == Format::Cbq && config.rename));
     let filtering_threads = if ordered_cbq && filtering_threads > 1 {
         if !quiet {
-            eprintln!("Using 1 filtering thread: --ordered with CBQ input or renamed CBQ output");
+            info!("Using 1 filtering thread: --ordered with CBQ input or renamed CBQ output");
         }
         1
     } else {
@@ -1477,7 +1478,7 @@ pub fn run_with_index(
     }
 
     if !quiet {
-        eprintln!(
+        info!(
             "Deacon v{}; mode: {}; input: {}; options: {}",
             version,
             mode,
@@ -1584,9 +1585,7 @@ pub fn run_with_index(
             reader1.process_parallel_paired(reader2, &mut processor, num_threads)?;
         }
         Input::Empty => {
-            if !quiet {
-                eprintln!("Empty input file(s) detected");
-            }
+            warn!("Empty input file(s) detected");
         }
     }
 
@@ -1650,7 +1649,7 @@ pub fn run_with_index(
     }
 
     if !quiet {
-        eprintln!(
+        info!(
             "Retained {}/{} sequences ({:.3}%), {}/{} bp ({:.3}%)",
             output_seqs,
             total_seqs,
@@ -1659,7 +1658,7 @@ pub fn run_with_index(
             total_bp,
             output_bp_proportion * 100.0,
         );
-        eprintln!(
+        info!(
             "Processed {} in {:.2?} ({}/s)",
             format_bp_progress(total_bp as f64),
             filtering_time,
@@ -1709,7 +1708,7 @@ pub fn run_with_index(
         serde_json::to_writer_pretty(BufWriter::new(file), &summary)
             .context("Failed to write summary")?;
         if !quiet {
-            eprintln!("Filter summary saved to {:?}", summary_file);
+            info!("Filter summary saved to {:?}", summary_file);
         }
     }
 

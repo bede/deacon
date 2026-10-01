@@ -1075,7 +1075,7 @@ mod output2_tests {
             .arg(&output_path2)
             .assert()
             .success()
-            .stderr(predicates::str::contains("Warning"));
+            .stderr(predicates::str::contains("Ignoring --output2"));
 
         // Check only the first output file was created
         assert!(output_path.exists(), "First output file wasn't created");

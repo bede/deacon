@@ -68,7 +68,7 @@ deacon filter amr-genes.idx AllTheBacteria.fa.zst > hits.fa
 ```
 
 > [!TIP]
-> If searching large sequence collections, consider encoding them as Binseq cbq for dramatically improved search throughput with Deacon.
+> If searching large sequence collections, consider encoding them as Binseq cbq for dramatically improved search throughput with Deacon
 
 ## Prebuilt indexes
 

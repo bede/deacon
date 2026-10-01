@@ -363,15 +363,15 @@ fn extract_remaining_count(stderr: &[u8]) -> usize {
     panic!("Could not extract remaining count from stderr: {}", s);
 }
 
-// Parse "Distinct minimizer count: N" from index info stderr
-fn extract_distinct_count(stderr: &[u8]) -> usize {
-    let s = String::from_utf8_lossy(stderr);
+// Parse "Distinct minimizer count: N" from index info stdout
+fn extract_distinct_count(stdout: &[u8]) -> usize {
+    let s = String::from_utf8_lossy(stdout);
     for line in s.lines() {
         if let Some((_, n)) = line.split_once("Distinct minimizer count:") {
             return n.trim().parse::<usize>().unwrap();
         }
     }
-    panic!("Could not extract distinct count from stderr: {}", s);
+    panic!("Could not extract distinct count from stdout: {}", s);
 }
 
 // A w=1 index from length-k records has one minimizer per distinct record
@@ -412,7 +412,7 @@ fn test_index_build_w1_exact_kmers() {
         .unwrap();
     assert!(info.status.success());
     assert_eq!(
-        extract_distinct_count(&info.stderr),
+        extract_distinct_count(&info.stdout),
         record_count,
         "w=1 index should have one minimizer per length-k record"
     );
@@ -698,15 +698,15 @@ fn test_index_intersect_w1_operand() {
         .unwrap();
     assert!(info.status.success());
     assert_eq!(
-        extract_distinct_count(&info.stderr),
+        extract_distinct_count(&info.stdout),
         SUBSET_RECORDS,
         "intersection should retain exactly the w=1 operand's k-mers"
     );
-    let stderr = String::from_utf8_lossy(&info.stderr);
+    let stdout = String::from_utf8_lossy(&info.stdout);
     assert!(
-        stderr.contains("Window size (w): 15"),
+        stdout.contains("Window size (w): 15"),
         "output should declare w=15, not the w=1 operand's window: {}",
-        stderr
+        stdout
     );
 
     // The w=1 exemption applies to later operands only, matching index diff.
@@ -820,22 +820,22 @@ fn test_index_freeze_and_info() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stderr.contains("BFF (binary fuse filter"),
+        stdout.contains("BFF (binary fuse filter"),
         "info should report BFF format. Got: {}",
-        stderr
+        stdout
     );
     assert!(
-        stderr.contains("K-mer length (k): 31"),
+        stdout.contains("K-mer length (k): 31"),
         "info should report k=31. Got: {}",
-        stderr
+        stdout
     );
     // Specify correct FPR given BFF bits
     assert!(
-        stderr.contains("~2^-32"),
+        stdout.contains("~2^-32"),
         "info should report the 32-bit FP rate. Got: {}",
-        stderr
+        stdout
     );
 }
 

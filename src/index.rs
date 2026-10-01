@@ -623,7 +623,7 @@ pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
 pub fn freeze(index_path: &Path, output_path: Option<&Path>, bits: u8) -> Result<()> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
-    eprintln!("Deacon v{}; mode: freeze", version);
+    info!("Deacon v{}; mode: freeze", version);
 
     if !matches!(bits, 16 | 32) {
         return Err(anyhow::anyhow!(
@@ -652,7 +652,7 @@ pub fn freeze(index_path: &Path, output_path: Option<&Path>, bits: u8) -> Result
     };
 
     let key_count = keys.len();
-    eprintln!(
+    info!(
         "Building {}-bit binary fuse filter from {} minimizers (k={}, w={})",
         bits, key_count, header.kmer_length, header.window_size
     );
@@ -697,11 +697,11 @@ pub fn freeze(index_path: &Path, output_path: Option<&Path>, bits: u8) -> Result
     } else {
         0.0
     };
-    eprintln!(
+    info!(
         "Wrote BFF: {} keys, {} filter bytes ({:.2} bits/key); false-positive rate ~2^-{}",
         key_count, filter_bytes, bits_per_key, bits
     );
-    eprintln!("Completed freeze in {:.2?}", start_time.elapsed());
+    info!("Completed freeze in {:.2?}", start_time.elapsed());
     Ok(())
 }
 
@@ -1171,7 +1171,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor<'_> {
 
             let current_10gb = stats.total_bp / 10_000_000_000;
             if current_10gb > stats.last_reported {
-                eprintln!(
+                info!(
                     "Processed {} sequences ({}bp), removed {} minimizers",
                     stats.total_seqs, stats.total_bp, hits
                 );
@@ -1218,12 +1218,12 @@ fn stream_diff_fastx(
     }
 
     if path.as_os_str() == "-" {
-        eprintln!(
+        info!(
             "Second index: processing FASTX from stdin (k={}, w={})",
             kmer_length, window_size
         );
     } else {
-        eprintln!(
+        info!(
             "Second index: processing FASTX from file (k={}, w={})",
             kmer_length, window_size
         );
@@ -1265,7 +1265,7 @@ fn stream_diff_fastx(
     global_hits.lock().remove_from(first_minimizers);
 
     let elapsed = start_time.elapsed();
-    eprintln!(
+    info!(
         "Processed {} sequences ({}bp) from FASTX file in {:.2?} ({:.1} Mbp/s)",
         stats.total_seqs,
         stats.total_bp,
@@ -1287,14 +1287,14 @@ pub fn diff(
 ) -> Result<()> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
-    eprintln!("Deacon v{}; mode: diff", version);
+    info!("Deacon v{}; mode: diff", version);
 
     reject_bff(first, "diff")?;
     reject_bff(second, "diff")?;
 
     // Load first file (always an index)
     let (mut first_minimizers, header) = load_minimizers_from_path(first)?;
-    eprintln!("First index: loaded {} minimizers", first_minimizers.len());
+    info!("First index: loaded {} minimizers", first_minimizers.len());
 
     // Guess if second file is an index or FASTX file
     let second_minimizers = if let Some(w) = window_size {
@@ -1304,7 +1304,7 @@ pub fn diff(
             stream_diff_fastx(second, w, &header, threads, &mut first_minimizers)?;
 
         // Report results
-        eprintln!(
+        info!(
             "Removed {} minimizers, {} remaining",
             before_count - first_minimizers.len(),
             first_minimizers.len()
@@ -1313,14 +1313,14 @@ pub fn diff(
         dump_minimizers(&mut first_minimizers, &header, output)?;
 
         let total_time = start_time.elapsed();
-        eprintln!("Completed diff in {:.2?}", total_time);
+        info!("Completed diff in {:.2?}", total_time);
 
         return Ok(());
     } else {
         // Try to load as index file first
         if let Ok((second_minimizers, second_header)) = load_minimizers_from_path(second) {
             // Second file is an index file
-            eprintln!(
+            info!(
                 "Second index: loaded {} minimizers",
                 second_minimizers.len()
             );
@@ -1352,7 +1352,7 @@ pub fn diff(
                 stream_diff_fastx(second, w, &header, threads, &mut first_minimizers)?;
 
             // Report results
-            eprintln!(
+            info!(
                 "Removed {} minimizers, {} remaining",
                 before_count - first_minimizers.len(),
                 first_minimizers.len()
@@ -1361,7 +1361,7 @@ pub fn diff(
             dump_minimizers(&mut first_minimizers, &header, output)?;
 
             let total_time = start_time.elapsed();
-            eprintln!("Completed diff in {:.2?}", total_time);
+            info!("Completed diff in {:.2?}", total_time);
 
             return Ok(());
         }
@@ -1375,7 +1375,7 @@ pub fn diff(
     first_minimizers.remove_all(&second_minimizers);
 
     // Report results
-    eprintln!(
+    info!(
         "Removed {} minimizers, {} remaining",
         before_count - first_minimizers.len(),
         first_minimizers.len()
@@ -1384,7 +1384,7 @@ pub fn diff(
     dump_minimizers(&mut first_minimizers, &header, output)?;
 
     let total_time = start_time.elapsed();
-    eprintln!("Completed diff in {:.2?}", total_time);
+    info!("Completed diff in {:.2?}", total_time);
 
     Ok(())
 }
@@ -1394,7 +1394,7 @@ pub fn diff(
 pub fn info(index_path: &Path) -> Result<()> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
-    eprintln!("Deacon v{}; mode: info", version);
+    info!("Deacon v{}; mode: info", version);
 
     if is_bff_file(index_path) {
         let file = File::open(index_path)
@@ -1412,21 +1412,21 @@ pub fn info(index_path: &Path) -> Result<()> {
             0.0
         };
 
-        eprintln!("Index information:");
-        eprintln!(
+        println!("Index information:");
+        println!(
             "  Format: BFF (binary fuse filter, {}-bit fingerprints)",
             header.filter_bits()
         );
-        eprintln!("  Format version: {}", header.format_version);
-        eprintln!("  K-mer length (k): {}", header.kmer_length);
-        eprintln!("  Window size (w): {}", header.window_size);
-        eprintln!("  Key count: {}", header.key_count);
-        eprintln!(
+        println!("  Format version: {}", header.format_version);
+        println!("  K-mer length (k): {}", header.kmer_length);
+        println!("  Window size (w): {}", header.window_size);
+        println!("  Key count: {}", header.key_count);
+        println!(
             "  File size: {} bytes (~{:.2} bits/key)",
             file_size, bits_per_key
         );
         let bits = header.filter_bits();
-        eprintln!(
+        println!(
             "  False-positive rate: ~2^-{} (~{:.2e})",
             bits,
             2f64.powi(-(bits as i32))
@@ -1435,16 +1435,16 @@ pub fn info(index_path: &Path) -> Result<()> {
         // Load exact index file
         let (minimizers, header) = load_minimizers_from_path(index_path)?;
 
-        eprintln!("Index information:");
-        eprintln!("  Format: exact (minimizer set)");
-        eprintln!("  Format version: {}", header.format_version);
-        eprintln!("  K-mer length (k): {}", header.kmer_length());
-        eprintln!("  Window size (w): {}", header.window_size());
-        eprintln!("  Distinct minimizer count: {}", minimizers.len());
+        println!("Index information:");
+        println!("  Format: exact (minimizer set)");
+        println!("  Format version: {}", header.format_version);
+        println!("  K-mer length (k): {}", header.kmer_length());
+        println!("  Window size (w): {}", header.window_size());
+        println!("  Distinct minimizer count: {}", minimizers.len());
     }
 
     let total_time = start_time.elapsed();
-    eprintln!("Loaded index info in {:.2?}", total_time);
+    info!("Loaded index info in {:.2?}", total_time);
 
     Ok(())
 }
@@ -1466,7 +1466,7 @@ pub fn filter(
 
     let (mut minimizers, header) = load_minimizers_from_path(index_path)?;
     let before = minimizers.len();
-    eprintln!(
+    info!(
         "Filtering index (k={}, w={}): {} minimizers, {} {} {}",
         header.kmer_length(),
         header.window_size(),
@@ -1481,7 +1481,7 @@ pub fn filter(
 
     dump_minimizers(&mut minimizers, &header, output)?;
 
-    eprintln!(
+    info!(
         "Kept {} of {} minimizers ({} removed) in {:.2?}",
         after,
         before,
@@ -1497,7 +1497,7 @@ pub fn filter(
 pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
-    eprintln!("Deacon v{}; mode: union", version);
+    info!("Deacon v{}; mode: union", version);
     // Check input files
     if inputs.is_empty() {
         return Err(anyhow::anyhow!(
@@ -1517,7 +1517,7 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     // Get header from first file for output
     let header = &headers_and_counts[0].0;
 
-    eprintln!(
+    info!(
         "Combining indexes (k={}, w={})",
         header.kmer_length(),
         header.window_size()
@@ -1541,7 +1541,7 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
 
     // Load first index to determine type (u64 vs u128)
     let (mut all_minimizers, _) = load_minimizers_from_path(&inputs[0])?;
-    eprintln!("Index 1: loaded {} minimizers", all_minimizers.len());
+    info!("Index 1: loaded {} minimizers", all_minimizers.len());
 
     // Now load and merge remaining indexes
     for (i, path) in inputs.iter().enumerate().skip(1) {
@@ -1552,7 +1552,7 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
         all_minimizers.extend(minimizers);
 
         let expected_count = headers_and_counts[i].1;
-        eprintln!(
+        info!(
             "Index {}: {} minimizers, added {}, total: {}",
             i + 1,
             expected_count,
@@ -1564,7 +1564,7 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     dump_minimizers(&mut all_minimizers, header, output)?;
 
     let total_time = start_time.elapsed();
-    eprintln!(
+    info!(
         "United {} indexes with {} total minimizers in {:.2?}",
         inputs.len(),
         all_minimizers.len(),
@@ -1578,7 +1578,7 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
 pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
-    eprintln!("Deacon v{}; mode: intersect", version);
+    info!("Deacon v{}; mode: intersect", version);
     // Check inputs
     if inputs.len() < 2 {
         return Err(anyhow::anyhow!(
@@ -1598,7 +1598,7 @@ pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     // Get header from first file for output
     let header = &headers_and_counts[0].0;
 
-    eprintln!(
+    info!(
         "Intersecting indexes (k={}, w={})",
         header.kmer_length(),
         header.window_size()
@@ -1622,7 +1622,7 @@ pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
 
     // Load first index
     let (mut result_minimizers, _) = load_minimizers_from_path(&inputs[0])?;
-    eprintln!("Index 1: loaded {} minimizers", result_minimizers.len());
+    info!("Index 1: loaded {} minimizers", result_minimizers.len());
 
     // Intersect with remaining indexes
     for (i, path) in inputs.iter().enumerate().skip(1) {
@@ -1632,7 +1632,7 @@ pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
         result_minimizers.intersect(&minimizers);
 
         let expected_count = headers_and_counts[i].1;
-        eprintln!(
+        info!(
             "Index {}: {} minimizers, retained {}, total: {}",
             i + 1,
             expected_count,
@@ -1644,7 +1644,7 @@ pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     dump_minimizers(&mut result_minimizers, header, output)?;
 
     let total_time = start_time.elapsed();
-    eprintln!(
+    info!(
         "Intersected {} indexes with {} common minimizers in {:.2?}",
         inputs.len(),
         result_minimizers.len(),
@@ -1671,7 +1671,7 @@ pub fn fetch(
     let filename = format!("{}.k{}w{}.idx", index_name, kmer_length, window_size);
     let url = format!("{}/deacon/{}/{}", base_url, INDEX_FORMAT_VERSION, filename);
 
-    eprintln!("Fetching {}", url);
+    info!("Fetching {}", url);
 
     let mut response = minreq::get(&url)
         .send_lazy()
@@ -1704,7 +1704,7 @@ pub fn fetch(
     std::fs::rename(&temp_path, &output_path).context("Failed to finalise index")?;
 
     pb.finish_and_clear();
-    eprintln!("Index saved to {}", output_path.display());
+    info!("Index saved to {}", output_path.display());
 
     Ok(())
 }

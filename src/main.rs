@@ -12,6 +12,7 @@ use std::io::{IsTerminal, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::str::FromStr;
+use tracing::{Level, info, warn};
 
 #[derive(Parser, Serialize, Deserialize)]
 #[command(author, version, about, long_about = None)]
@@ -325,35 +326,41 @@ fn print_citation() {
 /// Refuse to write binary index data directly to an interactive terminal.
 fn ensure_index_output_is_redirected(output: &mut Option<PathBuf>) -> Result<()> {
     if output.is_none() && std::io::stdout().is_terminal() {
-        tracing::error!("Stdout is a tty, output bytes will be sent to /dev/null");
+        warn!("Stdout is a tty, output bytes will be sent to /dev/null");
         *output = Some(PathBuf::from("/dev/null"));
     }
     Ok(())
 }
 
 fn main() -> Result<()> {
+    // Check runtime AVX2 support if compiled with it
+    ensure_simd::ensure_simd();
+
+    let cli = Cli::parse();
+
+    let quiet = matches!(
+        cli.command,
+        Command::Filter { quiet: true, .. }
+            | Command::Index {
+                command: IndexCommand::Build { quiet: true, .. }
+            }
+    );
     tracing_subscriber::fmt()
         .compact()
         .with_target(false)
         .with_writer(std::io::stderr)
         .with_ansi(std::io::stderr().is_terminal())
+        .with_max_level(if quiet { Level::WARN } else { Level::INFO })
         .with_timer(tracing_subscriber::fmt::time::ChronoLocal::new(
             "%H:%M:%S".to_string(),
         ))
         .init();
 
-    // Check we have either AVX2 or NEON
+    // Warn if built without AVX2 or NEON
     #[cfg(not(any(target_feature = "avx2", target_feature = "neon")))]
-    {
-        eprintln!(
-            "Warning: SIMD acceleration is unavailable. For best performance, compile with `cargo build --release -C target-cpu=native`"
-        );
-    }
-
-    // If the binary was compiled with AVX2, check that the machine supports it at runtime.
-    ensure_simd::ensure_simd();
-
-    let cli = Cli::parse();
+    warn!(
+        "SIMD acceleration is unavailable. For best performance, compile with `RUSTFLAGS=\"-C target-cpu=native\" cargo build --release`"
+    );
 
     // Start the server if requested.
     if let Command::Server {
@@ -380,7 +387,7 @@ fn main() -> Result<()> {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("Failed to accept incoming connection: {e}");
+                    warn!("Failed to accept incoming connection: {e}");
                     continue 'stream;
                 }
             };
@@ -390,13 +397,13 @@ fn main() -> Result<()> {
                 let len = match stream.read(&mut buf) {
                     Ok(len) => len,
                     Err(e) => {
-                        eprintln!("Failed to read request from client: {e}");
+                        warn!("Failed to read request from client: {e}");
                         continue 'stream;
                     }
                 };
                 if len == 0 {
                     // drop this message
-                    eprintln!("Incoming request was empty.");
+                    warn!("Incoming request was empty");
                     continue 'stream;
                 }
                 let buf = &buf[..len];
@@ -410,7 +417,7 @@ fn main() -> Result<()> {
             let message: Command = match serde_json::from_slice(&message) {
                 Ok(message) => message,
                 Err(e) => {
-                    eprintln!("Failed to parse request from client: {e}");
+                    warn!("Failed to parse request from client: {e}");
                     continue 'stream;
                 }
             };
@@ -430,7 +437,7 @@ fn main() -> Result<()> {
                 Command::Server {
                     command: ServerCommand::Stop,
                 } => {
-                    eprintln!("stopping the server");
+                    info!("Stopping the server");
                     serde_json::to_writer(stream, &Reply::Done)?;
                     let _ = std::fs::remove_file("deacon_server_socket");
                     break;
@@ -445,7 +452,7 @@ fn main() -> Result<()> {
                 }
             };
             if let Err(e) = reply_status {
-                eprintln!("Failed to send reply to client: {e}");
+                warn!("Failed to send reply to client: {e}");
             }
         }
 
@@ -600,9 +607,7 @@ fn process_command(command: Command) -> Result<(), anyhow::Error> {
         } => {
             // Validate output2 usage
             if output2.is_some() && input2.is_none() && !interleaved {
-                eprintln!(
-                    "Warning: --output2 specified but no second input file provided. --output2 will be ignored."
-                );
+                warn!("Ignoring --output2 without a second input");
             }
 
             let config = FilterConfig {
