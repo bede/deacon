@@ -842,7 +842,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor {
 impl binseq::ParallelProcessor for BuildIndexProcessor {
     fn process_record<R: BinseqRecord>(&mut self, record: R) -> binseq::Result<()> {
         self.seq.clear();
-        record.decode_s(&mut self.seq).unwrap();
+        record.decode_s(&mut self.seq)?;
         let seq = &self.seq;
         self.local_stats.total_seqs += 1;
         self.local_stats.total_bp += seq.len() as u64;
@@ -1022,12 +1022,11 @@ pub fn build(config: &IndexConfig) -> Result<()> {
         let reader = reader_with_inferred_batch_size(in_path)?;
         reader.process_parallel(&mut processor, config.threads as usize)?;
     }
-    let global_stats = Arc::try_unwrap(processor.global_stats).unwrap();
+    let global_stats = Arc::into_inner(processor.global_stats).expect("workers still hold stats");
     let global_minimizers_u64 =
-        Arc::try_unwrap(processor.global_minimizers_u64).unwrap_or_default();
+        Arc::into_inner(processor.global_minimizers_u64).expect("workers still hold shards");
     let global_minimizers_u128 =
-        Arc::try_unwrap(processor.global_minimizers_u128).unwrap_or_default();
-    // drop(processor);
+        Arc::into_inner(processor.global_minimizers_u128).expect("workers still hold shards");
 
     info!("Dedup shards");
     let all_minimizers = if config.kmer_length <= 32 {
