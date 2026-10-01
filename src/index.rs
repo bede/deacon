@@ -394,7 +394,7 @@ fn dump_minimizer_lists(
     let bytes_per_minimizer = (header.kmer_length as usize).div_ceil(4);
     match minimizers {
         MinimizerVecVec::U64(minimizers) => {
-            info!("Writing minimizers..");
+            info!("Writing minimizers");
             for list in minimizers {
                 for val in list {
                     // Write only the required bytes (little-endian)
@@ -406,7 +406,7 @@ fn dump_minimizer_lists(
             }
         }
         MinimizerVecVec::U128(minimizers) => {
-            info!("Writing minimizers..");
+            info!("Writing minimizers");
             for list in minimizers {
                 for val in list {
                     // Write only the required bytes (little-endian)
@@ -444,7 +444,7 @@ fn sort_hashset<T>(set: &mut RapidHashSet<T>) -> Vec<T>
 where
     T: Copy + std::hash::Hash + Ord + Send + Sync,
 {
-    info!("Sorting minimizers..");
+    info!("Sorting minimizers");
     // Shrink so iteration follows table_buckets(len). capacity() is unreliable after removals
     set.shrink_to_fit();
 
@@ -481,7 +481,7 @@ where
         }
     }
 
-    info!("Checking that values are sorted by hash.");
+    info!("Checking that values are sorted by hash");
     assert!(vals.is_sorted_by_key(|x| (bucket(x), x)));
 
     vals
@@ -512,7 +512,7 @@ where
         .trailing_zeros()
         .saturating_sub(SHARDS.trailing_zeros());
 
-    info!("Re-shard minimizers");
+    info!("Resharding minimizers");
     let sorted_shards: Vec<Mutex<Vec<T>>> = (0..SHARDS).map(|_| Mutex::new(Vec::new())).collect();
     shards.into_par_iter().for_each(|shard| {
         debug_assert!(shard.array_windows().all(|[v1, v2]| v1 < v2));
@@ -528,7 +528,7 @@ where
         }
     });
 
-    info!("Sort shards");
+    info!("Sorting shards");
     let mut sorted_shards = sorted_shards
         .into_iter()
         .map(|mutex| mutex.into_inner())
@@ -616,16 +616,6 @@ pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
 
     writer.flush()?;
     Ok(())
-}
-
-/// Reorder an older exact index in place. Newly written indexes are ordered automatically.
-#[cfg(feature = "cli")]
-pub fn reorder(index_path: &Path) -> Result<()> {
-    reject_bff(index_path, "reorder")?;
-    let (mut minimizers, header) =
-        load_minimizers_from_path(index_path).context("Failed to load index")?;
-    dump_minimizers(&mut minimizers, &header, Some(index_path))
-        .context("Failed to write reordered index")
 }
 
 /// Freeze an exact index into a BFF (binary fuse filter) index (k<=32)
@@ -818,7 +808,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor {
                 let current_gb = stats.total_bp / 1_000_000_000;
                 if current_gb > stats.last_reported {
                     info!(
-                        "  Processed {} sequences ({}bp)",
+                        "Processed {} sequences ({}bp)",
                         stats.total_seqs, stats.total_bp
                     );
                     stats.last_reported = current_gb;
@@ -878,7 +868,7 @@ impl binseq::ParallelProcessor for BuildIndexProcessor {
                 let current_gb = stats.total_bp / 1_000_000_000;
                 if current_gb > stats.last_reported {
                     info!(
-                        "  Processed {} sequences ({}bp)",
+                        "Processed {} sequences ({}bp)",
                         stats.total_seqs, stats.total_bp
                     );
                     stats.last_reported = current_gb;
@@ -1011,7 +1001,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     let global_minimizers_u128 =
         Arc::into_inner(processor.global_minimizers_u128).expect("workers still hold shards");
 
-    info!("Dedup shards");
+    info!("Deduplicating shards");
     let all_minimizers = if config.kmer_length <= 32 {
         let shards: Vec<_> = global_minimizers_u64
             .into_par_iter()
@@ -1182,7 +1172,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor<'_> {
             let current_10gb = stats.total_bp / 10_000_000_000;
             if current_10gb > stats.last_reported {
                 eprintln!(
-                    "  Processed {} sequences ({}bp), removed {} minimizers",
+                    "Processed {} sequences ({}bp), removed {} minimizers",
                     stats.total_seqs, stats.total_bp, hits
                 );
                 stats.last_reported = current_10gb;
@@ -1229,12 +1219,12 @@ fn stream_diff_fastx(
 
     if path.as_os_str() == "-" {
         eprintln!(
-            "Second index: processing FASTX from stdin (k={}, w={})…",
+            "Second index: processing FASTX from stdin (k={}, w={})",
             kmer_length, window_size
         );
     } else {
         eprintln!(
-            "Second index: processing FASTX from file (k={}, w={})…",
+            "Second index: processing FASTX from file (k={}, w={})",
             kmer_length, window_size
         );
     }
@@ -1296,6 +1286,8 @@ pub fn diff(
     output: Option<&Path>,
 ) -> Result<()> {
     let start_time = Instant::now();
+    let version: String = env!("CARGO_PKG_VERSION").to_string();
+    eprintln!("Deacon v{}; mode: diff", version);
 
     reject_bff(first, "diff")?;
     reject_bff(second, "diff")?;
@@ -1401,6 +1393,8 @@ pub fn diff(
 #[cfg(feature = "cli")]
 pub fn info(index_path: &Path) -> Result<()> {
     let start_time = Instant::now();
+    let version: String = env!("CARGO_PKG_VERSION").to_string();
+    eprintln!("Deacon v{}; mode: info", version);
 
     if is_bff_file(index_path) {
         let file = File::open(index_path)
@@ -1502,6 +1496,8 @@ pub fn filter(
 #[cfg(feature = "cli")]
 pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     let start_time = Instant::now();
+    let version: String = env!("CARGO_PKG_VERSION").to_string();
+    eprintln!("Deacon v{}; mode: union", version);
     // Check input files
     if inputs.is_empty() {
         return Err(anyhow::anyhow!(
@@ -1581,6 +1577,8 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
 #[cfg(feature = "cli")]
 pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     let start_time = Instant::now();
+    let version: String = env!("CARGO_PKG_VERSION").to_string();
+    eprintln!("Deacon v{}; mode: intersect", version);
     // Check inputs
     if inputs.len() < 2 {
         return Err(anyhow::anyhow!(
@@ -1706,7 +1704,7 @@ pub fn fetch(
     std::fs::rename(&temp_path, &output_path).context("Failed to finalise index")?;
 
     pb.finish_and_clear();
-    eprintln!("Index saved to: {}", output_path.display());
+    eprintln!("Index saved to {}", output_path.display());
 
     Ok(())
 }

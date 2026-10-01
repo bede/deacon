@@ -837,6 +837,19 @@ fn open_cbq_output(path: &std::path::Path) -> Result<File> {
     File::create(path).with_context(|| format!("Failed to create output file: {}", path.display()))
 }
 
+/// Format a bp count with one decimal place regardless of scale (bp/kbp/Mbp/Gbp)
+fn format_bp_progress(bp: f64) -> String {
+    if bp >= 1_000_000_000.0 {
+        format!("{:.1} Gbp", bp / 1_000_000_000.0)
+    } else if bp >= 1_000_000.0 {
+        format!("{:.1} Mbp", bp / 1_000_000.0)
+    } else if bp >= 1_000.0 {
+        format!("{:.1} kbp", bp / 1_000.0)
+    } else {
+        format!("{bp:.0} bp")
+    }
+}
+
 /// Return a suitable writer for the output path extension
 #[cfg_attr(not(feature = "compression"), allow(unused_variables))]
 fn get_writer(
@@ -1027,17 +1040,8 @@ impl FilterProcessor {
     fn update_spinner(&self) {
         if let Some(ref spinner) = self.spinner {
             let stats = self.global_stats.lock();
-            let elapsed = self.filtering_start_time.elapsed();
-            let seqs_per_sec = stats.total_seqs as f64 / elapsed.as_secs_f64();
-            let bp_per_sec = stats.total_bp as f64 / elapsed.as_secs_f64();
-            let mbp_per_sec = bp_per_sec / 1_000_000.0;
-
-            let output_seqs = stats.total_seqs - stats.filtered_seqs;
-            let output_proportion = if stats.total_seqs > 0 {
-                output_seqs as f64 / stats.total_seqs as f64
-            } else {
-                0.0
-            };
+            let bp_per_sec =
+                stats.total_bp as f64 / self.filtering_start_time.elapsed().as_secs_f64();
 
             let output_bp_proportion = if stats.total_bp > 0 {
                 stats.output_bp as f64 / stats.total_bp as f64
@@ -1046,15 +1050,11 @@ impl FilterProcessor {
             };
 
             spinner.lock().set_message(format!(
-                "Retained {}/{} sequences ({:.2}%), {}/{} bp ({:.2}%). {:.0} seqs/s ({:.1} Mbp/s)",
-                output_seqs,
-                stats.total_seqs,
-                output_proportion * 100.0,
-                stats.output_bp,
-                stats.total_bp,
+                "Processed {} ({}/s), retained {} ({:.3}%)",
+                format_bp_progress(stats.total_bp as f64),
+                format_bp_progress(bp_per_sec),
+                format_bp_progress(stats.output_bp as f64),
                 output_bp_proportion * 100.0,
-                seqs_per_sec,
-                mbp_per_sec
             ));
         }
     }
@@ -1611,7 +1611,6 @@ pub fn run_with_index(
     // Based on filtering time excluding index loading
     let seqs_per_sec = total_seqs as f64 / filtering_time.as_secs_f64();
     let bp_per_sec = total_bp as f64 / filtering_time.as_secs_f64();
-    let mbp_per_sec = bp_per_sec / 1_000_000.0;
 
     // Based on total time, including index loading
     let seqs_per_sec_total = total_seqs as f64 / time_total.as_secs_f64();
@@ -1652,16 +1651,19 @@ pub fn run_with_index(
 
     if !quiet {
         eprintln!(
-            "Retained {}/{} sequences ({:.3}%), {}/{} bp ({:.3}%) in {:.2?}. {:.0} seqs/s ({:.1} Mbp/s)",
+            "Retained {}/{} sequences ({:.3}%), {}/{} bp ({:.3}%)",
             output_seqs,
             total_seqs,
             output_seq_proportion * 100.0,
             output_bp,
             total_bp,
             output_bp_proportion * 100.0,
+        );
+        eprintln!(
+            "Processed {} in {:.2?} ({}/s)",
+            format_bp_progress(total_bp as f64),
             filtering_time,
-            seqs_per_sec,
-            mbp_per_sec
+            format_bp_progress(bp_per_sec)
         );
     }
 

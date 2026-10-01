@@ -5,7 +5,7 @@ use deacon::index_fetch;
 use deacon::{
     ComplexityAlgorithm, DEFAULT_CBQ_BLOCK_SIZE_MIB, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE,
     FilterConfig, IndexConfig, index_diff, index_dump, index_filter, index_freeze, index_info,
-    index_intersect, index_reorder, index_union,
+    index_intersect, index_union,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{IsTerminal, Read, Write};
@@ -285,11 +285,6 @@ enum IndexCommand {
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
     },
-    /// Reorder the minimizers in an existing index for faster loading
-    Reorder {
-        /// Path to the index file to reorder *in place*
-        index: PathBuf,
-    },
 }
 
 /// client -> server
@@ -330,7 +325,7 @@ fn print_citation() {
 /// Refuse to write binary index data directly to an interactive terminal.
 fn ensure_index_output_is_redirected(output: &mut Option<PathBuf>) -> Result<()> {
     if output.is_none() && std::io::stdout().is_terminal() {
-        tracing::error!("Inhibiting binary index output to stdout. Redirecting to /dev/null.");
+        tracing::error!("Stdout is a tty, output bytes will be sent to /dev/null");
         *output = Some(PathBuf::from("/dev/null"));
     }
     Ok(())
@@ -577,9 +572,6 @@ fn process_command(command: Command) -> Result<(), anyhow::Error> {
                 ensure_index_output_is_redirected(&mut output)?;
                 index_freeze(&index, output.as_deref(), bits)
                     .context("Failed to run index freeze command")?;
-            }
-            IndexCommand::Reorder { index } => {
-                index_reorder(&index).context("Failed to reorder index")?;
             }
         },
         Command::Filter {
