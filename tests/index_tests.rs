@@ -418,6 +418,40 @@ fn test_index_build_w1_exact_kmers() {
     );
 }
 
+// Paired CBQ mates are indexed as separate records
+#[test]
+fn test_index_build_paired_cbq_indexes_both_mates() {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    let (seq1, seq2) = DIVERSE_SEQ.split_at(DIVERSE_SEQ.len() / 2);
+    let rec1 = format!("@read1/1\n{seq1}\n+\n{}\n", "I".repeat(seq1.len()));
+    let rec2 = format!("@read1/2\n{seq2}\n+\n{}\n", "I".repeat(seq2.len()));
+    let (r1, r2, both) = (dir.join("r1.fq"), dir.join("r2.fq"), dir.join("both.fq"));
+    fs::write(&r1, &rec1).unwrap();
+    fs::write(&r2, &rec2).unwrap();
+    fs::write(&both, format!("{rec1}{rec2}")).unwrap();
+
+    // Depleting against an unrelated index keeps the pair, writing paired CBQ
+    let (unrelated_fa, unrelated_idx) = (dir.join("unrelated.fa"), dir.join("unrelated.bin"));
+    create_test_fasta(&unrelated_fa, 1);
+    build_index(&unrelated_fa, &unrelated_idx);
+    let cbq = dir.join("pair.cbq");
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d"])
+        .arg(&unrelated_idx)
+        .arg(&r1)
+        .arg(&r2)
+        .arg("-o")
+        .arg(&cbq)
+        .assert()
+        .success();
+
+    let (cbq_idx, both_idx) = (dir.join("cbq.bin"), dir.join("both.bin"));
+    build_index(&cbq, &cbq_idx);
+    build_index(&both, &both_idx);
+    assert_eq!(fs::read(&cbq_idx).unwrap(), fs::read(&both_idx).unwrap());
+}
+
 // Diffing one k-mer as raw FASTX or as a w=1 index produces the same result.
 #[test]
 fn test_index_diff_one_kmer_fastx_matches_index() {

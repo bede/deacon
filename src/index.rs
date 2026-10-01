@@ -734,6 +734,8 @@ use crate::filter::ProcessingStats;
 struct BuildIndexProcessor {
     config: IndexConfig,
     hasher: KmerHasher,
+    /// Paired CBQ input, mates indexed as separate records
+    paired: bool,
     // Local buffers
     seq: Vec<u8>,
     buffers: Buffers,
@@ -753,14 +755,14 @@ const SHARDS: usize = 1024;
 const LOCAL_BUF_SIZE: usize = 1024;
 
 #[cfg(feature = "cli")]
-impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor {
-    fn process_record(&mut self, record: Rf) -> paraseq::Result<()> {
-        let seq = record.seq();
+impl BuildIndexProcessor {
+    /// Count and index one record
+    fn add_seq(&mut self, seq: &[u8]) {
         self.local_stats.total_seqs += 1;
         self.local_stats.total_bp += seq.len() as u64;
 
         crate::minimizers::fill_minimizers(
-            &seq,
+            seq,
             &self.hasher,
             self.config.kmer_length,
             self.config.window_size,
@@ -795,7 +797,13 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor {
                 }
             }
         }
+    }
+}
 
+#[cfg(feature = "cli")]
+impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor {
+    fn process_record(&mut self, record: Rf) -> paraseq::Result<()> {
+        self.add_seq(&record.seq());
         Ok(())
     }
 
@@ -845,49 +853,17 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor {
 #[cfg(feature = "cli")]
 impl binseq::ParallelProcessor for BuildIndexProcessor {
     fn process_record<R: BinseqRecord>(&mut self, record: R) -> binseq::Result<()> {
-        self.seq.clear();
-        record.decode_s(&mut self.seq)?;
-        let seq = &self.seq;
-        self.local_stats.total_seqs += 1;
-        self.local_stats.total_bp += seq.len() as u64;
-
-        crate::minimizers::fill_minimizers(
-            &seq,
-            &self.hasher,
-            self.config.kmer_length,
-            self.config.window_size,
-            &mut self.buffers,
-        );
-
-        // Partition minimizers by value so each worker can merge its shards
-        // independently at thread completion.
-        match &mut self.buffers.minimizers {
-            crate::MinimizerVec::U64(vec) => {
-                let local = self.local_minimizers_u64.as_mut().unwrap();
-                for &minimizer in vec.iter() {
-                    let shard = (minimizer % SHARDS as u64) as usize;
-                    local[shard].push(minimizer);
-
-                    if local[shard].len() >= LOCAL_BUF_SIZE {
-                        let mut global = self.global_minimizers_u64[shard].lock();
-                        global.extend(&mut local[shard]);
-                    }
-                }
-            }
-            crate::MinimizerVec::U128(vec) => {
-                let local = self.local_minimizers_u128.as_mut().unwrap();
-                for &minimizer in vec.iter() {
-                    let shard = (minimizer % SHARDS as u128) as usize;
-                    local[shard].push(minimizer);
-
-                    if local[shard].len() >= LOCAL_BUF_SIZE {
-                        let mut global = self.global_minimizers_u128[shard].lock();
-                        global.extend(&mut local[shard]);
-                    }
-                }
-            }
+        // Take the buffer so add_seq can borrow self
+        let mut seq = std::mem::take(&mut self.seq);
+        seq.clear();
+        record.decode_s(&mut seq)?;
+        self.add_seq(&seq);
+        if self.paired {
+            seq.clear();
+            record.decode_x(&mut seq)?;
+            self.add_seq(&seq);
         }
-
+        self.seq = seq;
         Ok(())
     }
 
@@ -989,6 +965,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
             config: config.clone(),
             hasher: KmerHasher::new(config.kmer_length as usize),
             local_stats: ProcessingStats::default(),
+            paired: false,
             seq: vec![],
             buffers: Buffers::new_u64(),
             local_minimizers_u64: Some(
@@ -1006,6 +983,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
             config: config.clone(),
             hasher: KmerHasher::new(config.kmer_length as usize),
             local_stats: ProcessingStats::default(),
+            paired: false,
             seq: vec![],
             buffers: Buffers::new_u128(),
             local_minimizers_u64: None,
@@ -1021,6 +999,7 @@ pub fn build(config: &IndexConfig) -> Result<()> {
     };
     if path.extension().is_some_and(|ext| ext == "cbq") {
         let reader = cbq::MmapReader::new(path).context("Failed to open CBQ input")?;
+        processor.paired = reader.is_paired();
         reader.process_parallel(processor.clone(), config.threads as usize)?;
     } else {
         let reader = reader_with_inferred_batch_size(in_path)?;
