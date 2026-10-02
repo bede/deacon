@@ -122,7 +122,7 @@ impl Index {
         compression_threads=0,
         cbq_block_size=16,
         quiet=true,
-        debug=false,
+        debug=None,
     ))]
     fn filter(
         &self,
@@ -146,7 +146,7 @@ impl Index {
         compression_threads: u16,
         cbq_block_size: u16,
         quiet: bool,
-        debug: bool,
+        debug: Option<PathBuf>,
     ) -> PyResult<Py<PyDict>> {
         if interleaved && input2.is_some() {
             return Err(PyValueError::new_err(

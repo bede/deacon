@@ -119,9 +119,9 @@ enum Command {
         #[arg(long = "check-pairs", default_value_t = false)]
         check_pairs: bool,
 
-        /// Emit sequences with minimizer hits to stderr
-        #[arg(long = "debug", default_value_t = false)]
-        debug: bool,
+        /// Write per-record minimizer hits to TSV
+        #[arg(long = "debug", value_name = "PATH")]
+        debug: Option<PathBuf>,
 
         /// Suppress progress reporting
         #[arg(short = 'q', long = "quiet", default_value_t = false)]
@@ -631,7 +631,7 @@ fn process_command(command: Command) -> Result<(), anyhow::Error> {
                 compression_level,
                 cbq_block_size,
                 compression_threads,
-                debug,
+                debug: debug.as_ref(),
                 quiet,
             };
             config.execute().context("Failed to run filter command")?;

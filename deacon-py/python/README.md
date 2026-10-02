@@ -89,7 +89,7 @@ def filter(
     compression_threads=0,   # threads for output compression (0 = auto)
     cbq_block_size=16,        # CBQ output block size in MiB (1-1024)
     quiet=True,              # suppress progress/log output on stderr
-    debug=False,             # verbose per-read debug output
+    debug=None,              # optional per-record minimizer hit TSV path
 ) -> dict
 ```
 

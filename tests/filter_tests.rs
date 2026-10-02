@@ -185,6 +185,65 @@ fn test_filter_to_file() {
     );
 }
 
+#[test]
+fn test_filter_debug_tsv() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let debug_path = temp_dir.path().join("debug.tsv");
+
+    create_test_fasta_sc2(&fasta_path);
+    build_index(&fasta_path, &bin_path);
+
+    // key=value description, plus a record without hits
+    let seq = "ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCT";
+    let miss = "ACGT".repeat(15);
+    let qual = "~".repeat(60);
+    fs::write(
+        &fastq_path,
+        format!("@hit runid=abc keep=true\n{seq}\n+\n{qual}\n@miss\n{miss}\n+\n{qual}\n"),
+    )
+    .unwrap();
+
+    // keep is match, inverted by --deplete
+    for (deplete, keep) in [(false, "true"), (true, "false")] {
+        let mut cmd = cargo::cargo_bin_cmd!("deacon");
+        cmd.arg("filter")
+            .arg("--ordered")
+            .arg("--debug")
+            .arg(&debug_path);
+        if deplete {
+            cmd.arg("--deplete");
+        }
+        cmd.arg(&bin_path).arg(&fastq_path).assert().success();
+
+        let tsv = fs::read_to_string(&debug_path).unwrap();
+        let rows: Vec<Vec<&str>> = tsv.lines().map(|l| l.split('\t').collect()).collect();
+        assert_eq!(
+            rows[0],
+            [
+                "id",
+                "len",
+                "hits",
+                "minimizers",
+                "match",
+                "keep",
+                "hit_kmers"
+            ]
+        );
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[1][..2], ["hit", "60"]);
+        assert_eq!(rows[1][4..6], ["true", keep]);
+        assert!(rows[1][2].parse::<usize>().unwrap() > 0);
+        let miss_keep = if deplete { "true" } else { "false" };
+        assert_eq!(
+            rows[2],
+            ["miss", "60", "0", rows[2][3], "false", miss_keep, ""]
+        );
+    }
+}
+
 #[cfg(feature = "compression")]
 #[rstest::rstest]
 #[case("gz", 2)]

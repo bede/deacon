@@ -394,8 +394,8 @@ pub struct FilterRunConfig {
     pub cbq_block_size: u16,
     /// Number of threads for compression (0 = auto)
     pub compression_threads: u16,
-    /// Debug mode: output sequences with minimizer hits to stderr
-    pub debug: bool,
+    /// Per-record hit TSV path
+    pub debug: Option<PathBuf>,
     /// Suppress progress reporting
     pub quiet: bool,
     /// Label recorded in the summary's `index` field (no filesystem check)
@@ -412,10 +412,12 @@ struct FilterProcessorConfig {
     deplete: bool,
     rename: bool,
     discard_quality: bool,
-    debug: bool,
+    debug: Option<DebugWriter>,
     check_pairs: bool,
     ordered: bool,
 }
+
+type DebugWriter = Arc<Mutex<BoxedWriter>>;
 
 /// Split a FASTA/Q header into its first whitespace-delimited token and description
 #[inline]
@@ -956,7 +958,8 @@ struct FilterProcessor {
     minimizers: Arc<MinimizerSet>,
     rename: bool,
     discard_quality: bool,
-    debug: bool,
+    debug: Option<DebugWriter>,
+    debug_buf: Vec<u8>,
     check_pairs: bool,
     /// Write batches in input order, not completion order
     ordered: bool,
@@ -998,7 +1001,8 @@ impl FilterProcessor {
             minimizers,
             rename: config.rename,
             discard_quality: config.discard_quality,
-            debug: config.debug,
+            debug: config.debug.clone(),
+            debug_buf: Vec::new(),
             check_pairs: config.check_pairs,
             ordered: config.ordered,
             kernel: FilterKernel::new(
@@ -1021,7 +1025,7 @@ impl FilterProcessor {
     }
 
     fn should_keep_sequence(&mut self, seq: &[u8]) -> FilterDecision {
-        if self.debug {
+        if self.debug.is_some() {
             self.kernel
                 .classify_read_with_diagnostics(&self.minimizers, seq)
         } else {
@@ -1030,7 +1034,7 @@ impl FilterProcessor {
     }
 
     fn should_keep_pair(&mut self, seq1: &[u8], seq2: &[u8]) -> FilterDecision {
-        if self.debug {
+        if self.debug.is_some() {
             self.kernel
                 .classify_pair_with_diagnostics(&self.minimizers, seq1, seq2)
         } else {
@@ -1067,16 +1071,8 @@ impl FilterProcessor {
 
         let decision = self.should_keep_sequence(read.seq);
 
-        // Show debug info for sequences with hits (debug forces exact counts)
-        if self.debug {
-            eprintln!(
-                "DEBUG: {} hits={}/{} keep={} kmers=[{}]",
-                String::from_utf8_lossy(read.id),
-                decision.hit_count_lower_bound,
-                decision.minimizer_count_upper_bound,
-                decision.keep,
-                decision.hit_kmers.join(",")
-            );
+        if self.debug.is_some() {
+            self.push_debug_row(read.id, read.seq.len(), &decision)?;
         }
 
         if decision.keep {
@@ -1110,17 +1106,8 @@ impl FilterProcessor {
 
         let decision = self.should_keep_pair(read1.seq, read2.seq);
 
-        // Debug info for interleaved pairs (debug forces exact counts)
-        if self.debug && decision.hit_count_lower_bound > 0 {
-            eprintln!(
-                "DEBUG: {}/{} hits={}/{} keep={} kmers=[{}]",
-                String::from_utf8_lossy(read1.id),
-                String::from_utf8_lossy(read2.id),
-                decision.hit_count_lower_bound,
-                decision.minimizer_count_upper_bound,
-                decision.keep,
-                decision.hit_kmers.join(",")
-            );
+        if self.debug.is_some() {
+            self.push_debug_row(read1.id, read1.seq.len() + read2.seq.len(), &decision)?;
         }
 
         if decision.keep {
@@ -1140,9 +1127,29 @@ impl FilterProcessor {
         Ok(())
     }
 
+    /// R1 id for pairs
+    fn push_debug_row(&mut self, id: &[u8], len: usize, decision: &FilterDecision) -> Result<()> {
+        let is_match = decision.keep != self.kernel.params().deplete;
+        self.debug_buf.extend_from_slice(split_record_id(id).0);
+        writeln!(
+            self.debug_buf,
+            "\t{len}\t{}\t{}\t{is_match}\t{}\t{}",
+            decision.hit_count_lower_bound,
+            decision.minimizer_count_upper_bound,
+            decision.keep,
+            decision.hit_kmers.join(",")
+        )?;
+        Ok(())
+    }
+
     fn flush_batch(&mut self) -> Result<()> {
         self.output
             .flush_batch(self.rename, &self.rename_counter, self.ordered)?;
+
+        if let Some(debug) = &self.debug {
+            debug.lock().write_all(&self.debug_buf)?;
+            self.debug_buf.clear();
+        }
 
         // Update global stats
         {
@@ -1278,7 +1285,7 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
         ));
     }
 
-    let quiet = config.quiet || config.debug;
+    let quiet = config.quiet;
     let load_start = Instant::now();
 
     let mut run_config = FilterRunConfig {
@@ -1300,7 +1307,7 @@ pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
         compression_level: config.compression_level,
         cbq_block_size: config.cbq_block_size,
         compression_threads: config.compression_threads,
-        debug: config.debug,
+        debug: config.debug.cloned(),
         quiet: config.quiet,
         index_label: config.minimizers_path.to_string_lossy().into_owned(),
         index_load_time: None,
@@ -1367,7 +1374,7 @@ pub fn run_with_index(
     let version: String = env!("CARGO_PKG_VERSION").to_string();
     let tool_version = format!("deacon {}", version);
 
-    let quiet = config.quiet || config.debug;
+    let quiet = config.quiet;
 
     let kmer_length = header.kmer_length();
     let window_size = header.window_size();
@@ -1554,7 +1561,15 @@ pub fn run_with_index(
         deplete: config.deplete,
         rename: config.rename,
         discard_quality,
-        debug: config.debug,
+        debug: config
+            .debug
+            .as_ref()
+            .map(|path| -> Result<DebugWriter> {
+                let mut writer = get_writer(Some(path), config.compression_level, 1)?;
+                writeln!(writer, "id\tlen\thits\tminimizers\tmatch\tkeep\thit_kmers")?;
+                Ok(Arc::new(Mutex::new(writer)))
+            })
+            .transpose()?,
         check_pairs: config.check_pairs,
         ordered: config.ordered,
     };
@@ -1601,6 +1616,9 @@ pub fn run_with_index(
     // Finish any CBQ stream (writes the embedded index), then drop the
     // processor so the writers flush
     processor.output.finish()?;
+    if let Some(debug) = &processor.debug {
+        debug.lock().flush()?;
+    }
     drop(processor);
 
     let total_time = start_time.elapsed();

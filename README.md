@@ -149,8 +149,8 @@ deacon filter -d -p 1000 panhuman-1.k31w15.idx reads.fq.gz > filt.fq
 # Output FASTA regardless of input format (discards quality scores)
 deacon filter -d -f panhuman-1.k31w15.idx reads.fq.gz > filt.fa
 
-# Debug mode: see sequences with minimizer hits in stderr
-deacon filter -d --debug panhuman-1.k31w15.idx reads.fq.gz > filt.fq
+# Write per-record minimizer hits to a TSV
+deacon filter -d --debug hits.tsv panhuman-1.k31w15.idx reads.fq.gz > filt.fq
 ```
 
 > [!NOTE]
@@ -240,8 +240,8 @@ Options:
           Preserve input record ordering (deterministic, slightly slower)
       --check-pairs
           Validate paired record names (Illumina CASAVA or /1 /2 suffixes)
-      --debug
-          Emit sequences with minimizer hits to stderr
+      --debug <PATH>
+          Write per-record minimizer hits to TSV
   -q, --quiet
           Suppress progress reporting
   -h, --help

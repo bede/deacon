@@ -377,8 +377,8 @@ pub struct FilterConfig<'a> {
     /// Number of threads for compression (0 = auto-calculate as ceil(total/2))
     pub compression_threads: u16,
 
-    /// Debug mode: output sequences with minimizer hits to stderr
-    pub debug: bool,
+    /// Per-record hit TSV path
+    pub debug: Option<&'a PathBuf>,
 
     /// Suppress progress reporting
     pub quiet: bool,
