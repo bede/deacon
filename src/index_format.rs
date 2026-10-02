@@ -80,7 +80,7 @@ pub struct BffHeader {
 }
 
 impl BffHeader {
-    #[cfg(any(feature = "cli", test))]
+    #[cfg(any(feature = "io", test))]
     pub fn new(filter_bits: u8, kmer_length: u8, window_size: u8, key_count: u64) -> Self {
         BffHeader {
             magic: [b'D', b'B', b'F', filter_bits],

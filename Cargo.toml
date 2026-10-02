@@ -31,7 +31,7 @@ xorf = { version = "0.13", default-features = false, features = ["binary-fuse", 
 packed-seq = "5.0.0"
 simd-minimizers = "3.0.0"
 
-# CLI/platform-specific deps (optional for WASM builds)
+# Optional native I/O and CLI deps
 clap = { version = "4.6", features = ["derive"], optional = true }
 rayon = { version = "1", optional = true }
 parking_lot = { version = "0.12", optional = true }
@@ -51,9 +51,9 @@ zstd = { version = "0.14", optional = true }
 gzp = { version = "2.0", default-features = false, features = ["deflate_rust"], optional = true }
 minreq = { version = "3", features = ["https-rustls-probe"], optional = true }
 hashbrown = "0.17.1"
-rand = "0.10.3"
+rand = { version = "0.10.3", optional = true }
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["chrono"] }
+tracing-subscriber = { version = "0.3.23", features = ["chrono"], optional = true }
 
 [lints.clippy]
 too_many_arguments = "allow"
@@ -68,13 +68,16 @@ binseq = { version = "0.9.6", default-features = false, features = ["anyhow"] }
 
 [features]
 scalar = ["simd-minimizers/scalar", "packed-seq/scalar"]
-cli = ["rayon", "parking_lot", "indicatif", "paraseq", "binseq", "ensure_simd", "clap", "niffler", "serde_json"]
+# Native filtering and index operations
+io = ["rayon", "parking_lot", "indicatif", "paraseq", "binseq", "niffler", "serde_json", "rand"]
+# CLI
+cli = ["io", "clap", "ensure_simd", "tracing-subscriber"]
 # Disable for faster builds.
-compression = ["zstd", "liblzma", "flate2", "gzp", "paraseq/default"]
+compression = ["io", "zstd", "liblzma", "flate2", "gzp", "paraseq/default"]
 # Use to still handle .gz files when "compression" is not enabled.
 gz = ["niffler/gz", "flate2", "flate2/default"]
 # Enable fetching indexes from remote storage
-fetch = ["minreq"]
+fetch = ["minreq", "indicatif"]
 default = ["compression", "fetch", "cli"]
 
 [[test]]

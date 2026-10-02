@@ -8,16 +8,16 @@
 #![doc = include_str!("../README.md")]
 
 // Re-export public functionality
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 mod dedupping_vec;
 #[cfg(feature = "fetch")]
 mod fetch;
 mod filter;
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 mod filter_io;
 mod index;
 mod index_format;
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 mod index_ops;
 mod minimizers;
 
@@ -25,7 +25,7 @@ mod minimizers;
 #[cfg(feature = "fetch")]
 pub use fetch::fetch as index_fetch;
 pub use filter::{FilterDecision, FilterKernel, FilterParams};
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 pub use filter_io::{
     DEFAULT_CBQ_BLOCK_SIZE_MIB, FilterRunConfig, FilterSummary, run as run_filter, run_with_index,
 };
@@ -33,7 +33,7 @@ pub use index_format::{
     IndexHeader, dump_minimizers, load_index_auto, load_index_from_path_auto,
     load_minimizers_from_path,
 };
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 pub use index_ops::{
     build as index_build, current_index_path, diff as index_diff, dump as index_dump,
     filter as index_filter, freeze as index_freeze, info as index_info,
@@ -55,12 +55,12 @@ pub fn validate_unit_interval<T: Into<f64> + Copy + std::fmt::Display>(
     Ok(())
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use anyhow::Result;
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use std::path::{Path, PathBuf};
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 pub struct FilterConfig<'a> {
     /// Minimizer index file path
     pub minimizers_path: &'a Path,
@@ -129,7 +129,7 @@ pub struct FilterConfig<'a> {
     pub quiet: bool,
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 impl FilterConfig<'_> {
     /// Filter with this configuration
     pub fn execute(&self) -> Result<()> {
@@ -138,7 +138,7 @@ impl FilterConfig<'_> {
     }
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 #[derive(Clone)]
 pub struct IndexConfig {
     /// Path to input fastx file
@@ -160,7 +160,7 @@ pub struct IndexConfig {
     pub quiet: bool,
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 impl IndexConfig {
     /// Validate k-mer and window size constraints
     pub fn validate(&self) -> Result<()> {

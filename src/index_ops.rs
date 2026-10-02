@@ -1,42 +1,42 @@
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use crate::dedupping_vec::DeduppingVec;
 use crate::{FixedRapidHasher, MinimizerVecVec, RapidHashSet};
 use anyhow::{Context, Result};
 use bincode::serde::{decode_from_std_read, encode_into_std_write};
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use rand::seq::SliceRandom;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use tracing::info;
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use rayon::prelude::*;
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use crate::IndexConfig;
 use crate::index_format::*;
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use crate::minimizers::{Buffers, KmerHasher};
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use binseq::{BinseqRecord, ParallelReader as BinSeqParalleReader, cbq};
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use paraseq::Record;
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use paraseq::prelude::{ParallelProcessor, ParallelReader};
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use parking_lot::Mutex;
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use std::fs::File;
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use std::path::PathBuf;
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use std::sync::{Arc, OnceLock};
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use std::time::Instant;
 
 /// Load just the header and count from an index file
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, usize)> {
     let file = std::fs::File::open(path)
         .context(format!("Failed to open index file {:?}", path.as_ref()))?;
@@ -56,15 +56,15 @@ pub fn load_header_and_count<P: AsRef<Path>>(path: &P) -> Result<(IndexHeader, u
     Ok((header, count as usize))
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 static INDEX: OnceLock<(PathBuf, Arc<crate::MinimizerSet>, IndexHeader)> = OnceLock::new();
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 pub fn current_index_path() -> Option<PathBuf> {
     INDEX.get().map(|(p, _m, _h)| p.clone())
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 pub fn load_minimizers_cached(
     path: &Path,
 ) -> Result<(Arc<crate::MinimizerSet>, &'static IndexHeader)> {
@@ -84,7 +84,7 @@ pub fn load_minimizers_cached(
 /// Takes a bunch of shards and re-shards those according to the high bits of the target bucket.
 /// We again use 1024 target shards, and use multithreading to distribute the values.
 /// Then, we sort each target shard inside a thread and end by concatenating all Vecs.
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 fn sort_sharded_lists<T>(shards: Vec<Vec<T>>) -> Vec<Vec<T>>
 where
     T: Copy + std::hash::Hash + Ord + Send + Sync,
@@ -144,7 +144,7 @@ where
 
 /// Dump indexed minimizers to FASTA
 /// Detect a BFF index by its magic bytes
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 fn is_bff_file(path: &Path) -> bool {
     let mut magic = [0u8; 4];
     File::open(path)
@@ -154,7 +154,7 @@ fn is_bff_file(path: &Path) -> bool {
 }
 
 /// Reject a binary fuse filter (.pidx) index for commands that require an exact (.idx) index
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 fn reject_bff(path: &Path, operation: &str) -> Result<()> {
     if is_bff_file(path) {
         return Err(anyhow::anyhow!(
@@ -166,7 +166,7 @@ fn reject_bff(path: &Path, operation: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
     if is_bff_file(index_path) {
         return Err(anyhow::anyhow!(
@@ -213,7 +213,7 @@ pub fn dump(index_path: &Path, output_path: Option<&Path>) -> Result<()> {
 }
 
 /// Freeze an exact index into a BFF (binary fuse filter) index (k<=32)
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 pub fn freeze(index_path: &Path, output_path: Option<&Path>, bits: u8) -> Result<()> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
@@ -299,7 +299,7 @@ pub fn freeze(index_path: &Path, output_path: Option<&Path>, bits: u8) -> Result
     Ok(())
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 fn reader_with_inferred_batch_size(
     in_path: Option<&Path>,
 ) -> Result<paraseq::fastx::Reader<Box<dyn Read + Send>>> {
@@ -310,10 +310,10 @@ fn reader_with_inferred_batch_size(
     Ok(reader)
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 use crate::filter_io::ProcessingStats;
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 #[derive(Clone)]
 struct BuildIndexProcessor {
     config: IndexConfig,
@@ -332,13 +332,13 @@ struct BuildIndexProcessor {
     global_minimizers_u128: Arc<Vec<Mutex<DeduppingVec<u128>>>>,
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 const SHARDS: usize = 1024;
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 const LOCAL_BUF_SIZE: usize = 1024;
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 impl BuildIndexProcessor {
     /// Count and index one record
     fn add_seq(&mut self, seq: &[u8]) {
@@ -384,7 +384,7 @@ impl BuildIndexProcessor {
     }
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor {
     fn process_record(&mut self, record: Rf) -> paraseq::Result<()> {
         self.add_seq(&record.seq());
@@ -434,7 +434,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for BuildIndexProcessor {
     }
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 impl binseq::ParallelProcessor for BuildIndexProcessor {
     fn process_record<R: BinseqRecord>(&mut self, record: R) -> binseq::Result<()> {
         // Take the buffer so add_seq can borrow self
@@ -495,7 +495,7 @@ impl binseq::ParallelProcessor for BuildIndexProcessor {
 }
 
 /// Randomize the order of shards to avoid all threads waiting on a single one.
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 fn random_shard_order() -> Vec<usize> {
     let mut shard_order: Vec<_> = (0..SHARDS).collect();
     shard_order.shuffle(&mut rand::rng());
@@ -503,7 +503,7 @@ fn random_shard_order() -> Vec<usize> {
 }
 
 /// Build an index of minimizers from a fastx file
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 pub fn build(config: &IndexConfig) -> Result<()> {
     let start_time = Instant::now();
     let path = &config.input_path;
@@ -630,14 +630,14 @@ pub fn build(config: &IndexConfig) -> Result<()> {
 }
 
 /// Minimizers found in the index being diffed
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 #[derive(Clone)]
 enum HitSet {
     U64(RapidHashSet<u64>),
     U128(RapidHashSet<u128>),
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 impl HitSet {
     /// An empty hit set matching the width of `set`
     fn empty_like(set: &crate::MinimizerSet) -> Self {
@@ -683,7 +683,7 @@ impl HitSet {
     }
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 #[derive(Clone)]
 struct DiffIndexProcessor<'a> {
     kmer_length: u8,
@@ -703,7 +703,7 @@ struct DiffIndexProcessor<'a> {
     global_hits: Arc<Mutex<HitSet>>,
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor<'_> {
     fn process_record(&mut self, record: Rf) -> paraseq::Result<()> {
         let seq = record.seq();
@@ -780,7 +780,7 @@ impl<Rf: Record> ParallelProcessor<Rf> for DiffIndexProcessor<'_> {
 }
 
 /// Stream minimizers from a FASTX file or stdin and remove those present in first_minimizers
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 fn stream_diff_fastx(
     fastx_path: &Path,
     window_size: u8,
@@ -871,7 +871,7 @@ fn stream_diff_fastx(
 }
 
 /// Compute the set difference between two minimizer indexes (A - B)
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 pub fn diff(
     first: &Path,
     second: &Path,
@@ -984,7 +984,7 @@ pub fn diff(
 }
 
 /// Show info about an index
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 pub fn info(index_path: &Path) -> Result<()> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
@@ -1044,7 +1044,7 @@ pub fn info(index_path: &Path) -> Result<()> {
 }
 
 /// Discard minimizers below a complexity threshold (or keep only those below, if inverted)
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 pub fn filter(
     index_path: &Path,
     output: Option<&Path>,
@@ -1087,7 +1087,7 @@ pub fn filter(
 }
 
 /// Combine minimizer indexes (set union)
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
@@ -1168,7 +1168,7 @@ pub fn union(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "cli")]
+#[cfg(feature = "io")]
 pub fn intersect(inputs: &[PathBuf], output: Option<&Path>) -> Result<()> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
