@@ -1,10 +1,103 @@
-use crate::{decode_u64, decode_u128, validate_unit_interval};
+use crate::index_format::IndexHeader;
+use crate::minimizers::{decode_u64, decode_u128};
+use crate::{ComplexityAlgorithm, MinimizerVec, validate_unit_interval};
 use hashbrown::HashSet;
 use std::hash::BuildHasher;
 
+/// Index storage and membership guarantees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexKind {
+    Exact,
+    /// No false negatives. False-positive rate ~2^-fingerprint_bits per query.
+    Fuse { fingerprint_bits: u8 },
+}
+
+/// Minimizer index with validated k/w. Share across workers with `Arc<Index>`.
+pub struct Index {
+    pub(crate) minimizers: IndexStorage,
+    pub(crate) header: IndexHeader,
+}
+
+impl std::fmt::Debug for Index {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Index")
+            .field("k", &self.kmer_length())
+            .field("w", &self.window_size())
+            .field("kind", &self.kind())
+            .field("len", &self.len())
+            .finish()
+    }
+}
+
+impl Index {
+    /// Build an exact index from canonical packed k-mers, deduplicating values.
+    /// Use their original k/w and u64 for k <= 32, otherwise u128.
+    pub fn from_minimizers(
+        kmer_length: u8,
+        window_size: u8,
+        minimizers: MinimizerVec,
+    ) -> anyhow::Result<Self> {
+        let header = IndexHeader::new(kmer_length, window_size);
+        header.validate()?;
+        let bits = 2 * u32::from(kmer_length);
+        let minimizers = match minimizers {
+            MinimizerVec::U64(values) if kmer_length <= 32 => {
+                anyhow::ensure!(
+                    bits == 64 || values.iter().all(|&v| v >> bits == 0),
+                    "Minimizer exceeds k-mer length"
+                );
+                IndexStorage::ExactU64(values.into_iter().collect())
+            }
+            MinimizerVec::U128(values) if kmer_length > 32 => {
+                anyhow::ensure!(
+                    values.iter().all(|&v| v >> bits == 0),
+                    "Minimizer exceeds k-mer length"
+                );
+                IndexStorage::ExactU128(values.into_iter().collect())
+            }
+            _ => anyhow::bail!("Minimizer width does not match k-mer length"),
+        };
+        Ok(Self { minimizers, header })
+    }
+
+    pub fn kmer_length(&self) -> u8 {
+        self.header.kmer_length
+    }
+    pub fn window_size(&self) -> u8 {
+        self.header.window_size
+    }
+    /// Distinct minimizers (inserted keys for fuse storage).
+    pub fn len(&self) -> usize {
+        self.minimizers.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.minimizers.is_empty()
+    }
+    pub fn kind(&self) -> IndexKind {
+        match &self.minimizers {
+            IndexStorage::Fuse(filter) => IndexKind::Fuse {
+                fingerprint_bits: filter.fingerprint_bits(),
+            },
+            _ => IndexKind::Exact,
+        }
+    }
+
+    /// Drop minimizers below the complexity threshold, or retain them if inverted.
+    /// Requires an exact index.
+    pub fn retain_complexity(
+        &mut self,
+        algorithm: ComplexityAlgorithm,
+        threshold: f32,
+        invert: bool,
+    ) -> anyhow::Result<()> {
+        self.minimizers
+            .retain_complexity(self.kmer_length(), algorithm, threshold, invert)
+    }
+}
+
 /// BuildHasher using rapidhash with fixed seed for fast init
 #[derive(Clone, Default)]
-pub struct FixedRapidHasher;
+pub(crate) struct FixedRapidHasher;
 
 impl BuildHasher for FixedRapidHasher {
     type Hasher = rapidhash::fast::RapidHasher<'static>;
@@ -17,24 +110,24 @@ impl BuildHasher for FixedRapidHasher {
 /// RapidHashSet using rapidhash with fixed seed for fast init
 ///
 /// We directly use the hashbrown version for stability of the number of slots in the data structure.
-pub type RapidHashSet<T> = HashSet<T, FixedRapidHasher>;
+pub(crate) type RapidHashSet<T> = HashSet<T, FixedRapidHasher>;
 
 /// Binary fuse filter (BFF) index: no false negatives, k<=32.
-/// 16-bit fingerprints use ~18 bits/key (FP rate ~2^-16); 32-bit use ~36 bits/key (FP rate ~2^-32).
-pub enum FuseFilterKind {
+/// 16-bit fingerprints use ~18 bits/key (FP rate ~2^-16), 32-bit ~36 bits/key (FP rate ~2^-32).
+pub(crate) enum FuseFilterKind {
     Bits16(xorf::BinaryFuse16),
     Bits32(xorf::BinaryFuse32),
 }
 
-pub struct FuseFilter {
-    pub filter: FuseFilterKind,
+pub(crate) struct FuseFilter {
+    pub(crate) filter: FuseFilterKind,
     /// Distinct minimizers inserted (not the filter's fingerprint count)
-    pub key_count: usize,
+    pub(crate) key_count: usize,
 }
 
 impl FuseFilter {
     /// Fingerprint width in bits (16 or 32)
-    pub fn filter_bits(&self) -> u8 {
+    pub fn fingerprint_bits(&self) -> u8 {
         match &self.filter {
             FuseFilterKind::Bits16(_) => 16,
             FuseFilterKind::Bits32(_) => 32,
@@ -52,38 +145,19 @@ impl FuseFilter {
     }
 }
 
-/// Zero-cost (hopefully?) abstraction over u64 and u128 minimizer sets and the BFF filter
-pub enum MinimizerSet {
-    U64(RapidHashSet<u64>),
-    U128(RapidHashSet<u128>),
+/// Exact sets or binary fuse filters.
+pub(crate) enum IndexStorage {
+    ExactU64(RapidHashSet<u64>),
+    ExactU128(RapidHashSet<u128>),
     Fuse(FuseFilter),
 }
 
-/// Complexity measure used by `index filter`
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
-#[serde(rename_all = "lowercase")]
-pub enum ComplexityAlgorithm {
-    #[default]
-    Kdust,
-    Shannon,
-}
-
-impl std::fmt::Display for ComplexityAlgorithm {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            ComplexityAlgorithm::Kdust => "kdust",
-            ComplexityAlgorithm::Shannon => "shannon",
-        })
-    }
-}
-
-impl MinimizerSet {
+impl IndexStorage {
     pub fn len(&self) -> usize {
         match self {
-            MinimizerSet::U64(set) => set.len(),
-            MinimizerSet::U128(set) => set.len(),
-            MinimizerSet::Fuse(f) => f.key_count,
+            IndexStorage::ExactU64(set) => set.len(),
+            IndexStorage::ExactU128(set) => set.len(),
+            IndexStorage::Fuse(f) => f.key_count,
         }
     }
 
@@ -91,79 +165,52 @@ impl MinimizerSet {
         self.len() == 0
     }
 
-    pub fn is_u64(&self) -> bool {
-        // BFF is k<=32, hence u64
-        matches!(self, MinimizerSet::U64(_) | MinimizerSet::Fuse(_))
-    }
-
-    /// Test u64 membership (may report false positives for BFF)
-    #[inline]
-    pub fn contains_u64(&self, minimizer: u64) -> bool {
-        match self {
-            MinimizerSet::U64(set) => set.contains(&minimizer),
-            MinimizerSet::Fuse(f) => f.contains(minimizer),
-            MinimizerSet::U128(_) => unreachable!("u64 minimizer queried against a u128 set"),
-        }
-    }
-
-    /// Test u128 membership
-    #[inline]
-    pub fn contains_u128(&self, minimizer: u128) -> bool {
-        match self {
-            MinimizerSet::U128(set) => set.contains(&minimizer),
-            MinimizerSet::U64(_) => unreachable!("u128 minimizer queried against a u64 set"),
-            MinimizerSet::Fuse(_) => {
-                unreachable!("u128 minimizer queried against a BFF (k <= 32)")
-            }
-        }
-    }
-
-    /// Extend with another MinimizerSet (union operation)
+    #[cfg(feature = "io")]
     pub fn extend(&mut self, other: Self) {
         match (self, other) {
-            (MinimizerSet::U64(self_set), MinimizerSet::U64(other_set)) => {
+            (IndexStorage::ExactU64(self_set), IndexStorage::ExactU64(other_set)) => {
                 self_set.extend(other_set);
             }
-            (MinimizerSet::U128(self_set), MinimizerSet::U128(other_set)) => {
+            (IndexStorage::ExactU128(self_set), IndexStorage::ExactU128(other_set)) => {
                 self_set.extend(other_set);
             }
-            (MinimizerSet::Fuse(_), _) | (_, MinimizerSet::Fuse(_)) => {
+            (IndexStorage::Fuse(_), _) | (_, IndexStorage::Fuse(_)) => {
                 panic!("Set algebra is not supported on BFF indexes; use an exact index")
             }
             _ => panic!("Cannot extend U64 set with U128 set or vice versa"),
         }
     }
 
-    /// Remove minimizers from another set (diff operation)
+    #[cfg(feature = "io")]
     pub fn remove_all(&mut self, other: &Self) {
         match (self, other) {
-            (MinimizerSet::U64(self_set), MinimizerSet::U64(other_set)) => {
+            (IndexStorage::ExactU64(self_set), IndexStorage::ExactU64(other_set)) => {
                 for val in other_set {
                     self_set.remove(val);
                 }
             }
-            (MinimizerSet::U128(self_set), MinimizerSet::U128(other_set)) => {
+            (IndexStorage::ExactU128(self_set), IndexStorage::ExactU128(other_set)) => {
                 for val in other_set {
                     self_set.remove(val);
                 }
             }
-            (MinimizerSet::Fuse(_), _) | (_, MinimizerSet::Fuse(_)) => {
+            (IndexStorage::Fuse(_), _) | (_, IndexStorage::Fuse(_)) => {
                 panic!("Set algebra is not supported on BFF indexes; use an exact index")
             }
             _ => panic!("Cannot remove U128 minimizers from U64 set or vice versa"),
         }
     }
 
-    /// Keep only minimizers present in another set (intersection operation)
+    #[cfg(feature = "io")]
     pub fn intersect(&mut self, other: &Self) {
         match (self, other) {
-            (MinimizerSet::U64(self_set), MinimizerSet::U64(other_set)) => {
+            (IndexStorage::ExactU64(self_set), IndexStorage::ExactU64(other_set)) => {
                 self_set.retain(|val| other_set.contains(val));
             }
-            (MinimizerSet::U128(self_set), MinimizerSet::U128(other_set)) => {
+            (IndexStorage::ExactU128(self_set), IndexStorage::ExactU128(other_set)) => {
                 self_set.retain(|val| other_set.contains(val));
             }
-            (MinimizerSet::Fuse(_), _) | (_, MinimizerSet::Fuse(_)) => {
+            (IndexStorage::Fuse(_), _) | (_, IndexStorage::Fuse(_)) => {
                 panic!("Set algebra is not supported on BFF indexes; use an exact index")
             }
             _ => panic!("Cannot intersect U64 set with U128 set or vice versa"),
@@ -188,7 +235,7 @@ impl MinimizerSet {
             }
         };
         match self {
-            MinimizerSet::U64(set) => set.retain(|&v| {
+            IndexStorage::ExactU64(set) => set.retain(|&v| {
                 let c = match algorithm {
                     ComplexityAlgorithm::Kdust => calculate_kdust(v as u128, kmer_length),
                     ComplexityAlgorithm::Shannon => {
@@ -197,7 +244,7 @@ impl MinimizerSet {
                 };
                 keep(c)
             }),
-            MinimizerSet::U128(set) => set.retain(|&v| {
+            IndexStorage::ExactU128(set) => set.retain(|&v| {
                 let c = match algorithm {
                     ComplexityAlgorithm::Kdust => calculate_kdust(v, kmer_length),
                     ComplexityAlgorithm::Shannon => {
@@ -206,56 +253,10 @@ impl MinimizerSet {
                 };
                 keep(c)
             }),
-            MinimizerSet::Fuse(_) => anyhow::bail!(
+            IndexStorage::Fuse(_) => anyhow::bail!(
                 "Complexity filtering is not supported on BFF indexes; use an exact index"
             ),
         }
         Ok(())
-    }
-}
-
-/// Zero-cost (hopefully?) abstraction over u64 and u128 minimizer sets
-#[derive(Clone)]
-pub enum MinimizerVec {
-    U64(Vec<u64>),
-    U128(Vec<u128>),
-}
-
-impl MinimizerVec {
-    pub fn clear(&mut self) {
-        match self {
-            MinimizerVec::U64(v) => v.clear(),
-            MinimizerVec::U128(v) => v.clear(),
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        match self {
-            MinimizerVec::U64(v) => v.len(),
-            MinimizerVec::U128(v) => v.len(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        match self {
-            MinimizerVec::U64(v) => v.is_empty(),
-            MinimizerVec::U128(v) => v.is_empty(),
-        }
-    }
-}
-
-/// Zero-cost (hopefully?) abstraction over u64 and u128 minimizer sets
-#[derive(Clone)]
-pub(crate) enum MinimizerVecVec {
-    U64(Vec<Vec<u64>>),
-    U128(Vec<Vec<u128>>),
-}
-
-impl MinimizerVecVec {
-    pub fn len(&self) -> usize {
-        match self {
-            MinimizerVecVec::U64(v) => v.iter().map(|inner| inner.len()).sum(),
-            MinimizerVecVec::U128(v) => v.iter().map(|inner| inner.len()).sum(),
-        }
     }
 }

@@ -24,60 +24,136 @@ pub fn decode_u128(minimizer: u128, k: u8) -> Vec<u8> {
 }
 
 /// Canonical NtHash, with 1-bit rotations for backwards compatibility.
-pub type KmerHasher = simd_minimizers::seq_hash::NtHasher<true, 1>;
+type KmerHasher = simd_minimizers::seq_hash::NtHasher<true, 1>;
 
-/// Reusable buffers for minimizer computation
+/// Require positive odd k/w, k <= 61 and k+w <= 96.
+pub(crate) fn validate_k_w(kmer_length: u8, window_size: u8) -> anyhow::Result<()> {
+    let (k, w) = (kmer_length as usize, window_size as usize);
+    if k == 0 || w == 0 || k > 61 || k + w > 96 || k.is_multiple_of(2) || !(k + w).is_multiple_of(2)
+    {
+        anyhow::bail!(
+            "Invalid k-w combination: k={}, w={}, k+w={} (constraints: k and w positive and odd, k<=61, k+w<=96)",
+            k,
+            w,
+            k + w
+        );
+    }
+    Ok(())
+}
+
+/// Canonical minimizers for fixed k/w with reusable buffers.
+///
+/// Values use two bits per base: u64 for k <= 32, otherwise u128.
+/// Accepts lowercase and skips windows containing non-ACGT bases.
 #[derive(Clone)]
-pub struct Buffers {
-    pub packed_nseq: PackedNSeqVec,
-    pub positions: Vec<u32>,
-    pub minimizers: crate::MinimizerVec,
-    pub cache: (simd_minimizers::Cache, Vec<u32x8>, Vec<u32x8>),
+pub struct Minimizers {
+    params: Parameters,
+    buffers: Buffers,
 }
 
-impl Buffers {
-    pub fn new_u64() -> Self {
-        Self {
-            packed_nseq: PackedNSeqVec {
-                seq: Default::default(),
-                ambiguous: Default::default(),
-            },
-            positions: Default::default(),
-            minimizers: crate::MinimizerVec::U64(Vec::new()),
-            cache: Default::default(),
-        }
-    }
-
-    pub fn new_u128() -> Self {
-        Self {
-            packed_nseq: PackedNSeqVec {
-                seq: Default::default(),
-                ambiguous: Default::default(),
-            },
-            positions: Default::default(),
-            minimizers: crate::MinimizerVec::U128(Vec::new()),
-            cache: Default::default(),
-        }
-    }
-}
-
-/// Returns vector of all minimizers for a sequence
-pub fn compute_minimizers(
-    seq: &[u8],
-    hasher: &KmerHasher,
+#[derive(Clone)]
+struct Parameters {
     kmer_length: u8,
     window_size: u8,
-) -> crate::MinimizerVec {
-    let mut buffers = if kmer_length <= 32 {
-        Buffers::new_u64()
-    } else {
-        Buffers::new_u128()
-    };
-    fill_minimizers(seq, hasher, kmer_length, window_size, &mut buffers);
-    buffers.minimizers
+    hasher: KmerHasher,
 }
 
-/// Calculate scaled entropy using character frequency analysis
+#[derive(Clone)]
+struct Buffers {
+    packed_nseq: PackedNSeqVec,
+    positions: Vec<u32>,
+    values: MinimizerVec,
+    cache: (simd_minimizers::Cache, Vec<u32x8>, Vec<u32x8>),
+}
+
+impl Minimizers {
+    pub fn new(kmer_length: u8, window_size: u8) -> anyhow::Result<Self> {
+        validate_k_w(kmer_length, window_size)?;
+        Ok(Self {
+            params: Parameters {
+                kmer_length,
+                window_size,
+                hasher: KmerHasher::new(kmer_length as usize),
+            },
+            buffers: Buffers {
+                packed_nseq: PackedNSeqVec {
+                    seq: Default::default(),
+                    ambiguous: Default::default(),
+                },
+                positions: Vec::new(),
+                values: if kmer_length <= 32 {
+                    MinimizerVec::U64(Vec::new())
+                } else {
+                    MinimizerVec::U128(Vec::new())
+                },
+                cache: Default::default(),
+            },
+        })
+    }
+
+    pub fn kmer_length(&self) -> u8 {
+        self.params.kmer_length
+    }
+
+    pub fn window_size(&self) -> u8 {
+        self.params.window_size
+    }
+
+    /// Minimizers in sequence order. Empty for sequences shorter than k.
+    pub fn compute(&mut self, seq: &[u8]) -> &MinimizerVec {
+        self.clear();
+        self.extend(seq);
+        &self.buffers.values
+    }
+
+    /// Append minimizers, pooling mates.
+    #[inline]
+    pub(crate) fn extend(&mut self, seq: &[u8]) {
+        if seq.len() >= self.params.kmer_length as usize {
+            self.params.extend(seq, &mut self.buffers);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn clear(&mut self) {
+        self.buffers.values.clear();
+    }
+
+    #[inline]
+    pub(crate) fn values(&self) -> &MinimizerVec {
+        &self.buffers.values
+    }
+}
+
+impl Parameters {
+    #[inline]
+    fn extend(&self, seq: &[u8], buffers: &mut Buffers) {
+        let Buffers {
+            packed_nseq,
+            positions,
+            values,
+            cache,
+        } = buffers;
+        packed_nseq.seq.clear();
+        packed_nseq.ambiguous.clear();
+        positions.clear();
+        packed_nseq.seq.push_ascii(seq);
+        packed_nseq.ambiguous.push_ascii(seq);
+
+        let out = simd_minimizers::canonical_minimizers(
+            self.kmer_length as usize,
+            self.window_size as usize,
+        )
+        .hasher(&self.hasher)
+        .run_skip_ambiguous_windows_with_buf(packed_nseq.as_slice(), positions, cache);
+
+        match values {
+            MinimizerVec::U64(vec) => vec.extend(out.pos_and_values_u64().map(|(_pos, val)| val)),
+            MinimizerVec::U128(vec) => vec.extend(out.pos_and_values_u128().map(|(_pos, val)| val)),
+        }
+    }
+}
+
 /// Returns scaled entropy between 0.0 and 1.0
 #[inline]
 pub(crate) fn calculate_scaled_entropy(kmer: &[u8], kmer_length: u8) -> f32 {
@@ -152,111 +228,95 @@ pub(crate) fn calculate_kdust(code: u128, kmer_length: u8) -> f32 {
     1.0 - score as f32 / (l * (l - 1.0) / 2.0)
 }
 
-/// Fill a vector with minimizers, skipping non-ACGT k-mers
-pub fn fill_minimizers(
-    seq: &[u8],
-    hasher: &KmerHasher,
-    kmer_length: u8,
-    window_size: u8,
-    buffers: &mut Buffers,
-) {
-    // Skip if sequence is too short
-    if seq.len() < kmer_length as usize {
-        buffers.packed_nseq.seq.clear();
-        buffers.packed_nseq.ambiguous.clear();
-        buffers.minimizers.clear();
-        buffers.positions.clear();
-        return;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[serde(rename_all = "lowercase")]
+pub enum ComplexityAlgorithm {
+    #[default]
+    Kdust,
+    Shannon,
+}
+
+impl std::fmt::Display for ComplexityAlgorithm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ComplexityAlgorithm::Kdust => "kdust",
+            ComplexityAlgorithm::Shannon => "shannon",
+        })
     }
-    fill_minimizers_unchecked(seq, hasher, kmer_length, window_size, buffers);
 }
 
-/// Fill minimizer buffers for a sequence already known to be at least `kmer_length`.
-///
-/// This avoids a redundant short-read branch in filtering hot paths that already
-/// handle short records before minimizer computation.
-#[inline]
-pub(crate) fn fill_minimizers_unchecked(
-    seq: &[u8],
-    hasher: &KmerHasher,
-    kmer_length: u8,
-    window_size: u8,
-    buffers: &mut Buffers,
-) {
-    buffers.minimizers.clear();
-    extend_minimizers_unchecked(seq, hasher, kmer_length, window_size, buffers);
+/// Packed minimizers: u64 for k <= 32, otherwise u128.
+#[derive(Clone)]
+pub enum MinimizerVec {
+    U64(Vec<u64>),
+    U128(Vec<u128>),
 }
 
-/// Append minimizers without clearing the pooled mate buffer
-#[inline]
-pub(crate) fn extend_minimizers_unchecked(
-    seq: &[u8],
-    hasher: &KmerHasher,
-    kmer_length: u8,
-    window_size: u8,
-    buffers: &mut Buffers,
-) {
-    let Buffers {
-        packed_nseq,
-        positions,
-        minimizers,
-        cache,
-    } = buffers;
-
-    packed_nseq.seq.clear();
-    packed_nseq.ambiguous.clear();
-    positions.clear();
-
-    // Pack the sequence into 2-bit representation
-    packed_nseq.seq.push_ascii(seq);
-    packed_nseq.ambiguous.push_ascii(seq);
-
-    // Get minimizer positions using simd-minimizers
-    let out = simd_minimizers::canonical_minimizers(kmer_length as usize, window_size as usize)
-        .hasher(hasher)
-        .run_skip_ambiguous_windows_with_buf(packed_nseq.as_slice(), positions, cache);
-
-    match minimizers {
-        crate::MinimizerVec::U64(vec) => {
-            vec.extend(out.pos_and_values_u64().map(|(_pos, val)| val));
+impl MinimizerVec {
+    pub fn clear(&mut self) {
+        match self {
+            MinimizerVec::U64(v) => v.clear(),
+            MinimizerVec::U128(v) => v.clear(),
         }
-        crate::MinimizerVec::U128(vec) => {
-            vec.extend(out.pos_and_values_u128().map(|(_pos, val)| val));
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            MinimizerVec::U64(v) => v.len(),
+            MinimizerVec::U128(v) => v.len(),
         }
-    };
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            MinimizerVec::U64(v) => v.is_empty(),
+            MinimizerVec::U128(v) => v.is_empty(),
+        }
+    }
+}
+
+/// Packed minimizer shards for building and writing indexes.
+#[derive(Clone)]
+pub(crate) enum MinimizerShards {
+    U64(Vec<Vec<u64>>),
+    U128(Vec<Vec<u128>>),
+}
+
+impl MinimizerShards {
+    pub fn len(&self) -> usize {
+        match self {
+            MinimizerShards::U64(v) => v.iter().map(|inner| inner.len()).sum(),
+            MinimizerShards::U128(v) => v.iter().map(|inner| inner.len()).sum(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn compute_minimizers(seq: &[u8], k: u8, w: u8) -> MinimizerVec {
+        Minimizers::new(k, w).unwrap().compute(seq).clone()
+    }
+
     #[test]
     fn test_compute_minimizers() {
-        // Simple sequence test
-        let seq = b"ACGTACGTACGT";
-        let k = 5;
-        let w = 3;
-        let hasher = KmerHasher::new(k as usize);
-        let minimizers = compute_minimizers(seq, &hasher, k, w);
-
-        // We should have at least one minimizer
-        assert!(!minimizers.is_empty());
-
-        // Test with a sequence shorter than k
-        let short_seq = b"ACGT";
-        let short_minimizers = compute_minimizers(short_seq, &hasher, k, w);
-        assert!(short_minimizers.is_empty());
+        let mut minimizers = Minimizers::new(5, 3).unwrap();
+        assert!(!minimizers.compute(b"ACGTACGTACGT").is_empty());
+        // Reuse buffers for a short sequence.
+        assert!(minimizers.compute(b"ACGT").is_empty());
+        assert!(Minimizers::new(4, 3).is_err());
     }
 
     #[test]
     fn non_acgt_mapped_to_n() {
-        let hasher = KmerHasher::new(31);
         let minimizers = |base| {
             let mut seq = b"ACGT".repeat(40);
             seq[64] = base;
-            match compute_minimizers(&seq, &hasher, 31, 15) {
-                crate::MinimizerVec::U64(vec) => vec,
-                crate::MinimizerVec::U128(_) => unreachable!(),
+            match compute_minimizers(&seq, 31, 15) {
+                MinimizerVec::U64(vec) => vec,
+                MinimizerVec::U128(_) => unreachable!(),
             }
         };
         let expected = minimizers(b'N');
@@ -442,8 +502,7 @@ mod tests {
         test_seq.extend_from_slice(test_kmer);
         test_seq.extend_from_slice(b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"); // 31 As after
 
-        let hasher = KmerHasher::new(k as usize);
-        let minimizers = compute_minimizers(&test_seq, &hasher, k as u8, w as u8);
+        let minimizers = compute_minimizers(&test_seq, k as u8, w as u8);
 
         assert!(!minimizers.is_empty(), "Should have at least one minimizer");
 
@@ -465,7 +524,7 @@ mod tests {
         // Check all decoded minimizers appear in test sequence as fwd or rc
         let mut found_valid = false;
         match &minimizers {
-            crate::MinimizerVec::U64(vec) => {
+            MinimizerVec::U64(vec) => {
                 for &value in vec {
                     let decoded = String::from_utf8_lossy(&decode_u64(value, k as u8)).to_string();
                     let decoded_revcomp = reverse_complement(&decoded);
@@ -480,7 +539,7 @@ mod tests {
                     }
                 }
             }
-            crate::MinimizerVec::U128(_) => panic!("Expected U64 for k=31"),
+            MinimizerVec::U128(_) => panic!("Expected U64 for k=31"),
         }
 
         assert!(found_valid, "No valid decoded minimizers found");
@@ -498,8 +557,7 @@ mod tests {
         test_seq.extend_from_slice(test_kmer);
         test_seq.extend_from_slice(b"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC");
 
-        let hasher = KmerHasher::new(k as usize);
-        let minimizers = compute_minimizers(&test_seq, &hasher, k as u8, w as u8);
+        let minimizers = compute_minimizers(&test_seq, k as u8, w as u8);
 
         assert!(!minimizers.is_empty(), "Should have at least one minimizer");
 
@@ -519,7 +577,7 @@ mod tests {
         let test_seq_str = String::from_utf8_lossy(&test_seq).to_string();
 
         match &minimizers {
-            crate::MinimizerVec::U64(vec) => {
+            MinimizerVec::U64(vec) => {
                 for &value in vec {
                     let decoded = String::from_utf8_lossy(&decode_u64(value, k as u8)).to_string();
                     let decoded_revcomp = reverse_complement(&decoded);
@@ -531,7 +589,7 @@ mod tests {
                     );
                 }
             }
-            crate::MinimizerVec::U128(_) => panic!("Expected U64 for k=31"),
+            MinimizerVec::U128(_) => panic!("Expected U64 for k=31"),
         }
     }
 
@@ -539,7 +597,6 @@ mod tests {
     fn test_decode_edge_cases() {
         let k = 31;
         let w = 15;
-        let hasher = KmerHasher::new(k as usize);
 
         let reverse_complement = |s: &str| -> String {
             s.chars()
@@ -571,7 +628,7 @@ mod tests {
             test_seq.extend_from_slice(test_kmer);
             test_seq.extend_from_slice(b"NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN");
 
-            let minimizers = compute_minimizers(&test_seq, &hasher, k as u8, w as u8);
+            let minimizers = compute_minimizers(&test_seq, k as u8, w as u8);
 
             if minimizers.is_empty() {
                 continue; // Skip if no minimizers (e.g., all N's filtered)
@@ -580,7 +637,7 @@ mod tests {
             let test_seq_str = String::from_utf8_lossy(&test_seq).to_string();
 
             match &minimizers {
-                crate::MinimizerVec::U64(vec) => {
+                MinimizerVec::U64(vec) => {
                     for &value in vec {
                         let decoded =
                             String::from_utf8_lossy(&decode_u64(value, k as u8)).to_string();
@@ -595,7 +652,7 @@ mod tests {
                         );
                     }
                 }
-                crate::MinimizerVec::U128(_) => panic!("Expected U64 for k=31"),
+                MinimizerVec::U128(_) => panic!("Expected U64 for k=31"),
             }
         }
     }
@@ -612,8 +669,7 @@ mod tests {
         test_seq.extend_from_slice(test_kmer);
         test_seq.extend_from_slice(b"TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT");
 
-        let hasher = KmerHasher::new(k as usize);
-        let minimizers = compute_minimizers(&test_seq, &hasher, k as u8, w as u8);
+        let minimizers = compute_minimizers(&test_seq, k as u8, w as u8);
 
         assert!(!minimizers.is_empty(), "Should have at least one minimizer");
 
@@ -633,7 +689,7 @@ mod tests {
         let test_seq_str = String::from_utf8_lossy(&test_seq).to_string();
 
         match &minimizers {
-            crate::MinimizerVec::U128(vec) => {
+            MinimizerVec::U128(vec) => {
                 for &value in vec {
                     let decoded = String::from_utf8_lossy(&decode_u128(value, k as u8)).to_string();
                     let decoded_revcomp = reverse_complement(&decoded);
@@ -645,7 +701,7 @@ mod tests {
                     );
                 }
             }
-            crate::MinimizerVec::U64(_) => panic!("Expected U128 for k=33"),
+            MinimizerVec::U64(_) => panic!("Expected U128 for k=33"),
         }
     }
 }

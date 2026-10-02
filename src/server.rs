@@ -1,12 +1,18 @@
-use crate::{Command, ServerCommand, process_command};
+//! Binary server retaining an index between requests.
+
+use crate::{Command, FilterArgs, ServerCommand, process_command};
 use anyhow::{Context, Result};
+use deacon::{FilterConfig, Index, filter_files, load_filter_index};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
 use tracing::{info, warn};
 
-/// client -> server
+const SOCKET: &str = "deacon_server_socket";
+
 #[derive(Serialize, Deserialize)]
 enum Reply {
     /// Reply for `server status`.
@@ -15,10 +21,51 @@ enum Reply {
     Error(String),
 }
 
+struct LoadedIndex {
+    path: PathBuf,
+    complexity_threshold: Option<f32>,
+    index: Arc<Index>,
+}
+
+/// Filter with the cached index, reloading if its path changes.
+fn filter(index: &mut Option<LoadedIndex>, args: &FilterArgs) -> Result<()> {
+    // `server start` controls logging, so ignore the request's -q.
+    let config = FilterConfig {
+        progress: true,
+        ..args.to_config()
+    };
+    let mut load_time = None;
+    let loaded = index.as_ref().is_some_and(|i| {
+        i.path == args.index && i.complexity_threshold == args.complexity_threshold
+    });
+    if let Some(index) = index.as_ref() {
+        assert_eq!(
+            index.path, args.index,
+            "Currently, the server can only have one index loaded."
+        );
+    }
+    if !loaded {
+        // Free the old index before loading.
+        *index = None;
+        let start = Instant::now();
+        let loaded_index = load_filter_index(&args.index, args.complexity_threshold)?;
+        load_time = Some(start.elapsed());
+        *index = Some(LoadedIndex {
+            path: args.index.clone(),
+            complexity_threshold: args.complexity_threshold,
+            index: Arc::new(loaded_index),
+        });
+    }
+    let index = index.as_ref().unwrap();
+    let label = args.index.to_string_lossy();
+    filter_files(Arc::clone(&index.index), &label, load_time, &config)?;
+    Ok(())
+}
+
+/// Serve until stopped.
 pub fn start(threads: u16) -> Result<()> {
     // First try connecting to an existing server.
-    let connect = UnixStream::connect("deacon_server_socket");
-    if connect.is_ok() {
+    if UnixStream::connect(SOCKET).is_ok() {
         return Err(anyhow::anyhow!("Server is already running."));
     }
 
@@ -28,8 +75,9 @@ pub fn start(threads: u16) -> Result<()> {
         .context("Failed to initialize thread pool")?;
 
     // Remove existing socket if present
-    let _ = std::fs::remove_file("deacon_server_socket");
-    let listener = UnixListener::bind("deacon_server_socket")?;
+    let _ = std::fs::remove_file(SOCKET);
+    let listener = UnixListener::bind(SOCKET)?;
+    let mut index: Option<LoadedIndex> = None;
 
     // Loop over incoming connections.
     'stream: for stream in listener.incoming() {
@@ -80,19 +128,24 @@ pub fn start(threads: u16) -> Result<()> {
             Command::Server {
                 command: ServerCommand::Status,
             } => {
-                let reply = Reply::IndexPath(deacon::current_index_path());
-                serde_json::to_writer(stream, &reply)
+                let path = index.as_ref().map(|i| i.path.clone());
+                serde_json::to_writer(stream, &Reply::IndexPath(path))
             }
             Command::Server {
                 command: ServerCommand::Stop,
             } => {
                 info!("Stopping the server");
                 serde_json::to_writer(stream, &Reply::Done)?;
-                let _ = std::fs::remove_file("deacon_server_socket");
+                let _ = std::fs::remove_file(SOCKET);
                 break;
             }
             command => {
-                let result = process_command(command);
+                let result = match command {
+                    Command::Filter(args) => {
+                        filter(&mut index, &args).context("Failed to run filter command")
+                    }
+                    command => process_command(command),
+                };
                 let reply = match result {
                     Ok(()) => Reply::Done,
                     Err(e) => Reply::Error(format!("{e:#}")),
@@ -108,8 +161,9 @@ pub fn start(threads: u16) -> Result<()> {
     Ok(())
 }
 
+/// Send a command and report the reply.
 pub fn send(command: &Command) -> Result<()> {
-    let mut stream = UnixStream::connect("deacon_server_socket")?;
+    let mut stream = UnixStream::connect(SOCKET)?;
     serde_json::to_writer(&stream, command)?;
     stream.write_all(b"\0")?;
     stream.flush()?;

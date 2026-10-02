@@ -8,21 +8,16 @@ use flate2::write::{GzEncoder, MultiGzDecoder};
 use js_sys::{Object, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 
-use deacon::{ComplexityAlgorithm, FilterKernel, FilterParams, MinimizerSet};
+use deacon::{ComplexityAlgorithm, FilterKernel, FilterParams, Index};
 
 // Flush the gzip encoder every ~this many output bytes, not per chunk: a
 // per-chunk sync-flush wastes CPU and hurts the ratio. deflate still emits full
-// blocks between flushes; finish() flushes the tail.
+// blocks between flushes. finish() flushes the tail.
 const FLUSH_THRESHOLD_BYTES: usize = 256 * 1024;
-
-struct WasmIndexInner {
-    minimizers: MinimizerSet,
-    header: deacon::IndexHeader,
-}
 
 #[wasm_bindgen]
 pub struct WasmIndex {
-    inner: Arc<WasmIndexInner>,
+    inner: Arc<Index>,
 }
 
 #[wasm_bindgen]
@@ -32,47 +27,36 @@ impl WasmIndex {
         console_error_panic_hook::set_once();
         let mut cursor = Cursor::new(data);
         // Auto-detect exact vs BFF format
-        let (mut minimizers, header) = deacon::load_index_auto(&mut cursor)
+        let mut index = deacon::load_index(&mut cursor)
             .map_err(|e| JsValue::from_str(&format!("Failed to load index: {}", e)))?;
         // Discard low-complexity (kdust) minimizers once at load, mirroring the CLI
         if let Some(threshold) = complexity_threshold {
-            if matches!(minimizers, MinimizerSet::Fuse(_)) {
-                return Err(JsValue::from_str(
-                    "Complexity filtering is not supported on BFF indexes; use an exact index",
-                ));
-            }
-            minimizers
-                .retain_complexity(
-                    header.kmer_length(),
-                    ComplexityAlgorithm::Kdust,
-                    threshold,
-                    false,
-                )
+            index
+                .retain_complexity(ComplexityAlgorithm::Kdust, threshold, false)
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
         }
         Ok(WasmIndex {
-            inner: Arc::new(WasmIndexInner { minimizers, header }),
+            inner: Arc::new(index),
         })
     }
 
     pub fn info(&self) -> String {
         format!(
             "k={}, w={} ({} minimizers)",
-            self.inner.header.kmer_length(),
-            self.inner.header.window_size(),
-            fmt_commas(self.inner.minimizers.len())
+            self.inner.kmer_length(),
+            self.inner.window_size(),
+            fmt_commas(self.inner.len())
         )
     }
 }
 
 #[wasm_bindgen]
 pub struct FilterSession {
-    index: Arc<WasmIndexInner>,
     kernel: FilterKernel,
     rename: bool,
     discard_quality: bool,
     rename_counter: u64,
-    parser: SeqChunkParser,
+    parser: FastxChunkParser,
     stats: FilterStats,
     gz_decoder: Option<MultiGzDecoder<Vec<u8>>>,
     gz_encoder: Option<GzEncoder<Vec<u8>>>,
@@ -93,9 +77,6 @@ impl FilterSession {
         rename: bool,
         discard_quality: bool,
     ) -> Result<FilterSession, JsValue> {
-        let k = index.inner.header.kmer_length();
-        let w = index.inner.header.window_size();
-
         let gz_decoder = if decompress_input {
             Some(MultiGzDecoder::new(Vec::new()))
         } else {
@@ -108,10 +89,8 @@ impl FilterSession {
         };
 
         Ok(FilterSession {
-            index: Arc::clone(&index.inner),
             kernel: FilterKernel::new(
-                k,
-                w,
+                Arc::clone(&index.inner),
                 FilterParams {
                     deplete,
                     abs_threshold,
@@ -123,7 +102,7 @@ impl FilterSession {
             rename,
             discard_quality,
             rename_counter: 0,
-            parser: SeqChunkParser::new(),
+            parser: FastxChunkParser::new(),
             stats: FilterStats::default(),
             gz_decoder,
             gz_encoder,
@@ -251,7 +230,7 @@ impl FilterSession {
         self.stats.reads_in += 1;
         self.stats.bases_in += seq.len() as u64;
 
-        let decision = self.kernel.classify_read(&self.index.minimizers, seq);
+        let decision = self.kernel.classify_read(seq);
         if decision.keep {
             self.stats.reads_out += 1;
             self.stats.bases_out += seq.len() as u64;
@@ -286,15 +265,14 @@ struct PairedOutput {
 
 #[wasm_bindgen]
 pub struct PairedFilterSession {
-    index: Arc<WasmIndexInner>,
     kernel: FilterKernel,
     rename: bool,
     discard_quality: bool,
     rename_counter: u64,
-    parser_r1: SeqChunkParser,
-    parser_r2: SeqChunkParser,
-    queue_r1: VecDeque<SeqRecord>,
-    queue_r2: VecDeque<SeqRecord>,
+    parser_r1: FastxChunkParser,
+    parser_r2: FastxChunkParser,
+    queue_r1: VecDeque<FastxRecord>,
+    queue_r2: VecDeque<FastxRecord>,
     stats: FilterStats,
     decoder_r1: Option<MultiGzDecoder<Vec<u8>>>,
     decoder_r2: Option<MultiGzDecoder<Vec<u8>>>,
@@ -323,13 +301,9 @@ impl PairedFilterSession {
         rename: bool,
         discard_quality: bool,
     ) -> Result<PairedFilterSession, JsValue> {
-        let k = index.inner.header.kmer_length();
-        let w = index.inner.header.window_size();
         Ok(PairedFilterSession {
-            index: Arc::clone(&index.inner),
             kernel: FilterKernel::new(
-                k,
-                w,
+                Arc::clone(&index.inner),
                 FilterParams {
                     deplete,
                     abs_threshold,
@@ -341,8 +315,8 @@ impl PairedFilterSession {
             rename,
             discard_quality,
             rename_counter: 0,
-            parser_r1: SeqChunkParser::new(),
-            parser_r2: SeqChunkParser::new(),
+            parser_r1: FastxChunkParser::new(),
+            parser_r2: FastxChunkParser::new(),
             queue_r1: VecDeque::new(),
             queue_r2: VecDeque::new(),
             stats: FilterStats::default(),
@@ -443,16 +417,14 @@ impl PairedFilterSession {
 
     fn process_pair(
         &mut self,
-        record1: SeqRecord,
-        record2: SeqRecord,
+        record1: FastxRecord,
+        record2: FastxRecord,
         output: &mut PairedOutput,
     ) -> Result<(), JsValue> {
         self.stats.reads_in += 2;
         self.stats.bases_in += (record1.seq.len() + record2.seq.len()) as u64;
 
-        let decision =
-            self.kernel
-                .classify_pair(&self.index.minimizers, &record1.seq, &record2.seq);
+        let decision = self.kernel.classify_pair(&record1.seq, &record2.seq);
         if decision.keep {
             self.stats.reads_out += 2;
             self.stats.bases_out += (record1.seq.len() + record2.seq.len()) as u64;
@@ -532,21 +504,21 @@ struct FilterStats {
     bases_out: u64,
 }
 
-struct SeqRecord {
+struct FastxRecord {
     header: Vec<u8>,
     seq: Vec<u8>,
     qual: Option<Vec<u8>>, // None for FASTA
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum SeqFormat {
+enum FastxFormat {
     Fasta,
     Fastq,
 }
 
-struct SeqChunkParser {
+struct FastxChunkParser {
     pending: Vec<u8>,
-    format: Option<SeqFormat>,
+    format: Option<FastxFormat>,
     /// FASTQ: number of newlines seen in the current partial record (0..=3)
     newlines_in_partial: u8,
     /// Offset into `pending` where the current incomplete record starts
@@ -557,7 +529,7 @@ struct SeqChunkParser {
     fasta_header: Option<Vec<u8>>,
 }
 
-impl SeqChunkParser {
+impl FastxChunkParser {
     fn new() -> Self {
         Self {
             pending: Vec::new(),
@@ -573,7 +545,7 @@ impl SeqChunkParser {
         self.pending.len()
     }
 
-    fn push_chunk(&mut self, chunk: &[u8]) -> Result<Vec<SeqRecord>, String> {
+    fn push_chunk(&mut self, chunk: &[u8]) -> Result<Vec<FastxRecord>, String> {
         if chunk.is_empty() {
             return Ok(Vec::new());
         }
@@ -584,8 +556,8 @@ impl SeqChunkParser {
         if self.format.is_none() {
             let first = self.pending.iter().find(|&&b| b != b'\n' && b != b'\r');
             match first {
-                Some(b'@') => self.format = Some(SeqFormat::Fastq),
-                Some(b'>') => self.format = Some(SeqFormat::Fasta),
+                Some(b'@') => self.format = Some(FastxFormat::Fastq),
+                Some(b'>') => self.format = Some(FastxFormat::Fasta),
                 Some(_) => return Err(
                     "Cannot detect format: first record must start with '@' (FASTQ) or '>' (FASTA)"
                         .to_string(),
@@ -595,12 +567,12 @@ impl SeqChunkParser {
         }
 
         match self.format.unwrap() {
-            SeqFormat::Fastq => self.scan_fastq(),
-            SeqFormat::Fasta => self.scan_fasta(),
+            FastxFormat::Fastq => self.scan_fastq(),
+            FastxFormat::Fasta => self.scan_fasta(),
         }
     }
 
-    fn finish(&mut self) -> Result<Vec<SeqRecord>, String> {
+    fn finish(&mut self) -> Result<Vec<FastxRecord>, String> {
         // If there's trailing data without a final newline, append one to flush it
         if !self.pending.is_empty() {
             let last = *self.pending.last().unwrap();
@@ -609,8 +581,8 @@ impl SeqChunkParser {
             }
         }
 
-        let records = match self.format.unwrap_or(SeqFormat::Fastq) {
-            SeqFormat::Fastq => {
+        let records = match self.format.unwrap_or(FastxFormat::Fastq) {
+            FastxFormat::Fastq => {
                 let records = self.scan_fastq()?;
                 if self.newlines_in_partial > 0 || self.record_start < self.pending.len() {
                     // Check if remaining data is just whitespace
@@ -625,12 +597,12 @@ impl SeqChunkParser {
                 }
                 records
             }
-            SeqFormat::Fasta => {
+            FastxFormat::Fasta => {
                 let mut records = self.scan_fasta()?;
                 // Flush the last FASTA record
                 if let Some(header) = self.fasta_header.take() {
                     let seq = std::mem::take(&mut self.fasta_seq);
-                    records.push(SeqRecord {
+                    records.push(FastxRecord {
                         header,
                         seq,
                         qual: None,
@@ -647,7 +619,7 @@ impl SeqChunkParser {
     }
 
     /// Scan pending buffer for complete FASTQ records (4 newline-delimited lines each).
-    fn scan_fastq(&mut self) -> Result<Vec<SeqRecord>, String> {
+    fn scan_fastq(&mut self) -> Result<Vec<FastxRecord>, String> {
         let mut records = Vec::new();
 
         loop {
@@ -719,7 +691,7 @@ impl SeqChunkParser {
     }
 
     /// Parse a single FASTQ record from a byte slice containing exactly 4 lines (with newlines).
-    fn parse_fastq_record(data: &[u8]) -> Result<SeqRecord, String> {
+    fn parse_fastq_record(data: &[u8]) -> Result<FastxRecord, String> {
         let mut lines = [0usize; 5]; // start offsets of each line, plus end
         let mut li = 0;
         lines[0] = 0;
@@ -758,7 +730,7 @@ impl SeqChunkParser {
             return Err("Invalid FASTQ record: sequence and quality lengths differ".to_string());
         }
 
-        Ok(SeqRecord {
+        Ok(FastxRecord {
             header: header_line[1..].to_vec(),
             seq: seq_line.to_vec(),
             qual: Some(qual_line.to_vec()),
@@ -766,7 +738,7 @@ impl SeqChunkParser {
     }
 
     /// Scan pending buffer for complete FASTA records (delimited by \n>).
-    fn scan_fasta(&mut self) -> Result<Vec<SeqRecord>, String> {
+    fn scan_fasta(&mut self) -> Result<Vec<FastxRecord>, String> {
         let mut records = Vec::new();
 
         loop {
@@ -781,7 +753,7 @@ impl SeqChunkParser {
                     None => break,
                 }
             } else if self.fasta_header.is_some() {
-                // We have an active record; look for \n> to end it
+                // Look for \n> to end the active record.
                 let start = self.record_start;
                 let found = {
                     let mut pos = start;
@@ -798,7 +770,7 @@ impl SeqChunkParser {
                                     // accumulated (the \n was consumed/drained in a prior chunk)
                                     break Some(abs);
                                 } else {
-                                    // This > is inside sequence data; skip it
+                                    // Skip > inside sequence data.
                                     pos = abs + 1;
                                 }
                             }
@@ -833,7 +805,7 @@ impl SeqChunkParser {
                 }
                 let header = self.fasta_header.take().unwrap();
                 let seq = std::mem::take(&mut self.fasta_seq);
-                records.push(SeqRecord {
+                records.push(FastxRecord {
                     header,
                     seq,
                     qual: None,
@@ -854,7 +826,7 @@ impl SeqChunkParser {
                     self.fasta_seq.clear();
                 }
                 None => {
-                    // Header line is incomplete; wait for more data
+                    // Wait for the rest of the header.
                     // Put record_start at the '>' so we re-process it next time
                     self.record_start = search_from;
                     break;
@@ -1036,12 +1008,12 @@ fn write_record(
 
 #[cfg(test)]
 mod tests {
-    use super::SeqChunkParser;
+    use super::FastxChunkParser;
 
     #[test]
     fn fastq_parser_handles_byte_sized_chunks() {
         let input = b"@r1\nACGT\n+\n!!!!\n@r2\nTGCA\n+\n####\n";
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let mut records = Vec::new();
 
         for chunk in input.chunks(1) {
@@ -1063,7 +1035,7 @@ mod tests {
     #[test]
     fn fastq_parser_accepts_final_line_without_trailing_newline() {
         let input = b"@r1\nACGT\n+\n!!!!";
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         parser.push_chunk(input).unwrap();
         let records = parser.finish().unwrap();
         assert_eq!(records.len(), 1);
@@ -1072,14 +1044,14 @@ mod tests {
 
     #[test]
     fn fastq_parser_rejects_incomplete_record() {
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         parser.push_chunk(b"@r1\nACGT\n+\n").unwrap();
         assert!(parser.finish().is_err());
     }
 
     #[test]
     fn fastq_parser_rejects_mismatched_quality_length() {
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let err = match parser.push_chunk(b"@r1\nACGT\n+\n!!!\n") {
             Ok(_) => panic!("expected parser error for mismatched FASTQ quality length"),
             Err(err) => err,
@@ -1090,7 +1062,7 @@ mod tests {
     #[test]
     fn fasta_parser_single_record() {
         let input = b">seq1\nACGT\nTGCA\n";
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         parser.push_chunk(input).unwrap();
         let records = parser.finish().unwrap();
         assert_eq!(records.len(), 1);
@@ -1102,7 +1074,7 @@ mod tests {
     #[test]
     fn fasta_parser_multiple_records() {
         let input = b">s1\nACGT\n>s2\nTGCA\nAAAA\n";
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let mut records = parser.push_chunk(input).unwrap();
         records.append(&mut parser.finish().unwrap());
         assert_eq!(records.len(), 2);
@@ -1115,7 +1087,7 @@ mod tests {
     #[test]
     fn fasta_parser_byte_sized_chunks() {
         let input = b">r1\nACGT\nTGCA\n>r2\nAAAA\n";
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let mut records = Vec::new();
         for chunk in input.chunks(1) {
             records.append(&mut parser.push_chunk(chunk).unwrap());
@@ -1129,7 +1101,7 @@ mod tests {
     #[test]
     fn fasta_parser_no_trailing_newline() {
         let input = b">r1\nACGT";
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         parser.push_chunk(input).unwrap();
         let records = parser.finish().unwrap();
         assert_eq!(records.len(), 1);
@@ -1139,7 +1111,7 @@ mod tests {
     #[test]
     fn fastq_quality_line_starting_with_at() {
         let input = b"@r1\nACGT\n+\n@!!!\n";
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let records = parser.push_chunk(input).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].header, b"r1");
@@ -1150,7 +1122,7 @@ mod tests {
     #[test]
     fn fastq_quality_line_starting_with_plus() {
         let input = b"@r1\nACGT\n+\n+!!!\n";
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let records = parser.push_chunk(input).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].qual.as_deref(), Some(b"+!!!".as_slice()));
@@ -1159,7 +1131,7 @@ mod tests {
     #[test]
     fn fastq_crlf_line_endings() {
         let input = b"@r1\r\nACGT\r\n+\r\n!!!!\r\n";
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let mut records = parser.push_chunk(input).unwrap();
         records.append(&mut parser.finish().unwrap());
         assert_eq!(records.len(), 1);
@@ -1171,7 +1143,7 @@ mod tests {
     #[test]
     fn fasta_crlf_line_endings() {
         let input = b">s1\r\nACGT\r\nTGCA\r\n";
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         parser.push_chunk(input).unwrap();
         let records = parser.finish().unwrap();
         assert_eq!(records.len(), 1);
@@ -1181,7 +1153,7 @@ mod tests {
 
     #[test]
     fn fastq_record_split_at_chunk_boundary() {
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let mut records = Vec::new();
         // Header in first chunk, rest in second
         records.append(&mut parser.push_chunk(b"@r1\n").unwrap());
@@ -1194,7 +1166,7 @@ mod tests {
 
     #[test]
     fn fasta_record_split_at_chunk_boundary() {
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let mut records = Vec::new();
         records.append(&mut parser.push_chunk(b">r1\nAC").unwrap());
         assert_eq!(records.len(), 0);
@@ -1212,7 +1184,7 @@ mod tests {
         let qual = "!".repeat(10000);
         let input = format!("@long\n{}\n+\n{}\n", seq, qual);
         let bytes = input.as_bytes();
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let mut records = Vec::new();
         // Feed in 137-byte chunks (odd size to stress boundaries)
         for chunk in bytes.chunks(137) {
@@ -1229,7 +1201,7 @@ mod tests {
         let seq_line = "ACGTACGT".repeat(125); // 1000 bp per line
         let input = format!(">long\n{}\n{}\n{}\n", seq_line, seq_line, seq_line);
         let bytes = input.as_bytes();
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let mut records = Vec::new();
         for chunk in bytes.chunks(137) {
             records.append(&mut parser.push_chunk(chunk).unwrap());
@@ -1242,7 +1214,7 @@ mod tests {
     #[test]
     fn fasta_blank_lines_between_records() {
         let input = b">s1\nACGT\n\n>s2\nTGCA\n\n";
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let mut records = parser.push_chunk(input).unwrap();
         records.append(&mut parser.finish().unwrap());
         assert_eq!(records.len(), 2);
@@ -1253,7 +1225,7 @@ mod tests {
     #[test]
     fn fasta_allows_empty_record_mid_stream() {
         let input = b">s1\nACGT\n>empty\n>s2\nTGCA\n";
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let mut records = parser.push_chunk(input).unwrap();
         records.append(&mut parser.finish().unwrap());
         assert_eq!(records.len(), 3);
@@ -1268,7 +1240,7 @@ mod tests {
     #[test]
     fn fasta_allows_empty_record_at_eof() {
         let input = b">s1\nACGT\n>empty\n";
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let mut records = parser.push_chunk(input).unwrap();
         records.append(&mut parser.finish().unwrap());
         assert_eq!(records.len(), 2);
@@ -1281,7 +1253,7 @@ mod tests {
     #[test]
     fn fastq_multiple_records_single_chunk() {
         let input = b"@r1\nAA\n+\n!!\n@r2\nCC\n+\n##\n@r3\nGG\n+\n$$\n";
-        let mut parser = SeqChunkParser::new();
+        let mut parser = FastxChunkParser::new();
         let records = parser.push_chunk(input).unwrap();
         assert_eq!(records.len(), 3);
         assert_eq!(records[0].header, b"r1");

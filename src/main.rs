@@ -1,18 +1,21 @@
 mod server;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 #[cfg(feature = "fetch")]
 use deacon::index_fetch;
 use deacon::{
-    ComplexityAlgorithm, DEFAULT_CBQ_BLOCK_SIZE_MIB, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE,
-    FilterConfig, IndexConfig, index_diff, index_dump, index_filter, index_freeze, index_info,
-    index_intersect, index_union,
+    BuildConfig, ComplexityAlgorithm, DEFAULT_CBQ_BLOCK_SIZE_MIB, DEFAULT_KMER_LENGTH,
+    DEFAULT_WINDOW_SIZE, FilterConfig, FilterParams, filter_files, index_build, index_diff,
+    index_dump, index_filter, index_freeze, index_info, index_intersect, index_union,
+    load_filter_index,
 };
 use serde::{Deserialize, Serialize};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Instant;
 use tracing::{Level, warn};
 
 #[derive(Parser, Serialize, Deserialize)]
@@ -33,101 +36,7 @@ enum Command {
         command: IndexCommand,
     },
     /// Retain or deplete sequence records with sufficient minimizer hits to the index
-    Filter {
-        /// Path to minimizer index file
-        index: PathBuf,
-
-        /// Optional path to fastx or binseq cbq file (or - for stdin)
-        #[arg(default_value = "-")]
-        input: String,
-
-        /// Optional path to second paired fastx file
-        input2: Option<String>,
-
-        /// Minimum absolute number of distinct minimizer hits for a match
-        #[arg(short = 'a', long = "abs-threshold", default_value_t = 2, value_parser = clap::value_parser!(u16).range(1..))]
-        abs_threshold: u16,
-
-        /// Minimum proportion of distinct minimizer hits for a match (0.0-1.0)
-        #[arg(short = 'r', long = "rel-threshold", default_value_t = 0.01, value_parser = parse_unit_interval::<f64>)]
-        rel_threshold: f64,
-
-        /// Search only the first N nucleotides per sequence (0 = entire sequence)
-        #[arg(short = 'p', long = "prefix-length", default_value_t = 0)]
-        prefix_length: usize,
-
-        /// Ignore minimizer hits below this kdust complexity threshold (0.0-1.0)
-        #[arg(short = 'c', long = "complexity-threshold", value_parser = parse_unit_interval::<f32>)]
-        complexity_threshold: Option<f32>,
-
-        /// Discard matching sequences (invert filtering behaviour)
-        #[arg(short = 'd', long = "deplete", default_value_t = false)]
-        deplete: bool,
-
-        /// Replace sequence headers with incrementing numbers (deterministic with --ordered)
-        #[arg(short = 'R', long = "rename", default_value_t = false)]
-        rename: bool,
-
-        /// Path to output file (fastx to stdout by default; detects .gz, .zst, .xz, .cbq, .cba)
-        #[arg(short = 'o', long = "output")]
-        output: Option<PathBuf>,
-
-        /// Optional path to second paired output fastx file (detects .gz, .zst, .xz)
-        #[arg(short = 'O', long = "output2")]
-        output2: Option<String>,
-
-        /// Path to JSON summary output file
-        #[arg(short = 's', long = "summary")]
-        summary: Option<PathBuf>,
-
-        /// Number of threads (0 = auto)
-        #[arg(short = 't', long = "threads", default_value_t = 8)]
-        threads: u16,
-
-        /// Number of threads used for output compression (0 = auto)
-        #[arg(long = "compression-threads", default_value_t = 0)]
-        compression_threads: u16,
-
-        /// Output compression level (1-9 for gz & xz; 1-22 for zstd including cbq)
-        #[arg(long = "compression-level", default_value_t = 2)]
-        compression_level: u8,
-
-        /// cbq output block size in MiB (or cbq input block size if higher)
-        #[arg(
-            long = "cbq-block-size",
-            default_value_t = DEFAULT_CBQ_BLOCK_SIZE_MIB,
-            value_parser = clap::value_parser!(u16).range(1..=1024)
-        )]
-        cbq_block_size: u16,
-
-        /// Emit fasta or quality-free cbq regardless of input format
-        #[arg(long = "discard-quality", default_value_t = false)]
-        discard_quality: bool,
-
-        /// Treat INPUT as interleaved paired records from single file or stdin
-        #[arg(
-            long = "interleaved",
-            default_value_t = false,
-            conflicts_with = "input2"
-        )]
-        interleaved: bool,
-
-        /// Preserve input record ordering (deterministic, slightly slower)
-        #[arg(long = "ordered", default_value_t = false)]
-        ordered: bool,
-
-        /// Validate paired record names (Illumina CASAVA or /1 /2 suffixes)
-        #[arg(long = "check-pairs", default_value_t = false)]
-        check_pairs: bool,
-
-        /// Write per-record minimizer hits to TSV
-        #[arg(long = "debug", value_name = "PATH")]
-        debug: Option<PathBuf>,
-
-        /// Suppress progress reporting
-        #[arg(short = 'q', long = "quiet", default_value_t = false)]
-        quiet: bool,
-    },
+    Filter(FilterArgs),
     /// Start/stop a server process for reduced latency filtering
     Server {
         #[command(subcommand)]
@@ -139,7 +48,6 @@ enum Command {
 
 #[derive(Subcommand, Serialize, Deserialize)]
 enum ServerCommand {
-    /// Start the server
     Start {
         /// Number of execution threads (0 = auto)
         #[arg(short = 't', long = "threads", default_value_t = 8)]
@@ -147,37 +55,13 @@ enum ServerCommand {
     },
     /// Print whether a server is running and the current index.
     Status,
-    /// Stop the running server
     Stop,
 }
 
 #[derive(Subcommand, Serialize, Deserialize)]
 enum IndexCommand {
     /// Index minimizers contained within a fastx file
-    Build {
-        /// Path to input fastx file (or - for stdin; supports gz, zst and xz compression)
-        input: PathBuf,
-
-        /// K-mer length used for indexing (k+w-1 must be <= 96 and odd)
-        #[arg(short = 'k', default_value_t = DEFAULT_KMER_LENGTH)]
-        kmer_length: u8,
-
-        /// Minimizer window size used for indexing
-        #[arg(short = 'w', default_value_t = DEFAULT_WINDOW_SIZE)]
-        window_size: u8,
-
-        /// Path to output file (stdout if not specified)
-        #[arg(short = 'o', long = "output")]
-        output: Option<PathBuf>,
-
-        /// Number of execution threads (0 = auto)
-        #[arg(short = 't', long = "threads", default_value_t = 8)]
-        threads: u16,
-
-        /// Suppress progress reporting
-        #[arg(short = 'q', long = "quiet")]
-        quiet: bool,
-    },
+    Build(BuildArgs),
     /// Combine multiple minimizer indexes (A ∪ B…)
     Union {
         /// Path(s) to one or more index file(s)
@@ -208,7 +92,7 @@ enum IndexCommand {
         #[arg(required = true)]
         second: PathBuf,
 
-        /// Window size for FASTX input (defaults to the first index; w=1 uses every k-mer)
+        /// Window size for FASTX input (defaults to the first index, w=1 uses every k-mer)
         #[arg(short = 'w', long = "window-size")]
         window_size: Option<u8>,
 
@@ -234,7 +118,6 @@ enum IndexCommand {
         /// Path to index file
         index: PathBuf,
 
-        /// Complexity measure
         #[arg(short = 'a', long = "algorithm", value_enum, default_value_t = ComplexityAlgorithm::Kdust)]
         algorithm: ComplexityAlgorithm,
 
@@ -289,6 +172,162 @@ enum IndexCommand {
     },
 }
 
+#[derive(Args, Serialize, Deserialize)]
+struct FilterArgs {
+    /// Path to minimizer index file
+    index: PathBuf,
+
+    /// Optional path to fastx or binseq cbq file (or - for stdin)
+    #[arg(default_value = "-")]
+    input: PathBuf,
+
+    /// Optional path to second paired fastx file
+    input2: Option<PathBuf>,
+
+    /// Minimum absolute number of distinct minimizer hits for a match
+    #[arg(short = 'a', long = "abs-threshold", default_value_t = 2, value_parser = clap::value_parser!(u16).range(1..))]
+    abs_threshold: u16,
+
+    /// Minimum proportion of distinct minimizer hits for a match (0.0-1.0)
+    #[arg(short = 'r', long = "rel-threshold", default_value_t = 0.01, value_parser = parse_unit_interval::<f64>)]
+    rel_threshold: f64,
+
+    /// Search only the first N nucleotides per sequence (0 = entire sequence)
+    #[arg(short = 'p', long = "prefix-length", default_value_t = 0)]
+    prefix_length: usize,
+
+    /// Ignore minimizer hits below this kdust complexity threshold (0.0-1.0)
+    #[arg(short = 'c', long = "complexity-threshold", value_parser = parse_unit_interval::<f32>)]
+    complexity_threshold: Option<f32>,
+
+    /// Discard matching sequences (invert filtering behaviour)
+    #[arg(short = 'd', long = "deplete", default_value_t = false)]
+    deplete: bool,
+
+    /// Replace sequence headers with incrementing numbers (deterministic with --ordered)
+    #[arg(short = 'R', long = "rename", default_value_t = false)]
+    rename: bool,
+
+    /// Output path (FASTX to stdout by default, detects .gz, .zst, .xz, .cbq, .cba)
+    #[arg(short = 'o', long = "output")]
+    output: Option<PathBuf>,
+
+    /// Optional path to second paired output fastx file (detects .gz, .zst, .xz)
+    #[arg(short = 'O', long = "output2")]
+    output2: Option<PathBuf>,
+
+    /// Path to JSON summary output file
+    #[arg(short = 's', long = "summary")]
+    summary: Option<PathBuf>,
+
+    /// Number of threads (0 = auto)
+    #[arg(short = 't', long = "threads", default_value_t = 8)]
+    threads: u16,
+
+    /// Number of threads used for output compression (0 = auto)
+    #[arg(long = "compression-threads", default_value_t = 0)]
+    compression_threads: u16,
+
+    /// Output compression level (1-9 for gz & xz, 1-22 for zstd including cbq)
+    #[arg(long = "compression-level", default_value_t = 2)]
+    compression_level: u8,
+
+    /// cbq output block size in MiB (or cbq input block size if higher)
+    #[arg(
+        long = "cbq-block-size",
+        default_value_t = DEFAULT_CBQ_BLOCK_SIZE_MIB,
+        value_parser = clap::value_parser!(u16).range(1..=1024)
+    )]
+    cbq_block_size: u16,
+
+    /// Emit fasta or quality-free cbq regardless of input format
+    #[arg(long = "discard-quality", default_value_t = false)]
+    discard_quality: bool,
+
+    /// Treat INPUT as interleaved paired records from single file or stdin
+    #[arg(
+        long = "interleaved",
+        default_value_t = false,
+        conflicts_with = "input2"
+    )]
+    interleaved: bool,
+
+    /// Preserve input record ordering (deterministic, slightly slower)
+    #[arg(long = "ordered", default_value_t = false)]
+    ordered: bool,
+
+    /// Validate paired record names (Illumina CASAVA or /1 /2 suffixes)
+    #[arg(long = "check-pairs", default_value_t = false)]
+    check_pairs: bool,
+
+    /// Write per-record minimizer hits to TSV
+    #[arg(long = "debug", value_name = "PATH")]
+    debug: Option<PathBuf>,
+
+    /// Suppress progress reporting
+    #[arg(short = 'q', long = "quiet", default_value_t = false)]
+    quiet: bool,
+}
+
+impl FilterArgs {
+    /// Build library config.
+    fn to_config(&self) -> FilterConfig {
+        if self.output2.is_some() && self.input2.is_none() && !self.interleaved {
+            warn!("Ignoring --output2 without a second input");
+        }
+        FilterConfig {
+            input_path: self.input.clone(),
+            input2_path: self.input2.clone(),
+            interleaved: self.interleaved,
+            check_pairs: self.check_pairs,
+            output_path: self.output.clone(),
+            output2_path: self.output2.clone(),
+            params: FilterParams {
+                abs_threshold: self.abs_threshold as usize,
+                rel_threshold: self.rel_threshold,
+                prefix_length: self.prefix_length,
+                deplete: self.deplete,
+            },
+            summary_path: self.summary.clone(),
+            rename: self.rename,
+            discard_quality: self.discard_quality,
+            ordered: self.ordered,
+            threads: self.threads,
+            compression_level: self.compression_level,
+            cbq_block_size: self.cbq_block_size,
+            compression_threads: self.compression_threads,
+            debug: self.debug.clone(),
+            progress: !self.quiet,
+        }
+    }
+}
+
+#[derive(Args, Serialize, Deserialize)]
+struct BuildArgs {
+    /// Input FASTX path (- for stdin, supports gz, zst and xz compression)
+    input: PathBuf,
+
+    /// K-mer length used for indexing (k+w-1 must be <= 96 and odd)
+    #[arg(short = 'k', default_value_t = DEFAULT_KMER_LENGTH)]
+    kmer_length: u8,
+
+    /// Minimizer window size used for indexing
+    #[arg(short = 'w', default_value_t = DEFAULT_WINDOW_SIZE)]
+    window_size: u8,
+
+    /// Path to output file (stdout if not specified)
+    #[arg(short = 'o', long = "output")]
+    output: Option<PathBuf>,
+
+    /// Number of execution threads (0 = auto)
+    #[arg(short = 't', long = "threads", default_value_t = 8)]
+    threads: u16,
+
+    /// Suppress progress reporting
+    #[arg(short = 'q', long = "quiet")]
+    quiet: bool,
+}
+
 /// Parse and validate the BFF fingerprint width (16 or 32 bits)
 fn parse_fingerprint_bits(s: &str) -> Result<u8, String> {
     match s {
@@ -332,9 +371,9 @@ fn main() -> Result<()> {
 
     let quiet = matches!(
         cli.command,
-        Command::Filter { quiet: true, .. }
+        Command::Filter(FilterArgs { quiet: true, .. })
             | Command::Index {
-                command: IndexCommand::Build { quiet: true, .. }
+                command: IndexCommand::Build(BuildArgs { quiet: true, .. })
             }
     );
     tracing_subscriber::fmt()
@@ -354,15 +393,12 @@ fn main() -> Result<()> {
         "SIMD acceleration is unavailable. For best performance, compile with `RUSTFLAGS=\"-C target-cpu=native\" cargo build --release`"
     );
 
-    // Start the server if requested.
     if let Command::Server {
         command: ServerCommand::Start { threads },
     } = &cli.command
     {
         return server::start(*threads);
     }
-
-    // Send a command to the server.
     if cli.use_server || matches!(cli.command, Command::Server { .. }) {
         return server::send(&cli.command);
     }
@@ -381,26 +417,16 @@ fn process_command(command: Command) -> Result<(), anyhow::Error> {
             unreachable!("Server commands are handled before this function is called")
         }
         Command::Index { command } => match command {
-            IndexCommand::Build {
-                input,
-                kmer_length,
-                window_size,
-                mut output,
-                threads,
-                quiet,
-            } => {
-                ensure_index_output_is_redirected(&mut output)?;
-                let config = IndexConfig {
-                    input_path: input.clone(),
-                    kmer_length,
-                    window_size,
-                    output_path: output.clone(),
-                    threads,
-                    quiet,
+            IndexCommand::Build(mut args) => {
+                ensure_index_output_is_redirected(&mut args.output)?;
+                let config = BuildConfig {
+                    input_path: args.input,
+                    kmer_length: args.kmer_length,
+                    window_size: args.window_size,
+                    output_path: args.output,
+                    threads: args.threads,
                 };
-                config
-                    .execute()
-                    .context("Failed to run index build command")?;
+                index_build(&config).context("Failed to run index build command")?;
             }
             IndexCommand::Info { index } => {
                 index_info(&index).context("Failed to run index info command")?;
@@ -461,63 +487,21 @@ fn process_command(command: Command) -> Result<(), anyhow::Error> {
                     .context("Failed to run index freeze command")?;
             }
         },
-        Command::Filter {
-            index: minimizers,
-            input,
-            input2,
-            interleaved,
-            output,
-            output2,
-            abs_threshold,
-            rel_threshold,
-            prefix_length,
-            complexity_threshold,
-            summary,
-            deplete,
-            rename,
-            discard_quality,
-            threads,
-            compression_level,
-            cbq_block_size,
-            compression_threads,
-            ordered,
-            check_pairs,
-            quiet,
-            debug,
-        } => {
-            // Validate output2 usage
-            if output2.is_some() && input2.is_none() && !interleaved {
-                warn!("Ignoring --output2 without a second input");
-            }
-
-            let config = FilterConfig {
-                minimizers_path: &minimizers,
-                input_path: &input,
-                input2_path: input2.as_deref(),
-                interleaved,
-                check_pairs,
-                output_path: output.as_ref().map(|p| p.as_path()),
-                output2_path: output2.as_deref(),
-                abs_threshold: abs_threshold as usize,
-                rel_threshold,
-                prefix_length,
-                complexity_threshold,
-                summary_path: summary.as_ref(),
-                deplete,
-                rename,
-                discard_quality,
-                ordered,
-                threads,
-                compression_level,
-                cbq_block_size,
-                compression_threads,
-                debug: debug.as_ref(),
-                quiet,
-            };
-            config.execute().context("Failed to run filter command")?;
+        Command::Filter(args) => {
+            filter(&args).context("Failed to run filter command")?;
         }
     }
 
+    Ok(())
+}
+
+fn filter(args: &FilterArgs) -> Result<()> {
+    let config = args.to_config();
+    let start = Instant::now();
+    let index = load_filter_index(&args.index, args.complexity_threshold)?;
+    let load_time = start.elapsed();
+    let label = args.index.to_string_lossy();
+    filter_files(Arc::new(index), &label, Some(load_time), &config)?;
     Ok(())
 }
 
@@ -541,10 +525,10 @@ mod tests {
 
         assert!(matches!(
             decoded,
-            Command::Filter {
+            Command::Filter(FilterArgs {
                 check_pairs: true,
                 ..
-            }
+            })
         ));
     }
 }

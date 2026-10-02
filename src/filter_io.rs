@@ -1,9 +1,5 @@
-use crate::index_format::load_index_from_path_auto;
-use crate::index_ops::load_minimizers_cached;
-use crate::{
-    ComplexityAlgorithm, FilterConfig, FilterDecision, FilterKernel, FilterParams, IndexHeader,
-    MinimizerSet, validate_unit_interval,
-};
+use crate::index_format::load_index_from_path;
+use crate::{ComplexityAlgorithm, FilterDiagnostics, FilterKernel, FilterParams, Index};
 use anyhow::{Context, Result};
 use binseq::cbq;
 use binseq::write::{BinseqWriterBuilder, Format as BinseqFormat};
@@ -17,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -25,7 +21,7 @@ use tracing::{info, warn};
 
 const OUTPUT_BUFFER_SIZE: usize = 8 * 1024 * 1024; // Opt: 8MB output buffer
 const DEFAULT_BUFFER_SIZE: usize = 64 * 1024;
-/// Default CBQ block size in MiB; a block must hold the largest single record
+/// Default CBQ block size in MiB. Must hold the largest record.
 pub const DEFAULT_CBQ_BLOCK_SIZE_MIB: u16 = 16;
 
 type BoxedWriter = Box<dyn Write + Send>;
@@ -87,7 +83,7 @@ enum Output {
         shared2: Option<Arc<Mutex<BoxedWriter>>>,
     },
     Cbq {
-        /// Thread-local block writer; completed blocks merge into the shared writer
+        /// Thread-local block writer. Completed blocks merge into the shared writer.
         local: binseq::BinseqWriter<Vec<u8>>,
         shared: Arc<Mutex<CbqWriter>>,
     },
@@ -331,7 +327,7 @@ impl Output {
         Ok(())
     }
 
-    /// Finish a CBQ stream: flush remaining blocks and write the embedded index
+    /// Finish the CBQ embedded index.
     fn finish(&self) -> Result<()> {
         if let Output::Cbq { shared, .. } = self {
             shared.lock().finish()?;
@@ -357,37 +353,33 @@ fn cbq_header<'a>(id: &'a [u8], number: Option<u64>, suffix: &[u8]) -> Cow<'a, [
     }
 }
 
-/// Filtering config for an already-loaded index (no index path; see [`FilterConfig`]).
-pub struct FilterRunConfig {
+/// File filtering options.
+#[derive(Clone)]
+pub struct FilterConfig {
     /// Path to input fastx file (or - for stdin)
-    pub input_path: String,
+    pub input_path: PathBuf,
     /// Path to optional second paired fastx file (or - for interleaved stdin)
-    pub input2_path: Option<String>,
+    pub input2_path: Option<PathBuf>,
     /// Treat input_path as an interleaved paired stream
     pub interleaved: bool,
     /// Validate paired record names (Illumina CASAVA or /1 /2 suffixes)
     pub check_pairs: bool,
-    /// Path to output fastx file (None for stdout; detects .gz/.zst/.xz)
+    /// Output FASTX path (None for stdout, detects .gz/.zst/.xz).
     pub output_path: Option<PathBuf>,
     /// Path to optional second output fastx file for paired reads
-    pub output2_path: Option<String>,
-    /// Absolute threshold for filtering sequences
-    pub abs_threshold: usize,
-    /// Relative threshold for filtering sequences (0.0-1.0)
-    pub rel_threshold: f64,
-    /// Consider only the first N nucleotides per sequence (0 = entire sequence)
-    pub prefix_length: usize,
-    /// Path to JSON summary file (None to skip writing one; stats are always returned)
+    pub output2_path: Option<PathBuf>,
+    /// Matching thresholds and policy.
+    pub params: FilterParams,
+    /// Optional JSON summary path. Stats are always returned.
     pub summary_path: Option<PathBuf>,
-    /// Deplete mode (remove sequences WITH matches)
-    pub deplete: bool,
     /// Replace sequence headers with incrementing numbers
     pub rename: bool,
     /// Emit fasta or quality-free cbq regardless of input format (implied by a .cba output)
     pub discard_quality: bool,
     /// Preserve input record ordering (deterministic, slightly slower)
     pub ordered: bool,
-    /// Number of execution threads (0 = auto)
+    /// Filtering/gzip threads (0 = auto). Readers may add an I/O thread.
+    /// Other compression runs inline.
     pub threads: u16,
     /// Compression level for output files (1-22 for zst, 1-9 for gz)
     pub compression_level: u8,
@@ -397,20 +389,61 @@ pub struct FilterRunConfig {
     pub compression_threads: u16,
     /// Per-record hit TSV path
     pub debug: Option<PathBuf>,
-    /// Suppress progress reporting
-    pub quiet: bool,
-    /// Label recorded in the summary's `index` field (no filesystem check)
-    pub index_label: String,
-    /// Index load time, counted in the `*_total` rates (None if already loaded)
-    pub index_load_time: Option<Duration>,
+    /// Show a progress spinner on stderr. Logging uses the caller's `tracing` subscriber.
+    pub progress: bool,
+}
+
+impl Default for FilterConfig {
+    fn default() -> Self {
+        Self {
+            input_path: PathBuf::from("-"),
+            input2_path: None,
+            output_path: None,
+            output2_path: None,
+            params: FilterParams::default(),
+            summary_path: None,
+            interleaved: false,
+            check_pairs: false,
+            rename: false,
+            discard_quality: false,
+            ordered: false,
+            threads: 0,
+            compression_level: 2,
+            cbq_block_size: DEFAULT_CBQ_BLOCK_SIZE_MIB,
+            compression_threads: 0,
+            debug: None,
+            progress: false,
+        }
+    }
+}
+
+impl FilterConfig {
+    /// Default thresholds, automatic threads and stdout output.
+    pub fn new(input_path: impl Into<PathBuf>) -> Self {
+        Self {
+            input_path: input_path.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Validate before opening files.
+    pub fn validate(&self) -> Result<()> {
+        self.params.validate()?;
+        anyhow::ensure!(
+            !self.interleaved || self.input2_path.is_none(),
+            "interleaved cannot be combined with input2"
+        );
+        anyhow::ensure!(
+            (1..=1024).contains(&self.cbq_block_size),
+            "cbq_block_size must be between 1 and 1024 MiB inclusive"
+        );
+        Ok(())
+    }
 }
 
 /// Config for FilterProcessor
 struct FilterProcessorConfig {
-    abs_threshold: usize,
-    rel_threshold: f64,
-    prefix_length: usize,
-    deplete: bool,
+    params: FilterParams,
     rename: bool,
     discard_quality: bool,
     debug: Option<DebugWriter>,
@@ -466,41 +499,41 @@ fn validate_check_pairs_mode(check_pairs: bool, paired_input: bool) -> Result<()
 
 /// Check if path is a named pipe or process substitution / /dev/fd/*
 #[cfg(unix)]
-fn is_special_input_path(path: &str) -> bool {
+pub(crate) fn is_special_input_path(path: &Path) -> bool {
     use std::os::unix::fs::FileTypeExt;
-    path.starts_with("/dev/fd/")
-        || path.starts_with("/proc/self/fd/")
-        || std::path::Path::new(path)
+    path.starts_with("/dev/fd")
+        || path.starts_with("/proc/self/fd")
+        || path
             .metadata()
             .map(|m| m.file_type().is_fifo())
             .unwrap_or(false)
 }
 
 #[cfg(not(unix))]
-fn is_special_input_path(_path: &str) -> bool {
+pub(crate) fn is_special_input_path(_path: &Path) -> bool {
     false
 }
 
 /// Check input fastx file path(s) exist (the index is already loaded, so not checked here)
-fn check_input_paths(config: &FilterRunConfig) -> Result<()> {
-    if config.input_path != "-"
+fn check_input_paths(config: &FilterConfig) -> Result<()> {
+    if config.input_path.as_os_str() != "-"
         && !is_special_input_path(&config.input_path)
-        && !std::path::Path::new(&config.input_path).exists()
+        && !config.input_path.exists()
     {
         return Err(anyhow::anyhow!(
             "Input file does not exist: {}",
-            config.input_path
+            config.input_path.display()
         ));
     }
 
     if let Some(input2_path) = &config.input2_path
-        && input2_path != "-"
+        && input2_path.as_os_str() != "-"
         && !is_special_input_path(input2_path)
-        && !std::path::Path::new(input2_path).exists()
+        && !input2_path.exists()
     {
         return Err(anyhow::anyhow!(
             "Second input file does not exist: {}",
-            input2_path
+            input2_path.display()
         ));
     }
 
@@ -508,12 +541,12 @@ fn check_input_paths(config: &FilterRunConfig) -> Result<()> {
 }
 
 /// Check if file metadata len < 5 (catches empty uncompressed files only)
-fn is_empty_file(path: &str) -> Result<bool> {
-    if path == "-" || is_special_input_path(path) {
+fn is_empty_file(path: &Path) -> Result<bool> {
+    if path.as_os_str() == "-" || is_special_input_path(path) {
         return Ok(false);
     }
     let metadata = std::fs::metadata(path)
-        .map_err(|e| anyhow::anyhow!("Failed to read file metadata {}: {}", path, e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to read file metadata {}: {}", path.display(), e))?;
     Ok(metadata.len() < 5)
 }
 
@@ -523,9 +556,9 @@ fn is_empty_input_error(err: &anyhow::Error) -> bool {
 }
 
 /// Create a paraseq reader from optional path (stdin if None or "-")
-fn create_paraseq_reader(path: Option<&str>) -> Result<Reader<Box<dyn std::io::Read + Send>>> {
-    match path {
-        None | Some("-") => {
+fn create_paraseq_reader(path: Option<&Path>) -> Result<Reader<Box<dyn std::io::Read + Send>>> {
+    match path.filter(|p| p.as_os_str() != "-") {
+        None => {
             let stdin_reader = Box::new(std::io::stdin()) as Box<dyn std::io::Read + Send>;
             Reader::new(stdin_reader)
                 .map_err(|e| anyhow::anyhow!("Failed to create stdin reader: {}", e))
@@ -534,40 +567,36 @@ fn create_paraseq_reader(path: Option<&str>) -> Result<Reader<Box<dyn std::io::R
             // ReaderBuilder handles compression detection for files (internally uses niffler)
             paraseq::ReaderBuilder::path(p)
                 .build()
-                .map_err(|e| anyhow::anyhow!("Failed to open file {}: {}", p, e))
+                .map_err(|e| anyhow::anyhow!("Failed to open file {}: {}", p.display(), e))
         }
     }
 }
 
 /// A BINSEQ CBQ path: `.cbq`, or `.cba` by convention when quality is discarded
-fn is_cbq_path(path: &str) -> bool {
-    path.ends_with(".cbq") || is_cba_path(path)
+fn is_cbq_path(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "cbq") || is_cba_path(path)
 }
 
 /// `.cba` names a quality-free CBQ, implying `--discard-quality` for that output
-fn is_cba_path(path: &str) -> bool {
-    path.ends_with(".cba")
+fn is_cba_path(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "cba")
 }
 
 /// Resolve the output format from the output path suffix
-fn resolve_output_format(config: &FilterRunConfig) -> Format {
+fn resolve_output_format(config: &FilterConfig) -> Format {
     match config.output_path.as_deref() {
-        Some(path) if is_cbq_path(&path.to_string_lossy()) => Format::Cbq,
+        Some(path) if is_cbq_path(path) => Format::Cbq,
         _ => Format::Fastx,
     }
 }
 
-/// Resolve the input format and layout, opening all readers up front so input
-/// errors surface before any output file is created.
-fn open_input(config: &FilterRunConfig, interleaved_input: bool) -> Result<(InputLayout, Input)> {
-    // CBQ input is file-only (mmap reader); stdin would need binseq's streaming reader
-    if config.input_path == "-" || is_special_input_path(&config.input_path) {
-        return open_fastx(config, interleaved_input);
+/// Sniff and open CBQ, otherwise return None. Stdin/pipes are FASTX and never read here.
+pub(crate) fn open_cbq(path: &Path) -> Result<Option<cbq::MmapReader>> {
+    if path.as_os_str() == "-" || is_special_input_path(path) {
+        return Ok(None);
     }
-
-    // Regular files: sniff the CBQ magic; everything else is FASTX
-    let file = File::open(&config.input_path)
-        .map_err(|e| anyhow::anyhow!("Failed to open file {}: {}", config.input_path, e))?;
+    let file = File::open(path)
+        .map_err(|e| anyhow::anyhow!("Failed to open file {}: {}", path.display(), e))?;
     let file_len = file.metadata()?.len();
     let mut magic = Vec::with_capacity(64);
     file.take(64).read_to_end(&mut magic)?;
@@ -577,34 +606,43 @@ fn open_input(config: &FilterRunConfig, interleaved_input: bool) -> Result<(Inpu
             let min_len = (std::mem::size_of::<cbq::FileHeader>()
                 + std::mem::size_of::<cbq::IndexFooter>()) as u64;
             if file_len < min_len {
-                anyhow::bail!("Truncated or corrupt CBQ input: {}", config.input_path);
+                anyhow::bail!("Truncated or corrupt CBQ input: {}", path.display());
             }
-            let reader =
-                cbq::MmapReader::new(&config.input_path).context("Failed to open CBQ input")?;
-            let header = reader.header();
-            let layout = InputLayout {
-                format: Format::Cbq,
-                paired: header.is_paired(),
-                qualities: header.has_qualities(),
-                headers: header.has_headers(),
-                flags: header.has_flags(),
-                block_size: Some(header.block_size as usize),
-            };
-            // binseq's parallel reader rejects an empty record range
-            let input = if reader.num_records() == 0 {
-                Input::Empty
-            } else {
-                Input::Cbq(reader)
-            };
-            Ok((layout, input))
+            Ok(Some(
+                cbq::MmapReader::new(path).context("Failed to open CBQ input")?,
+            ))
         }
         Some(f) => anyhow::bail!("{f:?} input is not supported"),
-        None => open_fastx(config, interleaved_input),
+        None => Ok(None),
     }
 }
 
+/// Resolve the input format and layout, opening all readers up front so input
+/// errors surface before any output file is created.
+fn open_input(config: &FilterConfig, interleaved_input: bool) -> Result<(InputLayout, Input)> {
+    let Some(reader) = open_cbq(&config.input_path)? else {
+        return open_fastx(config, interleaved_input);
+    };
+    let header = reader.header();
+    let layout = InputLayout {
+        format: Format::Cbq,
+        paired: header.is_paired(),
+        qualities: header.has_qualities(),
+        headers: header.has_headers(),
+        flags: header.has_flags(),
+        block_size: Some(header.block_size as usize),
+    };
+    // binseq's parallel reader rejects an empty record range
+    let input = if reader.num_records() == 0 {
+        Input::Empty
+    } else {
+        Input::Cbq(reader)
+    };
+    Ok((layout, input))
+}
+
 /// Open a FASTX input and resolve its layout
-fn open_fastx(config: &FilterRunConfig, interleaved_input: bool) -> Result<(InputLayout, Input)> {
+fn open_fastx(config: &FilterConfig, interleaved_input: bool) -> Result<(InputLayout, Input)> {
     let layout = InputLayout {
         format: Format::Fastx,
         paired: interleaved_input || config.input2_path.is_some(),
@@ -626,7 +664,7 @@ fn open_fastx(config: &FilterRunConfig, interleaved_input: bool) -> Result<(Inpu
         if input1_empty {
             return Ok((layout, Input::Empty));
         }
-        return match create_paraseq_reader(Some(config.input_path.as_str())) {
+        return match create_paraseq_reader(Some(config.input_path.as_path())) {
             Ok(reader) => {
                 let qualities = reader.format() == paraseq::fastx::Format::Fastq;
                 Ok((
@@ -651,7 +689,7 @@ fn open_fastx(config: &FilterRunConfig, interleaved_input: bool) -> Result<(Inpu
                 "One paired file is empty but the other is not"
             ));
         }
-        let r1 = create_paraseq_reader(Some(config.input_path.as_str()));
+        let r1 = create_paraseq_reader(Some(config.input_path.as_path()));
         let r2 = create_paraseq_reader(Some(input2_path));
         return match (r1, r2) {
             (Ok(reader1), Ok(reader2)) => {
@@ -681,7 +719,7 @@ fn open_fastx(config: &FilterRunConfig, interleaved_input: bool) -> Result<(Inpu
     if input1_empty {
         return Ok((layout, Input::Empty));
     }
-    match create_paraseq_reader(Some(config.input_path.as_str())) {
+    match create_paraseq_reader(Some(config.input_path.as_path())) {
         Ok(reader) => {
             let qualities = reader.format() == paraseq::fastx::Format::Fastq;
             Ok((
@@ -701,7 +739,7 @@ fn open_fastx(config: &FilterRunConfig, interleaved_input: bool) -> Result<(Inpu
 fn validate_input_output(
     layout: &InputLayout,
     output_format: Format,
-    config: &FilterRunConfig,
+    config: &FilterConfig,
 ) -> Result<()> {
     if layout.format == Format::Cbq && config.input2_path.is_some() {
         anyhow::bail!("CBQ input does not support INPUT2");
@@ -738,7 +776,7 @@ struct PendingRename {
     ordinal: u64,
     /// `>` for FASTA, `@` for FASTQ
     marker: u8,
-    /// Mate suffix after the number, e.g. `/1`; empty when unpaired
+    /// Mate suffix, e.g. `/1`, or empty when unpaired.
     suffix: &'static [u8],
 }
 
@@ -800,7 +838,7 @@ fn write_renamed(
     Ok(())
 }
 
-/// Validate compression level for the given format
+/// Validate compression level for the given format.
 #[cfg(feature = "compression")]
 fn validate_compression_level(level: u8, min: u8, max: u8, format: &str) -> Result<()> {
     if level < min || level > max {
@@ -817,19 +855,19 @@ fn validate_compression_level(level: u8, min: u8, max: u8, format: &str) -> Resu
 }
 
 /// Check if a path requires gzip compression
-fn is_compressed_output(path: Option<&std::path::Path>) -> bool {
+fn is_gzip_output(path: Option<&std::path::Path>) -> bool {
     path.map(|p| p.to_string_lossy().ends_with(".gz"))
         .unwrap_or(false)
 }
 
-/// Number of compressed outputs from config (0, 1, or 2)
-fn count_compressed_outputs(config: &FilterRunConfig) -> u8 {
+/// Count gzip read outputs.
+fn count_gzip_outputs(config: &FilterConfig) -> u8 {
     let mut count = 0;
-    if is_compressed_output(config.output_path.as_deref()) {
+    if is_gzip_output(config.output_path.as_deref()) {
         count += 1;
     }
     if let Some(output2) = &config.output2_path
-        && is_compressed_output(Some(std::path::Path::new(output2)))
+        && is_gzip_output(Some(output2))
     {
         count += 1;
     }
@@ -861,7 +899,7 @@ fn get_writer(
     compression_level: u8,
     compression_threads: usize,
 ) -> Result<BoxedWriter> {
-    let Some(path) = output_path else {
+    let Some(path) = output_path.filter(|p| p.as_os_str() != "-") else {
         return Ok(Box::new(BufWriter::with_capacity(
             OUTPUT_BUFFER_SIZE,
             io::stdout(),
@@ -918,45 +956,46 @@ fn get_writer(
     }
 }
 
-// JSON summary struct. Paired and interleaved counts cover both mates, so a pair contributes 2
-#[derive(Serialize, Deserialize)]
+/// Filtering stats: pairs count as two sequences, proportions are in [0, 1],
+/// and times are seconds, including any supplied index-load time.
+/// Path labels use lossy UTF-8.
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FilterSummary {
-    version: String,
-    index: String,
-    input: String,
-    input2: Option<String>,
-    output: String,
-    output2: Option<String>,
-    k: u8,
-    w: u8,
-    abs_threshold: usize,
-    rel_threshold: f64,
-    prefix_length: usize,
-    deplete: bool,
-    rename: bool,
-    ordered: bool,
-    check_pairs: bool,
-    seqs_in: u64,
-    seqs_out: u64,
-    seqs_out_proportion: f64,
-    seqs_removed: u64,
-    seqs_removed_proportion: f64,
-    bp_in: u64,
-    bp_out: u64,
-    bp_out_proportion: f64,
-    bp_removed: u64,
-    bp_removed_proportion: f64,
-    time: f64,
-    seqs_per_second: u64,
-    bp_per_second: u64,
-    seqs_per_second_total: u64,
-    bp_per_second_total: u64,
+    pub version: String,
+    pub index: String,
+    pub input: String,
+    pub input2: Option<String>,
+    pub output: String,
+    pub output2: Option<String>,
+    pub k: u8,
+    pub w: u8,
+    pub abs_threshold: usize,
+    pub rel_threshold: f64,
+    pub prefix_length: usize,
+    pub deplete: bool,
+    pub rename: bool,
+    pub ordered: bool,
+    pub check_pairs: bool,
+    pub seqs_in: u64,
+    pub seqs_out: u64,
+    pub seqs_out_proportion: f64,
+    pub seqs_removed: u64,
+    pub seqs_removed_proportion: f64,
+    pub bp_in: u64,
+    pub bp_out: u64,
+    pub bp_out_proportion: f64,
+    pub bp_removed: u64,
+    pub bp_removed_proportion: f64,
+    pub time: f64,
+    pub seqs_per_second: u64,
+    pub bp_per_second: u64,
+    pub seqs_per_second_total: u64,
+    pub bp_per_second_total: u64,
 }
 
 #[derive(Clone)]
 struct FilterProcessor {
     // Minimizer matching parameters
-    minimizers: Arc<MinimizerSet>,
     rename: bool,
     discard_quality: bool,
     debug: Option<DebugWriter>,
@@ -979,43 +1018,30 @@ struct FilterProcessor {
 }
 
 #[derive(Clone, Default, Debug)]
-pub(crate) struct ProcessingStats {
-    pub total_seqs: u64,
-    filtered_seqs: u64,
-    pub total_bp: u64,
+struct ProcessingStats {
+    total_seqs: u64,
+    seqs_removed: u64,
+    total_bp: u64,
     output_bp: u64,
-    filtered_bp: u64,
-    pub last_reported: u64,
+    bp_removed: u64,
 }
 
 impl FilterProcessor {
     fn new(
-        minimizers: Arc<MinimizerSet>,
-        kmer_length: u8,
-        window_size: u8,
+        index: Arc<Index>,
         config: &FilterProcessorConfig,
         output: Output,
         spinner: Option<Arc<Mutex<ProgressBar>>>,
         filtering_start_time: Instant,
     ) -> Result<Self> {
         Ok(Self {
-            minimizers,
             rename: config.rename,
             discard_quality: config.discard_quality,
             debug: config.debug.clone(),
             debug_buf: Vec::new(),
             check_pairs: config.check_pairs,
             ordered: config.ordered,
-            kernel: FilterKernel::new(
-                kmer_length,
-                window_size,
-                FilterParams {
-                    deplete: config.deplete,
-                    abs_threshold: config.abs_threshold,
-                    rel_threshold: config.rel_threshold,
-                    prefix_length: config.prefix_length,
-                },
-            )?,
+            kernel: FilterKernel::new(index, config.params)?,
             output,
             local_stats: ProcessingStats::default(),
             rename_counter: Arc::new(AtomicU64::new(0)),
@@ -1023,24 +1049,6 @@ impl FilterProcessor {
             spinner,
             filtering_start_time,
         })
-    }
-
-    fn should_keep_sequence(&mut self, seq: &[u8]) -> FilterDecision {
-        if self.debug.is_some() {
-            self.kernel
-                .classify_read_with_diagnostics(&self.minimizers, seq)
-        } else {
-            self.kernel.classify_read(&self.minimizers, seq)
-        }
-    }
-
-    fn should_keep_pair(&mut self, seq1: &[u8], seq2: &[u8]) -> FilterDecision {
-        if self.debug.is_some() {
-            self.kernel
-                .classify_pair_with_diagnostics(&self.minimizers, seq1, seq2)
-        } else {
-            self.kernel.classify_pair(&self.minimizers, seq1, seq2)
-        }
     }
 
     fn update_spinner(&self) {
@@ -1070,13 +1078,15 @@ impl FilterProcessor {
         self.local_stats.total_seqs += 1;
         self.local_stats.total_bp += read.seq.len() as u64;
 
-        let decision = self.should_keep_sequence(read.seq);
+        let keep = if self.debug.is_some() {
+            let diagnostics = self.kernel.classify_read_with_diagnostics(read.seq);
+            self.push_debug_row(read.id, read.seq.len(), &diagnostics)?;
+            diagnostics.score.keep
+        } else {
+            self.kernel.classify_read(read.seq).keep
+        };
 
-        if self.debug.is_some() {
-            self.push_debug_row(read.id, read.seq.len(), &decision)?;
-        }
-
-        if decision.keep {
+        if keep {
             self.local_stats.output_bp += read.seq.len() as u64;
             self.output.push_read(
                 read,
@@ -1085,8 +1095,8 @@ impl FilterProcessor {
                 &self.rename_counter,
             )?;
         } else {
-            self.local_stats.filtered_seqs += 1;
-            self.local_stats.filtered_bp += read.seq.len() as u64;
+            self.local_stats.seqs_removed += 1;
+            self.local_stats.bp_removed += read.seq.len() as u64;
         }
 
         Ok(())
@@ -1105,13 +1115,17 @@ impl FilterProcessor {
         self.local_stats.total_seqs += 2;
         self.local_stats.total_bp += (read1.seq.len() + read2.seq.len()) as u64;
 
-        let decision = self.should_keep_pair(read1.seq, read2.seq);
+        let keep = if self.debug.is_some() {
+            let diagnostics = self
+                .kernel
+                .classify_pair_with_diagnostics(read1.seq, read2.seq);
+            self.push_debug_row(read1.id, read1.seq.len() + read2.seq.len(), &diagnostics)?;
+            diagnostics.score.keep
+        } else {
+            self.kernel.classify_pair(read1.seq, read2.seq).keep
+        };
 
-        if self.debug.is_some() {
-            self.push_debug_row(read1.id, read1.seq.len() + read2.seq.len(), &decision)?;
-        }
-
-        if decision.keep {
+        if keep {
             self.local_stats.output_bp += (read1.seq.len() + read2.seq.len()) as u64;
             self.output.push_pair(
                 read1,
@@ -1121,24 +1135,30 @@ impl FilterProcessor {
                 &self.rename_counter,
             )?;
         } else {
-            self.local_stats.filtered_seqs += 2;
-            self.local_stats.filtered_bp += (read1.seq.len() + read2.seq.len()) as u64;
+            self.local_stats.seqs_removed += 2;
+            self.local_stats.bp_removed += (read1.seq.len() + read2.seq.len()) as u64;
         }
 
         Ok(())
     }
 
     /// R1 id for pairs
-    fn push_debug_row(&mut self, id: &[u8], len: usize, decision: &FilterDecision) -> Result<()> {
-        let is_match = decision.keep != self.kernel.params().deplete;
+    fn push_debug_row(
+        &mut self,
+        id: &[u8],
+        len: usize,
+        diagnostics: &FilterDiagnostics,
+    ) -> Result<()> {
+        let score = diagnostics.score;
+        let is_match = score.is_match;
         self.debug_buf.extend_from_slice(split_record_id(id).0);
         writeln!(
             self.debug_buf,
             "\t{len}\t{}\t{}\t{is_match}\t{}\t{}",
-            decision.hit_count_lower_bound,
-            decision.minimizer_count_upper_bound,
-            decision.keep,
-            decision.hit_kmers.join(",")
+            score.hit_count,
+            score.minimizer_count,
+            score.keep,
+            diagnostics.hit_kmers.join(",")
         )?;
         Ok(())
     }
@@ -1156,10 +1176,10 @@ impl FilterProcessor {
         {
             let mut stats = self.global_stats.lock();
             stats.total_seqs += self.local_stats.total_seqs;
-            stats.filtered_seqs += self.local_stats.filtered_seqs;
+            stats.seqs_removed += self.local_stats.seqs_removed;
             stats.total_bp += self.local_stats.total_bp;
             stats.output_bp += self.local_stats.output_bp;
-            stats.filtered_bp += self.local_stats.filtered_bp;
+            stats.bp_removed += self.local_stats.bp_removed;
         }
 
         // Update spinner
@@ -1272,113 +1292,50 @@ impl binseq::ParallelProcessor for FilterProcessor {
     }
 }
 
-pub fn run(config: &FilterConfig) -> Result<FilterSummary> {
-    validate_unit_interval("relative threshold", config.rel_threshold)?;
-    if let Some(threshold) = config.complexity_threshold {
-        validate_unit_interval("complexity threshold", threshold)?;
-    }
-
-    // Validate the index path once here; run_with_index never touches it again.
-    if !config.minimizers_path.exists() {
+/// Load an index, optionally discarding minimizers below a kdust threshold.
+pub fn load_filter_index(path: &Path, complexity_threshold: Option<f32>) -> Result<Index> {
+    if !path.exists() {
         return Err(anyhow::anyhow!(
             "Index file does not exist: {}",
-            config.minimizers_path.display()
+            path.display()
         ));
     }
-
-    let quiet = config.quiet;
-    let load_start = Instant::now();
-
-    let mut run_config = FilterRunConfig {
-        input_path: config.input_path.to_string(),
-        input2_path: config.input2_path.map(str::to_string),
-        interleaved: config.interleaved,
-        check_pairs: config.check_pairs,
-        output_path: config.output_path.map(|p| p.to_path_buf()),
-        output2_path: config.output2_path.map(str::to_string),
-        abs_threshold: config.abs_threshold,
-        rel_threshold: config.rel_threshold,
-        prefix_length: config.prefix_length,
-        summary_path: config.summary_path.cloned(),
-        deplete: config.deplete,
-        rename: config.rename,
-        discard_quality: config.discard_quality,
-        ordered: config.ordered,
-        threads: config.threads,
-        compression_level: config.compression_level,
-        cbq_block_size: config.cbq_block_size,
-        compression_threads: config.compression_threads,
-        debug: config.debug.cloned(),
-        quiet: config.quiet,
-        index_label: config.minimizers_path.to_string_lossy().into_owned(),
-        index_load_time: None,
-    };
-
-    // Discard low-complexity (kdust) index minimizers once at load
-    if let Some(threshold) = config.complexity_threshold {
-        let (mut minimizers, header) = load_index_from_path_auto(config.minimizers_path)?;
-        if matches!(minimizers, MinimizerSet::Fuse(_)) {
-            return Err(anyhow::anyhow!(
-                "Complexity filtering is not supported on BFF indexes; use an exact index"
-            ));
-        }
-        let before = minimizers.len();
-        minimizers.retain_complexity(
-            header.kmer_length(),
-            ComplexityAlgorithm::Kdust,
-            threshold,
-            false,
-        )?;
-        let index_load_time = load_start.elapsed();
-        if !quiet {
+    let start = Instant::now();
+    let mut index = load_index_from_path(path)?;
+    let (k, w) = (index.kmer_length(), index.window_size());
+    match complexity_threshold {
+        Some(threshold) => {
+            let before = index.len();
+            index.retain_complexity(ComplexityAlgorithm::Kdust, threshold, false)?;
             info!(
-                "Loaded index (k={}, w={}) in {:.2?}; kept {} of {} minimizers (kdust >= {})",
-                header.kmer_length(),
-                header.window_size(),
-                index_load_time,
-                minimizers.len(),
-                before,
-                threshold
+                "Loaded index (k={k}, w={w}) in {:.2?}; kept {} of {before} minimizers (kdust >= {threshold})",
+                start.elapsed(),
+                index.len(),
             );
         }
-        run_config.index_load_time = Some(index_load_time);
-        return run_with_index(Arc::new(minimizers), &header, &run_config);
+        None => info!("Loaded index (k={k}, w={w}) in {:.2?}", start.elapsed()),
     }
-
-    let (minimizers, header) = load_minimizers_cached(config.minimizers_path)?;
-    let index_load_time = load_start.elapsed();
-    if !quiet {
-        info!(
-            "Loaded index (k={}, w={}) in {:.2?}",
-            header.kmer_length(),
-            header.window_size(),
-            index_load_time
-        );
-    }
-
-    run_config.index_load_time = Some(index_load_time);
-    run_with_index(minimizers, header, &run_config)
+    Ok(index)
 }
 
-/// Filter an already-loaded index against input fastx file(s), returning summary stats.
+/// Filter files with a loaded index and return summary stats.
 ///
-/// Reusable entry point behind the Python bindings... load the index once, call repeatedly.
-/// Does no index-path validation; the index is already in memory.
-pub fn run_with_index(
-    minimizers: Arc<MinimizerSet>,
-    header: &IndexHeader,
-    config: &FilterRunConfig,
+/// `index_label` sets the summary's `index`. `index_load_time` is optional and
+/// included in `*_total` rates. Reuse the index across calls.
+pub fn filter_files(
+    index: Arc<Index>,
+    index_label: &str,
+    index_load_time: Option<Duration>,
+    config: &FilterConfig,
 ) -> Result<FilterSummary> {
-    validate_unit_interval("relative threshold", config.rel_threshold)?;
+    config.validate()?;
 
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
     let tool_version = format!("deacon {}", version);
 
-    let quiet = config.quiet;
-
-    let kmer_length = header.kmer_length();
-    let window_size = header.window_size();
+    let kmer_length = index.kmer_length();
+    let window_size = index.window_size();
 
     let total_threads = if config.threads == 0 {
         std::thread::available_parallelism()
@@ -1388,11 +1345,10 @@ pub fn run_with_index(
         config.threads as usize
     };
 
-    let compressed_output_count = count_compressed_outputs(config);
+    let gzip_output_count = count_gzip_outputs(config);
 
-    // Allocate threads between filtering (rayon) and compression (gzp).
-    // Rayon pool can only be initialised once, so calculate before build_global().
-    let (filtering_threads, compression_threads_per_output) = if compressed_output_count > 0 {
+    // Readers and gzip share the thread budget without using the global pool.
+    let (filtering_threads, compression_threads_per_output) = if gzip_output_count > 0 {
         let compression_threads_total = if config.compression_threads > 0 {
             config.compression_threads as usize
         } else {
@@ -1401,33 +1357,26 @@ pub fn run_with_index(
         let filtering_threads = total_threads
             .saturating_sub(compression_threads_total)
             .max(1);
-        let output_count = compressed_output_count as usize;
+        let output_count = gzip_output_count as usize;
         let threads_per_output = compression_threads_total.div_ceil(output_count).max(1);
         (filtering_threads, threads_per_output)
     } else {
         (total_threads, 0)
     };
 
-    if filtering_threads > 0 {
-        // error is OK here when we initialise a 2nd time in server mode.
-        let _ = rayon::ThreadPoolBuilder::new()
-            .num_threads(filtering_threads)
-            .build_global()
-            .context("Failed to initialise thread pool");
-    }
-
     check_input_paths(config)?;
 
     // Resolve formats and input metadata before opening or truncating outputs
-    let interleaved_stdin = config.input_path == "-" && config.input2_path.as_deref() == Some("-");
+    let interleaved_stdin = config.input_path.as_os_str() == "-"
+        && config
+            .input2_path
+            .as_deref()
+            .is_some_and(|p| p.as_os_str() == "-");
     let interleaved_input = config.interleaved || interleaved_stdin;
     let output_format = resolve_output_format(config);
     // `.cba` names a quality-free CBQ, implying --discard-quality for the output
-    let discard_quality = config.discard_quality
-        || config
-            .output_path
-            .as_deref()
-            .is_some_and(|path| is_cba_path(&path.to_string_lossy()));
+    let discard_quality =
+        config.discard_quality || config.output_path.as_deref().is_some_and(is_cba_path);
     let (layout, input) = open_input(config, interleaved_input)?;
     validate_input_output(&layout, output_format, config)?;
 
@@ -1436,15 +1385,17 @@ pub fn run_with_index(
     let ordered_cbq = config.ordered
         && (layout.format == Format::Cbq || (output_format == Format::Cbq && config.rename));
     let filtering_threads = if ordered_cbq && filtering_threads > 1 {
-        if !quiet {
-            info!("Using 1 filtering thread: --ordered with CBQ input or renamed CBQ output");
-        }
+        info!("Using 1 filtering thread: --ordered with CBQ input or renamed CBQ output");
         1
     } else {
         filtering_threads
     };
 
-    let mode = if config.deplete { "deplete" } else { "search" };
+    let mode = if config.params.deplete {
+        "deplete"
+    } else {
+        "search"
+    };
 
     let mut input_type = String::new();
     let mut options = Vec::<String>::new();
@@ -1457,10 +1408,10 @@ pub fn run_with_index(
     }
     options.push(format!(
         "abs_threshold={}, rel_threshold={}",
-        config.abs_threshold, config.rel_threshold
+        config.params.abs_threshold, config.params.rel_threshold
     ));
-    if config.prefix_length > 0 {
-        options.push(format!("prefix_length={}", config.prefix_length));
+    if config.params.prefix_length > 0 {
+        options.push(format!("prefix_length={}", config.params.prefix_length));
     }
     if config.rename {
         options.push("rename".to_string());
@@ -1472,9 +1423,8 @@ pub fn run_with_index(
         options.push("check-pairs".to_string());
     }
     if config.threads > 0 {
-        let threads_str = if compressed_output_count > 0 {
-            let compression_total =
-                compressed_output_count as usize * compression_threads_per_output;
+        let threads_str = if gzip_output_count > 0 {
+            let compression_total = gzip_output_count as usize * compression_threads_per_output;
             format!(
                 "threads={}({}f+{}c)",
                 config.threads, filtering_threads, compression_total
@@ -1485,15 +1435,13 @@ pub fn run_with_index(
         options.push(threads_str);
     }
 
-    if !quiet {
-        info!(
-            "Deacon v{}; mode: {}; input: {}; options: {}",
-            version,
-            mode,
-            input_type,
-            options.join(", ")
-        );
-    }
+    info!(
+        "Deacon v{}; mode: {}; input: {}; options: {}",
+        version,
+        mode,
+        input_type,
+        options.join(", ")
+    );
 
     let output = match output_format {
         Format::Cbq => {
@@ -1524,7 +1472,7 @@ pub fn run_with_index(
             let writer2 = if let Some(output2) = config.output2_path.as_deref() {
                 if layout.paired {
                     Some(get_writer(
-                        Some(std::path::Path::new(output2)),
+                        Some(output2),
                         config.compression_level,
                         compression_threads_per_output,
                     )?)
@@ -1538,8 +1486,7 @@ pub fn run_with_index(
         }
     };
 
-    // Progress bar setup if not quiet
-    let spinner = if !quiet {
+    let spinner = if config.progress {
         let pb = ProgressBar::with_draw_target(None, ProgressDrawTarget::stderr());
         pb.set_style(
             ProgressStyle::default_spinner()
@@ -1556,10 +1503,7 @@ pub fn run_with_index(
 
     // Create processor
     let processor_config = FilterProcessorConfig {
-        abs_threshold: config.abs_threshold,
-        rel_threshold: config.rel_threshold,
-        prefix_length: config.prefix_length,
-        deplete: config.deplete,
+        params: config.params,
         rename: config.rename,
         discard_quality,
         debug: config
@@ -1575,9 +1519,7 @@ pub fn run_with_index(
         ordered: config.ordered,
     };
     let mut processor = FilterProcessor::new(
-        minimizers,
-        kmer_length,
-        window_size,
+        index,
         &processor_config,
         output,
         spinner.clone(),
@@ -1607,15 +1549,13 @@ pub fn run_with_index(
 
     let final_stats = processor.global_stats.lock();
     let total_seqs = final_stats.total_seqs;
-    let filtered_seqs = final_stats.filtered_seqs;
+    let seqs_removed = final_stats.seqs_removed;
     let total_bp = final_stats.total_bp;
     let output_bp = final_stats.output_bp;
-    let filtered_bp = final_stats.filtered_bp;
+    let bp_removed = final_stats.bp_removed;
 
     drop(final_stats); // Release lock
 
-    // Finish any CBQ stream (writes the embedded index), then drop the
-    // processor so the writers flush
     processor.output.finish()?;
     if let Some(debug) = &processor.debug {
         debug.lock().flush()?;
@@ -1624,7 +1564,7 @@ pub fn run_with_index(
 
     let total_time = start_time.elapsed();
     let filtering_time = filtering_start_time.elapsed();
-    let time_total = config.index_load_time.unwrap_or_default() + total_time;
+    let time_total = index_load_time.unwrap_or_default() + total_time;
 
     // Based on filtering time excluding index loading
     let seqs_per_sec = total_seqs as f64 / filtering_time.as_secs_f64();
@@ -1635,19 +1575,19 @@ pub fn run_with_index(
     let bp_per_sec_total = total_bp as f64 / time_total.as_secs_f64();
 
     // Calculate proportions
-    let filtered_proportion = if total_seqs > 0 {
-        filtered_seqs as f64 / total_seqs as f64
+    let seqs_removed_proportion = if total_seqs > 0 {
+        seqs_removed as f64 / total_seqs as f64
     } else {
         0.0
     };
 
-    let filtered_bp_proportion = if total_bp > 0 {
-        filtered_bp as f64 / total_bp as f64
+    let bp_removed_proportion = if total_bp > 0 {
+        bp_removed as f64 / total_bp as f64
     } else {
         0.0
     };
 
-    let output_seqs = total_seqs - filtered_seqs;
+    let output_seqs = total_seqs - seqs_removed;
     let output_seq_proportion = if total_seqs > 0 {
         output_seqs as f64 / total_seqs as f64
     } else {
@@ -1667,53 +1607,57 @@ pub fn run_with_index(
         pb.set_draw_target(ProgressDrawTarget::hidden());
     }
 
-    if !quiet {
-        info!(
-            "Retained {}/{} sequences ({:.3}%), {}/{} bp ({:.3}%)",
-            output_seqs,
-            total_seqs,
-            output_seq_proportion * 100.0,
-            output_bp,
-            total_bp,
-            output_bp_proportion * 100.0,
-        );
-        info!(
-            "Processed {} in {:.2?} ({}/s)",
-            format_bp_progress(total_bp as f64),
-            filtering_time,
-            format_bp_progress(bp_per_sec)
-        );
-    }
+    info!(
+        "Retained {}/{} sequences ({:.3}%), {}/{} bp ({:.3}%)",
+        output_seqs,
+        total_seqs,
+        output_seq_proportion * 100.0,
+        output_bp,
+        total_bp,
+        output_bp_proportion * 100.0,
+    );
+    info!(
+        "Processed {} in {:.2?} ({}/s)",
+        format_bp_progress(total_bp as f64),
+        filtering_time,
+        format_bp_progress(bp_per_sec)
+    );
 
     let summary = FilterSummary {
         version: tool_version,
-        index: config.index_label.clone(),
-        input: config.input_path.clone(),
-        input2: config.input2_path.clone(),
+        index: index_label.to_string(),
+        input: config.input_path.to_string_lossy().into_owned(),
+        input2: config
+            .input2_path
+            .as_deref()
+            .map(|p| p.to_string_lossy().into_owned()),
         output: config
             .output_path
             .as_deref()
             .map_or("-".to_string(), |p| p.display().to_string()),
-        output2: config.output2_path.clone(),
+        output2: config
+            .output2_path
+            .as_deref()
+            .map(|p| p.to_string_lossy().into_owned()),
         k: kmer_length,
         w: window_size,
-        abs_threshold: config.abs_threshold,
-        rel_threshold: config.rel_threshold,
-        prefix_length: config.prefix_length,
-        deplete: config.deplete,
+        abs_threshold: config.params.abs_threshold,
+        rel_threshold: config.params.rel_threshold,
+        prefix_length: config.params.prefix_length,
+        deplete: config.params.deplete,
         rename: config.rename,
         ordered: config.ordered,
         check_pairs: config.check_pairs,
         seqs_in: total_seqs,
         seqs_out: output_seqs,
         seqs_out_proportion: output_seq_proportion,
-        seqs_removed: filtered_seqs,
-        seqs_removed_proportion: filtered_proportion,
+        seqs_removed,
+        seqs_removed_proportion,
         bp_in: total_bp,
         bp_out: output_bp,
         bp_out_proportion: output_bp_proportion,
-        bp_removed: filtered_bp,
-        bp_removed_proportion: filtered_bp_proportion,
+        bp_removed,
+        bp_removed_proportion,
         time: time_total.as_secs_f64(),
         seqs_per_second: seqs_per_sec as u64,
         bp_per_second: bp_per_sec as u64,
@@ -1726,9 +1670,7 @@ pub fn run_with_index(
             .context(format!("Failed to create summary: {:?}", summary_file))?;
         serde_json::to_writer_pretty(BufWriter::new(file), &summary)
             .context("Failed to write summary")?;
-        if !quiet {
-            info!("Filter summary saved to {:?}", summary_file);
-        }
+        info!("Filter summary saved to {:?}", summary_file);
     }
 
     Ok(summary)
@@ -1842,7 +1784,7 @@ mod tests {
         Ok(out)
     }
 
-    // Test regression for #88: dropped writers must leave complete output.
+    // #88: dropped writers must leave complete output.
     #[cfg(feature = "compression")]
     #[rstest::rstest]
     #[case("out.fq.gz")]

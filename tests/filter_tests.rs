@@ -1978,7 +1978,7 @@ fn test_fastq_parsing_no_trailing_newline() {
     let fasta_content = ">ref\nTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\n";
     fs::write(&fasta_path, fasta_content).unwrap();
 
-    // FASTQ with two short 4bp records (no trailing newline; broken in paraseq < 0.4.3)
+    // Two 4bp FASTQ records without a trailing newline (broken in paraseq < 0.4.3).
     let fastq_content = "@id1\nACGT\n+\n----\n@id2\nACGT\n+\n----";
     fs::write(&fastq_path, fastq_content).unwrap();
 
@@ -2337,7 +2337,7 @@ fn test_rename_numbers_only_retained_records() {
         .filter_map(|line| line.strip_prefix('>')?.parse::<u64>().ok())
         .collect();
 
-    // Records 0,2,4,6,8 match and are depleted; the surviving five number 1..=5
+    // Deplete records 0,2,4,6,8 and number the survivors 1..=5.
     assert_eq!(ids, vec![1, 2, 3, 4, 5]);
 }
 
@@ -2481,7 +2481,7 @@ fn test_ordered_rename_paired_outputs() {
         .assert()
         .success();
 
-    // Renamed paired headers are "@<id> /1" and "@<id> /2"; ids running 1..=3000 in
+    // Renamed paired headers are "@<id> /1" and "@<id> /2", with ids 1..=3000 in
     // file order in both outputs shows order preservation and matching mate numbering
     for (path, suffix) in [(&output_path1, "/1"), (&output_path2, "/2")] {
         let ids: Vec<u64> = fs::read_to_string(path)
@@ -2877,7 +2877,7 @@ fn write_headerless_paired_cbq(path: &Path) {
 }
 
 /// CBQ output block size is --cbq-block-size raised to the CBQ input's own block
-/// size, so ultra-long records always round-trip; FASTX has none to inherit.
+/// size, so ultra-long records round-trip. FASTX has none to inherit.
 #[test]
 fn cbq_output_block_size() {
     use binseq::SequencingRecordBuilder;
@@ -3879,7 +3879,7 @@ fn cbq_headerless_roundtrip() {
     );
 }
 
-/// Ultra-long reads exceed binseq's 1 MiB default block; deacon's larger CBQ
+/// Ultra-long reads exceed binseq's 1 MiB default block. Deacon's larger CBQ
 /// block must roundtrip them
 #[test]
 fn cbq_ultralong_read_roundtrip() {

@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ::deacon::{
-    ComplexityAlgorithm, DEFAULT_CBQ_BLOCK_SIZE_MIB, FilterRunConfig, IndexHeader, MinimizerSet,
-    index_fetch, load_index_from_path_auto, run_with_index,
+    DEFAULT_CBQ_BLOCK_SIZE_MIB, FilterConfig, FilterParams, Index as DeaconIndex, IndexKind,
+    filter_files, index_fetch, load_filter_index,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -19,45 +19,19 @@ fn to_pyerr(e: anyhow::Error) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
 }
 
-fn path_to_string(path: PathBuf, argument: &str) -> PyResult<String> {
-    path.into_os_string().into_string().map_err(|_| {
-        PyValueError::new_err(format!("{argument} must be representable as valid UTF-8"))
-    })
-}
-
 /// A loaded minimizer index, reusable across many `filter` calls.
 #[pyclass(frozen)]
 struct Index {
     label: String,
-    k: u8,
-    w: u8,
-    minimizers: Arc<MinimizerSet>,
+    index: Arc<DeaconIndex>,
 }
 
 impl Index {
     fn load(path: &Path, complexity_threshold: Option<f32>) -> PyResult<Self> {
-        let (mut minimizers, header) = load_index_from_path_auto(path).map_err(to_pyerr)?;
-        // Discard low-complexity index minimizers once at load (kdust); reused across filters.
-        if let Some(threshold) = complexity_threshold {
-            if matches!(minimizers, MinimizerSet::Fuse(_)) {
-                return Err(PyRuntimeError::new_err(
-                    "complexity filtering is not supported on BFF indexes; use an exact index",
-                ));
-            }
-            minimizers
-                .retain_complexity(
-                    header.kmer_length(),
-                    ComplexityAlgorithm::Kdust,
-                    threshold,
-                    false,
-                )
-                .map_err(to_pyerr)?;
-        }
+        let index = load_filter_index(path, complexity_threshold).map_err(to_pyerr)?;
         Ok(Index {
             label: path.to_string_lossy().into_owned(),
-            k: header.kmer_length(),
-            w: header.window_size(),
-            minimizers: Arc::new(minimizers),
+            index: Arc::new(index),
         })
     }
 }
@@ -80,23 +54,22 @@ impl Index {
         output: Option<PathBuf>,
         complexity_threshold: Option<f32>,
     ) -> PyResult<Self> {
-        let out_path = output.unwrap_or_else(|| PathBuf::from(format!("{name}.k{k}w{w}.idx")));
-        index_fetch(name, k, w, Some(&out_path)).map_err(to_pyerr)?;
-        Index::load(&out_path, complexity_threshold)
+        let path = index_fetch(name, k, w, output.as_deref()).map_err(to_pyerr)?;
+        Index::load(&path, complexity_threshold)
     }
 
     /// Index metadata: k, w, format and minimizer/key count.
     fn info<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let format = match &*self.minimizers {
-            MinimizerSet::U64(_) => "exact-u64",
-            MinimizerSet::U128(_) => "exact-u128",
-            MinimizerSet::Fuse(_) => "bff",
+        let format = match self.index.kind() {
+            IndexKind::Exact if self.index.kmer_length() <= 32 => "exact-u64",
+            IndexKind::Exact => "exact-u128",
+            IndexKind::Fuse { .. } => "bff",
         };
         let d = PyDict::new(py);
-        d.set_item("k", self.k)?;
-        d.set_item("w", self.w)?;
+        d.set_item("k", self.index.kmer_length())?;
+        d.set_item("w", self.index.window_size())?;
         d.set_item("format", format)?;
-        d.set_item("count", self.minimizers.len())?;
+        d.set_item("count", self.index.len())?;
         Ok(d)
     }
 
@@ -148,40 +121,20 @@ impl Index {
         quiet: bool,
         debug: Option<PathBuf>,
     ) -> PyResult<Py<PyDict>> {
-        if interleaved && input2.is_some() {
-            return Err(PyValueError::new_err(
-                "interleaved cannot be combined with input2 (interleaved input is a single file/stream)",
-            ));
-        }
-        if abs_threshold == 0 {
-            return Err(PyValueError::new_err("abs_threshold must be at least 1"));
-        }
-        if !(1..=1024).contains(&cbq_block_size) {
-            return Err(PyValueError::new_err(
-                "cbq_block_size must be between 1 and 1024 MiB inclusive",
-            ));
-        }
-
-        let input = path_to_string(input, "input")?;
-        let input2 = input2
-            .map(|path| path_to_string(path, "input2"))
-            .transpose()?;
-        let output2 = output2
-            .map(|path| path_to_string(path, "output2"))
-            .transpose()?;
-
-        let cfg = FilterRunConfig {
+        let cfg = FilterConfig {
             input_path: input,
             input2_path: input2,
             interleaved,
             check_pairs,
             output_path: output,
             output2_path: output2,
-            abs_threshold,
-            rel_threshold,
-            prefix_length,
+            params: FilterParams {
+                abs_threshold,
+                rel_threshold,
+                prefix_length,
+                deplete,
+            },
             summary_path: summary,
-            deplete,
             rename,
             discard_quality,
             ordered,
@@ -190,15 +143,14 @@ impl Index {
             cbq_block_size,
             compression_threads,
             debug,
-            quiet,
-            index_label: self.label.clone(),
-            index_load_time: None,
+            progress: !quiet,
         };
 
-        let mins = Arc::clone(&self.minimizers);
-        let (k, w) = (self.k, self.w);
+        cfg.validate()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let index = Arc::clone(&self.index);
         let summary = py
-            .detach(|| run_with_index(mins, &IndexHeader::new(k, w), &cfg))
+            .detach(|| filter_files(index, &self.label, None, &cfg))
             .map_err(to_pyerr)?;
         Ok(pythonize::pythonize(py, &summary)?
             .cast_into::<PyDict>()?

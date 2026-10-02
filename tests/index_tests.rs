@@ -450,6 +450,70 @@ fn test_index_build_paired_cbq_indexes_both_mates() {
     build_index(&cbq, &cbq_idx);
     build_index(&both, &both_idx);
     assert_eq!(fs::read(&cbq_idx).unwrap(), fs::read(&both_idx).unwrap());
+
+    // Detect CBQ by content.
+    let (cba, cba_idx) = (dir.join("pair.cba"), dir.join("cba.bin"));
+    fs::copy(&cbq, &cba).unwrap();
+    build_index(&cba, &cba_idx);
+    assert_eq!(fs::read(&cba_idx).unwrap(), fs::read(&both_idx).unwrap());
+}
+
+// Sniffing must not consume pipe input.
+#[test]
+#[cfg(unix)]
+fn test_index_diff_fastx_from_named_pipe() {
+    use nix::sys::stat::Mode;
+    use nix::unistd::mkfifo;
+
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    let (fasta, idx) = (dir.join("ref.fa"), dir.join("ref.bin"));
+    let (fifo, out) = (dir.join("ref.fifo"), dir.join("out.bin"));
+    create_diverse_fasta(&fasta);
+    build_index(&fasta, &idx);
+    mkfifo(&fifo, Mode::S_IRWXU).unwrap();
+
+    let (fifo_writer, records) = (fifo.clone(), fs::read(&fasta).unwrap());
+    let writer = std::thread::spawn(move || fs::write(fifo_writer, records).unwrap());
+    let output = cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "diff", "-o"])
+        .arg(&out)
+        .arg(&idx)
+        .arg(&fifo)
+        .output()
+        .unwrap();
+    writer.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(extract_remaining_count(&output.stderr), 0);
+}
+
+// Reject unsupported indexes before FASTX parsing.
+#[test]
+fn test_index_diff_reports_unsupported_index_version() {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    let (fasta, idx) = (dir.join("ref.fa"), dir.join("ref.bin"));
+    let (old, out) = (dir.join("old.bin"), dir.join("out.bin"));
+    create_diverse_fasta(&fasta);
+    build_index(&fasta, &idx);
+    // Empty v2 index.
+    fs::write(&old, [2, 31, 15, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "diff", "-o"])
+        .arg(&out)
+        .arg(&idx)
+        .arg(&old)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "Unsupported index format version: 2",
+        ));
 }
 
 // Diffing one k-mer as raw FASTX or as a w=1 index produces the same result.
@@ -980,7 +1044,7 @@ fn test_index_filter_complexity() {
     .unwrap();
     build_index(&fasta_path, &idx_path);
 
-    let count = |p: &Path| deacon::load_minimizers_from_path(p).unwrap().0.len();
+    let count = |p: &Path| deacon::load_index_from_path(p).unwrap().len();
     let total = count(&idx_path);
     assert!(total > 0);
 

@@ -1,14 +1,14 @@
 /// A vector of values that deduplicates every time it doubles in size.
 ///
 /// This way, the space overhead of duplicate elements is at most a factor 2 compared to the unique elements.
-pub struct DeduppingVec<T: Ord + Clone> {
+pub struct DedupVec<T: Ord + Clone> {
     data: Vec<T>,
     limit: usize,
 }
 
-impl<T: Ord + Clone> Default for DeduppingVec<T> {
+impl<T: Ord + Clone> Default for DedupVec<T> {
     fn default() -> Self {
-        DeduppingVec {
+        DedupVec {
             data: Vec::new(),
             // Only start dedupping once shards hit 1M elements, or ~8MB, for 8GB total memory.
             limit: 1 << 22,
@@ -16,7 +16,7 @@ impl<T: Ord + Clone> Default for DeduppingVec<T> {
     }
 }
 
-impl<T: Ord + Clone> DeduppingVec<T> {
+impl<T: Ord + Clone> DedupVec<T> {
     /// Hand a full staging buffer to its shard, compacting the shard if it has grown
     #[inline]
     pub fn extend(&mut self, values: &mut Vec<T>) {

@@ -1,7 +1,6 @@
 use assert_cmd::cargo;
 use deacon::{
-    ComplexityAlgorithm, FilterKernel, FilterParams, MinimizerSet, RapidHashSet,
-    validate_unit_interval,
+    ComplexityAlgorithm, FilterKernel, FilterParams, Index, MinimizerVec, validate_unit_interval,
 };
 use predicates::str;
 use std::fs;
@@ -35,15 +34,15 @@ fn unit_interval_validation() {
     }
 
     // Library entry points must apply the same validation
-    let mut set = MinimizerSet::U64(RapidHashSet::default());
+    let mut index = Index::from_minimizers(31, 15, MinimizerVec::U64(vec![])).unwrap();
     assert!(
-        set.retain_complexity(31, ComplexityAlgorithm::Kdust, f32::NAN, false)
+        index
+            .retain_complexity(ComplexityAlgorithm::Kdust, f32::NAN, false)
             .is_err()
     );
     assert!(
         FilterKernel::new(
-            31,
-            15,
+            std::sync::Arc::new(index),
             FilterParams {
                 deplete: false,
                 abs_threshold: 1,

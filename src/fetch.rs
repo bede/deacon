@@ -1,16 +1,18 @@
+//! Download prebuilt indexes.
+
 use crate::index_format::INDEX_FORMAT_VERSION;
 use anyhow::{Context, Result};
 use indicatif::ProgressBar;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
-/// Fetch a pre-built index from remote storage
+/// Download an index to `output` or `./{name}.k{k}w{w}.idx` and return its path.
 pub fn fetch(
     index_name: &str,
     kmer_length: u8,
     window_size: u8,
     output: Option<&Path>,
-) -> Result<()> {
+) -> Result<PathBuf> {
     const DEFAULT_REPOSITORY_URL: &str =
         "https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o";
 
@@ -41,7 +43,7 @@ pub fn fetch(
 
     let output_path = output
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from(&filename));
+        .unwrap_or_else(|| PathBuf::from(&filename));
 
     let mut temp_path = output_path.clone();
     temp_path.as_mut_os_string().push(".tmp");
@@ -55,5 +57,5 @@ pub fn fetch(
     pb.finish_and_clear();
     info!("Index saved to {}", output_path.display());
 
-    Ok(())
+    Ok(output_path)
 }
