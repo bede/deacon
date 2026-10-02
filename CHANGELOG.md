@@ -2,24 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
 ### Added
 
-- `deacon index build` also accepts single and paired CBQ (BINSEQ) input.
+- `deacon index build` accepts CBQ (`.cbq`/`.cba`) input
 
 ### Changed
 
 - Much faster, sharded `deacon index build`, using typically less memory. <10s for chm13v2.
 - Improved `deacon filter` performance in some scenarios, most notably for sequences with many minimizer hits to the index, where early exit enables fewer membership queries without changing results. `--debug <PATH>` mode disables early exit. Paired filtering performance also improved for both low-hit and high-hit sequences.
 - Commands that write indexes optimise *k*-mer order for loading speed. Identical *k*-mer sets are always written in the same order.
-- Uses `tracing` crate for stderr logging with timestamps.
+- Breaking Rust API overhaul
+- Uses `tracing` crate for stderr logging with timestamps. Rust callers set verbosity.
 - `deacon filter --debug <PATH>` now writes a TSV (`id`, `len`, `hits`, `minimizers`, `match`, `keep`, `hit_kmers`) with one row per record or pair instead of printing to stderr, compressed by `.gz`, `.zst` or `.xz` extension.
 - Commands that write indexes detect uncaptured stdout and send it to `/dev/null` rather than clobber the current shell.
-- Rust: `FilterDecision` now reports possibly bounded counts as `hit_count_lower_bound` and `minimizer_count_upper_bound`. Adds separate `classify_*()` methods with and without early exit / exact hit counts.
+
+### Fixed
+
+- Validate compression levels before touching outputs
+- Properly surface errors finishing compressed output
 
 ## [0.18.0] - 2026-09-21
 

@@ -38,12 +38,6 @@ fn filter(index: &mut Option<LoadedIndex>, args: &FilterArgs) -> Result<()> {
     let loaded = index.as_ref().is_some_and(|i| {
         i.path == args.index && i.complexity_threshold == args.complexity_threshold
     });
-    if let Some(index) = index.as_ref() {
-        assert_eq!(
-            index.path, args.index,
-            "Currently, the server can only have one index loaded."
-        );
-    }
     if !loaded {
         // Free the old index before loading.
         *index = None;

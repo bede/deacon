@@ -24,7 +24,44 @@ const DEFAULT_BUFFER_SIZE: usize = 64 * 1024;
 /// Default CBQ block size in MiB. Must hold the largest record.
 pub const DEFAULT_CBQ_BLOCK_SIZE_MIB: u16 = 16;
 
-type BoxedWriter = Box<dyn Write + Send>;
+type BoxedWriter = Box<dyn OutputWriter>;
+
+/// Finish FASTX output explicitly to report buffered write errors.
+trait OutputWriter: Write + Send {
+    fn finish(&mut self) -> io::Result<()> {
+        self.flush()
+    }
+}
+
+impl<W: Write + Send> OutputWriter for BufWriter<W> {}
+
+#[cfg(feature = "compression")]
+impl<W: Write + Send + 'static> OutputWriter
+    for gzp::par::compress::ParCompress<'static, gzp::deflate::Gzip, W>
+{
+    fn finish(&mut self) -> io::Result<()> {
+        gzp::ZWriter::finish(self)
+            .map(drop)
+            .map_err(io::Error::other)
+    }
+}
+
+#[cfg(feature = "compression")]
+impl<W: Write + Send> OutputWriter for zstd::stream::write::Encoder<'static, W> {
+    fn finish(&mut self) -> io::Result<()> {
+        self.do_finish()?;
+        self.get_mut().flush()
+    }
+}
+
+#[cfg(feature = "compression")]
+impl<W: Write + Send> OutputWriter for liblzma::write::XzEncoder<W> {
+    fn finish(&mut self) -> io::Result<()> {
+        self.try_finish()?;
+        self.get_mut().flush()
+    }
+}
+
 /// CBQ output is always a named file, no stdout
 type CbqWriter = binseq::BinseqWriter<File>;
 
@@ -327,10 +364,18 @@ impl Output {
         Ok(())
     }
 
-    /// Finish the CBQ embedded index.
+    /// Finish compression streams or the CBQ embedded index.
     fn finish(&self) -> Result<()> {
-        if let Output::Cbq { shared, .. } = self {
-            shared.lock().finish()?;
+        match self {
+            Output::Cbq { shared, .. } => shared.lock().finish()?,
+            Output::Fastx {
+                shared, shared2, ..
+            } => {
+                shared.lock().finish()?;
+                if let Some(shared2) = shared2 {
+                    shared2.lock().finish()?;
+                }
+            }
         }
         Ok(())
     }
@@ -759,6 +804,20 @@ fn validate_input_output(
             config.compression_level
         );
     }
+    #[cfg(feature = "compression")]
+    for path in [
+        config
+            .output_path
+            .as_deref()
+            .filter(|_| output_format == Format::Fastx),
+        config.output2_path.as_deref().filter(|_| layout.paired),
+        config.debug.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        validate_compression_level(path, config.compression_level)?;
+    }
     if config.check_pairs && layout.format == Format::Cbq && !layout.headers {
         anyhow::bail!("--check-pairs requires CBQ input with headers");
     }
@@ -838,20 +897,20 @@ fn write_renamed(
     Ok(())
 }
 
-/// Validate compression level for the given format.
+/// Validate output compression before opening the file.
 #[cfg(feature = "compression")]
-fn validate_compression_level(level: u8, min: u8, max: u8, format: &str) -> Result<()> {
-    if level < min || level > max {
-        Err(anyhow::anyhow!(
-            "Invalid {} compression level {}. Must be between {} and {}.",
-            format,
-            level,
-            min,
-            max
-        ))
-    } else {
-        Ok(())
-    }
+fn validate_compression_level(path: &Path, level: u8) -> Result<()> {
+    let (min, max, format) = match path.to_string_lossy().as_ref() {
+        p if p.ends_with(".gz") => (1, 9, "gzip"),
+        p if p.ends_with(".zst") => (1, 22, "zstd"),
+        p if p.ends_with(".xz") => (0, 9, "xz"),
+        _ => return Ok(()),
+    };
+    anyhow::ensure!(
+        (min..=max).contains(&level),
+        "Invalid {format} compression level {level}. Must be between {min} and {max}.",
+    );
+    Ok(())
 }
 
 /// Check if a path requires gzip compression
@@ -918,7 +977,6 @@ fn get_writer(
     match path.to_string_lossy().as_ref() {
         #[cfg(feature = "compression")]
         p if p.ends_with(".gz") => {
-            validate_compression_level(compression_level, 1, 9, "gzip")?;
             use gzp::deflate::Gzip;
             use gzp::par::compress::ParCompressBuilder;
 
@@ -933,25 +991,15 @@ fn get_writer(
             Ok(Box::new(writer))
         }
         #[cfg(feature = "compression")]
-        p if p.ends_with(".zst") => {
-            validate_compression_level(compression_level, 1, 22, "zstd")?;
-            // `auto_finish()` yields a writer that writes the zstd frame
-            // epilogue on drop. Without it, dropping a bare `Encoder` closes
-            // the file without finalizing the frame, producing a truncated
-            // `.zst` stream (`zstd -t` reports "premature end").
-            Ok(Box::new(
-                zstd::stream::write::Encoder::new(buffered_file, compression_level as i32)?
-                    .auto_finish(),
-            ))
-        }
+        p if p.ends_with(".zst") => Ok(Box::new(zstd::stream::write::Encoder::new(
+            buffered_file,
+            compression_level as i32,
+        )?)),
         #[cfg(feature = "compression")]
-        p if p.ends_with(".xz") => {
-            validate_compression_level(compression_level, 0, 9, "xz")?;
-            Ok(Box::new(liblzma::write::XzEncoder::new(
-                buffered_file,
-                compression_level as u32,
-            )))
-        }
+        p if p.ends_with(".xz") => Ok(Box::new(liblzma::write::XzEncoder::new(
+            buffered_file,
+            compression_level as u32,
+        ))),
         _ => Ok(Box::new(buffered_file)),
     }
 }
@@ -1558,7 +1606,7 @@ pub fn filter_files(
 
     processor.output.finish()?;
     if let Some(debug) = &processor.debug {
-        debug.lock().flush()?;
+        debug.lock().finish()?;
     }
     drop(processor);
 
@@ -1784,7 +1832,39 @@ mod tests {
         Ok(out)
     }
 
-    // #88: dropped writers must leave complete output.
+    /// Simulate a full disk.
+    #[cfg(feature = "compression")]
+    struct FullDisk;
+
+    #[cfg(feature = "compression")]
+    impl Write for FullDisk {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::StorageFull, "disk full"))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    // Buffered write errors must surface at finish.
+    #[cfg(feature = "compression")]
+    #[test]
+    fn test_finish_reports_write_errors() {
+        let writers: [BoxedWriter; 3] = [
+            Box::new(
+                gzp::par::compress::ParCompressBuilder::<gzp::deflate::Gzip>::new()
+                    .from_writer(FullDisk),
+            ),
+            Box::new(zstd::stream::write::Encoder::new(FullDisk, 2).unwrap()),
+            Box::new(liblzma::write::XzEncoder::new(FullDisk, 2)),
+        ];
+        for mut writer in writers {
+            writer.write_all(b"@read0\nACGT\n+\nIIII\n").unwrap();
+            assert!(writer.finish().is_err());
+        }
+    }
+
+    // #88: finished writers must leave complete output.
     #[cfg(feature = "compression")]
     #[rstest::rstest]
     #[case("out.fq.gz")]
@@ -1802,7 +1882,7 @@ mod tests {
             {
                 let mut writer = get_writer(Some(&path), 2, 1).unwrap();
                 writer.write_all(&payload).unwrap();
-                writer.flush().unwrap();
+                writer.finish().unwrap();
             }
 
             let decoded = decode_output(&path).unwrap_or_else(|e| {

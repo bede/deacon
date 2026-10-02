@@ -130,6 +130,42 @@ fn invalid_options_fail_before_outputs_are_touched() {
     assert!(Index::from_minimizers(7, 3, MinimizerVec::U64(vec![1 << 14])).is_err());
 }
 
+#[cfg(feature = "compression")]
+#[rstest::rstest]
+#[case("out.fa.gz", 0)]
+#[case("out.fa.gz", 10)]
+#[case("out.fa.zst", 0)]
+#[case("out.fa.zst", 23)]
+#[case("out.fa.xz", 10)]
+fn invalid_compression_preserves_outputs(#[case] filename: &str, #[case] level: u8) {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("input.fa");
+    let output = directory.path().join("out.fa");
+    let compressed = directory.path().join(filename);
+    fs::write(&input, b">read/1\nACGTACGTACGT\n>read/2\nACGTACGTACGT\n").unwrap();
+    fs::write(&output, b"preserve this").unwrap();
+    fs::write(&compressed, b"preserve this").unwrap();
+    let index = Arc::new(reference_index(7, 3));
+    for slot in 0..3 {
+        let mut config = FilterConfig::new(&input);
+        config.interleaved = true;
+        config.compression_level = level;
+        config.output_path = Some(output.clone());
+        *[
+            &mut config.output_path,
+            &mut config.output2_path,
+            &mut config.debug,
+        ]
+        .into_iter()
+        .nth(slot)
+        .unwrap() = Some(compressed.clone());
+        let error = filter_files(Arc::clone(&index), "reference", None, &config).unwrap_err();
+        assert!(error.to_string().contains("compression level"), "{error:#}");
+        assert_eq!(fs::read(&output).unwrap(), b"preserve this");
+        assert_eq!(fs::read(&compressed).unwrap(), b"preserve this");
+    }
+}
+
 #[test]
 fn repeated_file_filtering_leaves_global_rayon_pool_to_caller() {
     let directory = tempfile::tempdir().unwrap();
