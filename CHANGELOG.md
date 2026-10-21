@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
-## [Unreleased]
+## [0.19.0] - 2026-10-21
 
 ### Added
 
@@ -20,7 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - Rather than write to stderr, `deacon filter --debug <PATH>` writes a TSV (`id`, `len`, `hits`, `minimizers`, `match`, `keep`, `hit_kmers`) with one row per record. Path must end `.tsv`, `.tsv.gz`, `.tsv.zst` or `.tsv.xz`.
 - Commands that write indexes detect uncaptured stdout and send it to `/dev/null` rather than clobber the current shell.
 - `-q`/`--quiet` is now global.
-- Python logs via `logging` (warnings by default). Removed `filter(quiet=…)`. `filter(debug=…)` takes a TSV path.
+- Python logging added via stdlib `logging` module. Removed `filter(quiet=)`, and `filter(debug=)` now takes a TSV path, matching CLI.
 
 ### Fixed
 
