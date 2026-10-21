@@ -54,7 +54,7 @@ impl Index {
         output: Option<PathBuf>,
         complexity_threshold: Option<f32>,
     ) -> PyResult<Self> {
-        let path = index_fetch(name, k, w, output.as_deref()).map_err(to_pyerr)?;
+        let path = index_fetch(name, k, w, output.as_deref(), false).map_err(to_pyerr)?;
         Index::load(&path, complexity_threshold)
     }
 
@@ -94,7 +94,6 @@ impl Index {
         compression_level=2,
         compression_threads=0,
         cbq_block_size=16,
-        quiet=true,
         debug=None,
     ))]
     fn filter(
@@ -118,7 +117,6 @@ impl Index {
         compression_level: u8,
         compression_threads: u16,
         cbq_block_size: u16,
-        quiet: bool,
         debug: Option<PathBuf>,
     ) -> PyResult<Py<PyDict>> {
         let cfg = FilterConfig {
@@ -143,7 +141,7 @@ impl Index {
             cbq_block_size,
             compression_threads,
             debug,
-            progress: !quiet,
+            progress: false,
         };
 
         cfg.validate()
@@ -170,6 +168,10 @@ mod _deacon {
     fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // Fail cleanly (Python exception) on CPUs lacking the compiled SIMD features.
         ensure_simd::ensure_simd();
+        // Forward log events to Python `logging`
+        pyo3_log::Logger::new(m.py(), pyo3_log::Caching::Nothing)?
+            .install()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         m.add("__version__", env!("CARGO_PKG_VERSION"))?;
         Ok(())
     }

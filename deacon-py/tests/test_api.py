@@ -152,6 +152,14 @@ class FilteringTests(unittest.TestCase):
                     threads=1,
                 )
 
+    def test_warnings_reach_python_logging(self):
+        with tempfile.TemporaryDirectory() as directory:
+            empty = Path(directory) / "empty.fastq"
+            empty.write_text("")
+            with self.assertLogs("deacon", "WARNING") as logs:
+                self.index.filter(empty, output=Path(directory) / "out.fastq", threads=1)
+        self.assertIn("Empty input", logs.output[0])
+
     def test_argument_validation(self):
         with self.assertRaisesRegex(ValueError, "abs_threshold"):
             self.index.filter(READS, abs_threshold=0)

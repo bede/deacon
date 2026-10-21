@@ -7,11 +7,13 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 /// Download an index to `output` or `./{name}.k{k}w{w}.idx` and return its path.
+/// `progress` shows a download bar on stderr.
 pub fn fetch(
     index_name: &str,
     kmer_length: u8,
     window_size: u8,
     output: Option<&Path>,
+    progress: bool,
 ) -> Result<PathBuf> {
     const DEFAULT_REPOSITORY_URL: &str =
         "https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o";
@@ -39,7 +41,11 @@ pub fn fetch(
         .and_then(|(_, value)| value.parse::<u64>().ok())
         .unwrap_or(0);
 
-    let pb = ProgressBar::new(content_length);
+    let pb = if progress {
+        ProgressBar::new(content_length)
+    } else {
+        ProgressBar::hidden()
+    };
 
     let output_path = output
         .map(|p| p.to_path_buf())

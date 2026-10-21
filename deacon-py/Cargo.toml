@@ -25,6 +25,9 @@ pyo3 = { version = "0.29", features = ["abi3-py312"] }
 pythonize = "0.29"
 ensure_simd = "0.1.0"
 anyhow = "1"
+pyo3-log = "0.13"
+# Without a tracing subscriber, deacon's events fall back to `log`, which pyo3-log forwards
+tracing = { version = "0.1", features = ["log"] }
 pyo3-introspection = { version = "0.29", optional = true }
 deacon = { path = "..", default-features = false, features = [
     "io",

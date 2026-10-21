@@ -429,8 +429,14 @@ fn process_command(command: Command, quiet: bool) -> Result<(), anyhow::Error> {
                 window_size,
                 output,
             } => {
-                index_fetch(&index_name, kmer_length, window_size, output.as_deref())
-                    .context("Failed to run index fetch command")?;
+                index_fetch(
+                    &index_name,
+                    kmer_length,
+                    window_size,
+                    output.as_deref(),
+                    !quiet,
+                )
+                .context("Failed to run index fetch command")?;
             }
             IndexCommand::Union { inputs, mut output } => {
                 ensure_index_output_is_redirected(&mut output)?;

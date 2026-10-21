@@ -23,6 +23,15 @@ stats = index.filter(
 print(stats["seqs_in"], stats["seqs_out"])
 ```
 
+## Logging
+
+Deacon logs through Python's standard `logging` module under the `deacon` logger. By default only warnings are shown. Enable info messages, such as the summary printed by the CLI, with e.g.:
+
+```python
+import logging
+logging.basicConfig(level=logging.INFO)
+```
+
 ## `Index()`
 
 Load a minimizer index or probabilistic filter from disk. The resulting object may be reused across many `filter` calls.
@@ -87,8 +96,7 @@ def filter(
     threads=8,               # worker threads for filtering
     compression_level=2,     # output compression level
     compression_threads=0,   # threads for output compression (0 = auto)
-    cbq_block_size=16,        # CBQ output block size in MiB (1-1024)
-    quiet=True,              # suppress the progress spinner on stderr
+    cbq_block_size=16,       # CBQ output block size in MiB (1-1024)
     debug=None,              # optional per-record minimizer hit TSV path
 ) -> dict
 ```

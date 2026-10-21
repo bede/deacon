@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - Uses `tracing` crate for stderr logging with timestamps. Rust callers set verbosity.
 - Rather than write to stderr, `deacon filter --debug <PATH>` writes a TSV (`id`, `len`, `hits`, `minimizers`, `match`, `keep`, `hit_kmers`) with one row per record. Path must end `.tsv`, `.tsv.gz`, `.tsv.zst` or `.tsv.xz`.
 - Commands that write indexes detect uncaptured stdout and send it to `/dev/null` rather than clobber the current shell.
+- `-q`/`--quiet` is now global.
+- Python logs via `logging` (warnings by default). Removed `filter(quiet=…)`. `filter(debug=…)` takes a TSV path.
 
 ### Fixed
 
