@@ -243,7 +243,7 @@ Options:
       --debug <PATH>
           Write per-record minimizer hits to TSV (.tsv[.gz|.zst|.xz])
   -q, --quiet
-          Suppress progress reporting
+          Suppress progress and info messages
   -h, --help
           Print help
 ```
@@ -254,7 +254,7 @@ Options:
 $ deacon index -h
 Build, inspect, compose and fetch minimizer indexes
 
-Usage: deacon index <COMMAND>
+Usage: deacon index [OPTIONS] <COMMAND>
 
 Commands:
   build      Index minimizers in a FASTX/CBQ file
@@ -269,7 +269,8 @@ Commands:
   help       Print this message or the help of the given subcommand(s)
 
 Options:
-  -h, --help  Print help
+  -q, --quiet  Suppress progress and info messages
+  -h, --help   Print help
 ```
 
 ```bash
@@ -286,7 +287,7 @@ Options:
   -w <WINDOW_SIZE>         Minimizer window size used for indexing [default: 15]
   -o, --output <OUTPUT>    Path to output file (stdout if not specified)
   -t, --threads <THREADS>  Number of execution threads (0 = auto) [default: 8]
-  -q, --quiet              Suppress progress reporting
+  -q, --quiet              Suppress progress and info messages
   -h, --help               Print help
 ```
 

@@ -26,6 +26,9 @@ struct Cli {
     #[arg(long)]
     /// Execute command using an existing server process
     use_server: bool,
+    /// Suppress progress and info messages
+    #[arg(short = 'q', long = "quiet", global = true, display_order = 998)]
+    quiet: bool,
 }
 
 #[derive(Subcommand, Serialize, Deserialize)]
@@ -266,10 +269,6 @@ struct FilterArgs {
     /// Write per-record minimizer hits to TSV (.tsv[.gz|.zst|.xz])
     #[arg(long = "debug", value_name = "PATH")]
     debug: Option<PathBuf>,
-
-    /// Suppress progress reporting
-    #[arg(short = 'q', long = "quiet", default_value_t = false)]
-    quiet: bool,
 }
 
 impl FilterArgs {
@@ -300,7 +299,7 @@ impl FilterArgs {
             cbq_block_size: self.cbq_block_size,
             compression_threads: self.compression_threads,
             debug: self.debug.clone(),
-            progress: !self.quiet,
+            progress: true,
         }
     }
 }
@@ -325,10 +324,6 @@ struct BuildArgs {
     /// Number of execution threads (0 = auto)
     #[arg(short = 't', long = "threads", default_value_t = 8)]
     threads: u16,
-
-    /// Suppress progress reporting
-    #[arg(short = 'q', long = "quiet")]
-    quiet: bool,
 }
 
 /// Parse and validate the BFF fingerprint width (16 or 32 bits)
@@ -372,19 +367,12 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let quiet = matches!(
-        cli.command,
-        Command::Filter(FilterArgs { quiet: true, .. })
-            | Command::Index {
-                command: IndexCommand::Build(BuildArgs { quiet: true, .. })
-            }
-    );
     tracing_subscriber::fmt()
         .compact()
         .with_target(false)
         .with_writer(std::io::stderr)
         .with_ansi(std::io::stderr().is_terminal())
-        .with_max_level(if quiet { Level::WARN } else { Level::INFO })
+        .with_max_level(if cli.quiet { Level::WARN } else { Level::INFO })
         .with_timer(tracing_subscriber::fmt::time::ChronoLocal::new(
             "%H:%M:%S".to_string(),
         ))
@@ -406,12 +394,12 @@ fn main() -> Result<()> {
         return server::send(&cli.command);
     }
 
-    process_command(cli.command)?;
+    process_command(cli.command, cli.quiet)?;
 
     Ok(())
 }
 
-fn process_command(command: Command) -> Result<(), anyhow::Error> {
+fn process_command(command: Command, quiet: bool) -> Result<(), anyhow::Error> {
     match command {
         Command::Cite => {
             print_citation();
@@ -491,15 +479,18 @@ fn process_command(command: Command) -> Result<(), anyhow::Error> {
             }
         },
         Command::Filter(args) => {
-            filter(&args).context("Failed to run filter command")?;
+            filter(&args, quiet).context("Failed to run filter command")?;
         }
     }
 
     Ok(())
 }
 
-fn filter(args: &FilterArgs) -> Result<()> {
-    let config = args.to_config();
+fn filter(args: &FilterArgs, quiet: bool) -> Result<()> {
+    let config = FilterConfig {
+        progress: !quiet,
+        ..args.to_config()
+    };
     let start = Instant::now();
     let index = load_filter_index(&args.index, args.complexity_threshold)?;
     let load_time = start.elapsed();

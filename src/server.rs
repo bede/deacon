@@ -2,7 +2,7 @@
 
 use crate::{Command, FilterArgs, ServerCommand, process_command};
 use anyhow::{Context, Result};
-use deacon::{FilterConfig, Index, filter_files, load_filter_index};
+use deacon::{Index, filter_files, load_filter_index};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -29,11 +29,8 @@ struct LoadedIndex {
 
 /// Filter with the cached index, reloading if its path changes.
 fn filter(index: &mut Option<LoadedIndex>, args: &FilterArgs) -> Result<()> {
-    // `server start` controls logging, so ignore the request's -q.
-    let config = FilterConfig {
-        progress: true,
-        ..args.to_config()
-    };
+    // Requests carry no -q, `server start` controls logging
+    let config = args.to_config();
     let mut load_time = None;
     let loaded = index.as_ref().is_some_and(|i| {
         i.path == args.index && i.complexity_threshold == args.complexity_threshold
@@ -138,7 +135,7 @@ pub fn start(threads: u16) -> Result<()> {
                     Command::Filter(args) => {
                         filter(&mut index, &args).context("Failed to run filter command")
                     }
-                    command => process_command(command),
+                    command => process_command(command, false),
                 };
                 let reply = match result {
                     Ok(()) => Reply::Done,
