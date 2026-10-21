@@ -249,3 +249,20 @@ fn output2_must_differ_from_output(#[case] output: Option<&str>, #[case] output2
     config.output2_path = Some(output2.into());
     assert!(config.validate().is_err());
 }
+
+#[test]
+fn unwritable_debug_preserves_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let (input, output) = (
+        directory.path().join("in.fa"),
+        directory.path().join("out.fa"),
+    );
+    fs::write(&input, b">r\nACGTACGT\n").unwrap();
+    fs::write(&output, b"keep").unwrap();
+    let mut config = FilterConfig::new(input);
+    config.output_path = Some(output.clone());
+    config.debug = Some(directory.path().join("missing/debug.tsv"));
+    let index = Arc::new(reference_index(7, 3));
+    assert!(filter_files(index, "reference", None, &config).is_err());
+    assert_eq!(fs::read(output).unwrap(), b"keep");
+}

@@ -1508,6 +1508,17 @@ pub fn filter_files(
         options.join(", ")
     );
 
+    // Open debug output first so a bad debug path leaves outputs untouched
+    let debug = config
+        .debug
+        .as_ref()
+        .map(|path| -> Result<DebugWriter> {
+            let mut writer = get_writer(Some(path), config.compression_level, 1)?;
+            writeln!(writer, "id\tlen\thits\tminimizers\tmatch\tkeep\thit_kmers")?;
+            Ok(Arc::new(Mutex::new(writer)))
+        })
+        .transpose()?;
+
     let output = match output_format {
         Format::Cbq => {
             let path = config
@@ -1571,15 +1582,7 @@ pub fn filter_files(
         params: config.params,
         rename: config.rename,
         discard_quality,
-        debug: config
-            .debug
-            .as_ref()
-            .map(|path| -> Result<DebugWriter> {
-                let mut writer = get_writer(Some(path), config.compression_level, 1)?;
-                writeln!(writer, "id\tlen\thits\tminimizers\tmatch\tkeep\thit_kmers")?;
-                Ok(Arc::new(Mutex::new(writer)))
-            })
-            .transpose()?,
+        debug,
         check_pairs: config.check_pairs,
         ordered: config.ordered,
     };
