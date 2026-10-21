@@ -238,3 +238,14 @@ fn paired_non_utf8_paths_work_with_compression_and_summary() {
         serde_json::from_slice(&fs::read(config.summary_path.unwrap()).unwrap()).unwrap();
     assert_eq!(saved["seqs_out"], 2);
 }
+
+#[rstest::rstest]
+#[case(None, "-")]
+#[case(Some("-"), "-")]
+#[case(Some("out.fq"), "out.fq")]
+fn output2_must_differ_from_output(#[case] output: Option<&str>, #[case] output2: &str) {
+    let mut config = FilterConfig::new("in.fq");
+    config.output_path = output.map(Into::into);
+    config.output2_path = Some(output2.into());
+    assert!(config.validate().is_err());
+}

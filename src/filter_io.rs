@@ -482,6 +482,11 @@ impl FilterConfig {
             (1..=1024).contains(&self.cbq_block_size),
             "cbq_block_size must be between 1 and 1024 MiB inclusive"
         );
+        anyhow::ensure!(
+            self.output2_path.as_deref()
+                != Some(self.output_path.as_deref().unwrap_or(Path::new("-"))),
+            "output2 must differ from output; omit output2 to write interleaved pairs"
+        );
         // Prevent a previously valid '--debug input.fq' destroying the input fastx
         if let Some(debug) = &self.debug {
             let name = debug.to_string_lossy();
