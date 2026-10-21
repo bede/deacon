@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use bincode::serde::{decode_from_std_read, encode_into_std_write};
 use serde::{Deserialize, Serialize};
 use std::hash::BuildHasher;
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use tracing::info;
 
@@ -224,18 +224,18 @@ pub(crate) fn load_fuse(reader: &mut impl Read) -> Result<(IndexStorage, IndexHe
 }
 
 /// Load one exact/BFF index, leaving trailing bytes unread.
-/// Use `BufReader` for files and streams.
-pub fn load_index(reader: &mut impl Read) -> Result<crate::Index> {
-    let mut magic = [0u8; 4];
-    reader
-        .read_exact(&mut magic)
+pub fn load_index(reader: &mut impl BufRead) -> Result<crate::Index> {
+    let magic = reader
+        .fill_buf()
         .context("Failed to read index header, file may be empty or truncated")?;
-    // Re-chain the consumed magic bytes ahead of the stream
-    let mut combined = (&magic[..]).chain(reader);
+    anyhow::ensure!(
+        !magic.is_empty(),
+        "Failed to read index header, file may be empty or truncated"
+    );
     let (minimizers, header) = if magic.starts_with(b"DBF") {
-        load_fuse(&mut combined)?
+        load_fuse(reader)?
     } else {
-        load_minimizers(&mut combined)?
+        load_minimizers(reader)?
     };
     Ok(crate::Index { minimizers, header })
 }
