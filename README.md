@@ -147,7 +147,7 @@ deacon filter -d -R panhuman-1.k31w15.idx reads.fq.gz > filt.fq
 deacon filter -d -p 1000 panhuman-1.k31w15.idx reads.fq.gz > filt.fq
 
 # Output FASTA regardless of input format (discards quality scores)
-deacon filter -d -f panhuman-1.k31w15.idx reads.fq.gz > filt.fa
+deacon filter -d --discard-quality panhuman-1.k31w15.idx reads.fq.gz > filt.fa
 
 # Write per-record minimizer hits to a TSV
 deacon filter -d --debug hits.tsv panhuman-1.k31w15.idx reads.fq.gz > filt.fq
@@ -167,11 +167,11 @@ deacon index build genome.fa.gz > genome.idx
 zcat *.fa.gz | deacon index build - > genomes.idx
 ```
 
-`deacon index build` accepts either a FASTA/FASTQ file or a stdin stream (`-`), enabling convenient indexing of compressed sequences in one or many files with a single step. Indexing a human genome takes a few seconds. Indexing uses 2-4x as much RAM as filtering. For indexing large collections approaching terabase scale—such as mammalian pangenomes—it may be practical to index genomes individually in parallel and later combine them using the `deacon index union` set operation, described below.
+`deacon index build` accepts a FASTA/FASTQ or CBQ file, or a FASTA/FASTQ stdin stream (`-`), enabling convenient indexing of compressed sequences in one or many files with a single step. Indexing a human genome takes a few seconds. Indexing uses 2-4x as much RAM as filtering. For indexing large collections approaching terabase scale—such as mammalian pangenomes—it may be practical to index genomes individually in parallel and later combine them using the `deacon index union` set operation, described below.
 
 > [!NOTE]
 >
-Indexing a 3 Gbp human genome takes ~5s and 8 GB of RAM with default parameters
+> Indexing a 3 Gbp human genome takes ~5s and 8 GB of RAM with default parameters
 
 #### Set operations
 
@@ -202,8 +202,8 @@ Usage: deacon filter [OPTIONS] <INDEX> [INPUT] [INPUT2]
 
 Arguments:
   <INDEX>   Path to minimizer index file
-  [INPUT]   Optional path to fastx or binseq cbq file (or - for stdin) [default: -]
-  [INPUT2]  Optional path to second paired fastx file
+  [INPUT]   FASTX/CBQ input path (- for stdin) [default: -]
+  [INPUT2]  Second paired FASTX input path
 
 Options:
   -a, --abs-threshold <ABS_THRESHOLD>
@@ -219,9 +219,9 @@ Options:
   -R, --rename
           Replace sequence headers with incrementing numbers (deterministic with --ordered)
   -o, --output <OUTPUT>
-          Path to output file (fastx to stdout by default; detects .gz, .zst, .xz, .cbq, .cba)
+          Output path (FASTX to stdout by default, detects .gz, .zst, .xz, .cbq, .cba)
   -O, --output2 <OUTPUT2>
-          Optional path to second paired output fastx file (detects .gz, .zst, .xz)
+          Second paired FASTX output path (detects .gz, .zst, .xz)
   -s, --summary <SUMMARY>
           Path to JSON summary output file
   -t, --threads <THREADS>
@@ -229,11 +229,11 @@ Options:
       --compression-threads <COMPRESSION_THREADS>
           Number of threads used for output compression (0 = auto) [default: 0]
       --compression-level <COMPRESSION_LEVEL>
-          Output compression level (1-9 for gz & xz; 1-22 for zstd including cbq) [default: 2]
+          Output compression level (1-9 for gz & xz, 1-22 for zstd including CBQ) [default: 2]
       --cbq-block-size <CBQ_BLOCK_SIZE>
-          cbq output block size in MiB (or cbq input block size if higher) [default: 16]
+          CBQ output block size in MiB (raised to input block size if larger) [default: 16]
       --discard-quality
-          Emit fasta or quality-free cbq regardless of input format
+          Emit FASTA or quality-free CBQ
       --interleaved
           Treat INPUT as interleaved paired records from single file or stdin
       --ordered
@@ -241,7 +241,7 @@ Options:
       --check-pairs
           Validate paired record names (Illumina CASAVA or /1 /2 suffixes)
       --debug <PATH>
-          Write per-record minimizer hits to TSV
+          Write per-record minimizer hits to TSV (.tsv[.gz|.zst|.xz])
   -q, --quiet
           Suppress progress reporting
   -h, --help
@@ -257,11 +257,11 @@ Build, inspect, compose and fetch minimizer indexes
 Usage: deacon index <COMMAND>
 
 Commands:
-  build      Index minimizers contained within a fastx file
+  build      Index minimizers in a FASTX/CBQ file
   union      Combine multiple minimizer indexes (A ∪ B…)
   intersect  Intersect multiple minimizer indexes (A ∩ B…)
   diff       Subtract minimizers in one index from another (A - B)
-  dump       Dump minimizer index to fasta
+  dump       Dump minimizer index to FASTA
   filter     Discard minimizers below a complexity threshold
   info       Show index information
   freeze     Freeze an index into a binary fuse filter (BFF) index (k<=32)
@@ -270,17 +270,16 @@ Commands:
 
 Options:
   -h, --help  Print help
-
 ```
 
 ```bash
 $ deacon index build -h
-Index minimizers contained within a fastx file
+Index minimizers in a FASTX/CBQ file
 
 Usage: deacon index build [OPTIONS] <INPUT>
 
 Arguments:
-  <INPUT>  Path to input fastx file (or - for stdin; supports gz, zst and xz compression)
+  <INPUT>  FASTX/CBQ input path (- for stdin)
 
 Options:
   -k <KMER_LENGTH>         K-mer length used for indexing (k+w-1 must be <= 96 and odd) [default: 31]

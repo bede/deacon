@@ -48,6 +48,7 @@ enum Command {
 
 #[derive(Subcommand, Serialize, Deserialize)]
 enum ServerCommand {
+    /// Start the server
     Start {
         /// Number of execution threads (0 = auto)
         #[arg(short = 't', long = "threads", default_value_t = 8)]
@@ -55,12 +56,13 @@ enum ServerCommand {
     },
     /// Print whether a server is running and the current index.
     Status,
+    /// Stop the running server
     Stop,
 }
 
 #[derive(Subcommand, Serialize, Deserialize)]
 enum IndexCommand {
-    /// Index minimizers contained within a fastx file
+    /// Index minimizers in a FASTX/CBQ file
     Build(BuildArgs),
     /// Combine multiple minimizer indexes (A ∪ B…)
     Union {
@@ -88,7 +90,7 @@ enum IndexCommand {
         #[arg(required = true)]
         first: PathBuf,
 
-        /// Path to second index file or FASTX file (or - for stdin when using FASTX)
+        /// Second index or FASTX path (- for FASTX stdin)
         #[arg(required = true)]
         second: PathBuf,
 
@@ -104,7 +106,7 @@ enum IndexCommand {
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
     },
-    /// Dump minimizer index to fasta
+    /// Dump minimizer index to FASTA
     Dump {
         /// Path to index file
         index: PathBuf,
@@ -118,6 +120,7 @@ enum IndexCommand {
         /// Path to index file
         index: PathBuf,
 
+        /// Complexity measure
         #[arg(short = 'a', long = "algorithm", value_enum, default_value_t = ComplexityAlgorithm::Kdust)]
         algorithm: ComplexityAlgorithm,
 
@@ -177,11 +180,11 @@ struct FilterArgs {
     /// Path to minimizer index file
     index: PathBuf,
 
-    /// Optional path to fastx or binseq cbq file (or - for stdin)
+    /// FASTX/CBQ input path (- for stdin)
     #[arg(default_value = "-")]
     input: PathBuf,
 
-    /// Optional path to second paired fastx file
+    /// Second paired FASTX input path
     input2: Option<PathBuf>,
 
     /// Minimum absolute number of distinct minimizer hits for a match
@@ -212,7 +215,7 @@ struct FilterArgs {
     #[arg(short = 'o', long = "output")]
     output: Option<PathBuf>,
 
-    /// Optional path to second paired output fastx file (detects .gz, .zst, .xz)
+    /// Second paired FASTX output path (detects .gz, .zst, .xz)
     #[arg(short = 'O', long = "output2")]
     output2: Option<PathBuf>,
 
@@ -228,11 +231,11 @@ struct FilterArgs {
     #[arg(long = "compression-threads", default_value_t = 0)]
     compression_threads: u16,
 
-    /// Output compression level (1-9 for gz & xz, 1-22 for zstd including cbq)
+    /// Output compression level (1-9 for gz & xz, 1-22 for zstd including CBQ)
     #[arg(long = "compression-level", default_value_t = 2)]
     compression_level: u8,
 
-    /// cbq output block size in MiB (or cbq input block size if higher)
+    /// CBQ output block size in MiB (raised to input block size if larger)
     #[arg(
         long = "cbq-block-size",
         default_value_t = DEFAULT_CBQ_BLOCK_SIZE_MIB,
@@ -240,7 +243,7 @@ struct FilterArgs {
     )]
     cbq_block_size: u16,
 
-    /// Emit fasta or quality-free cbq regardless of input format
+    /// Emit FASTA or quality-free CBQ
     #[arg(long = "discard-quality", default_value_t = false)]
     discard_quality: bool,
 
@@ -304,7 +307,7 @@ impl FilterArgs {
 
 #[derive(Args, Serialize, Deserialize)]
 struct BuildArgs {
-    /// Input FASTX path (- for stdin, supports gz, zst and xz compression)
+    /// FASTX/CBQ input path (- for stdin)
     input: PathBuf,
 
     /// K-mer length used for indexing (k+w-1 must be <= 96 and odd)
@@ -459,7 +462,7 @@ fn process_command(command: Command) -> Result<(), anyhow::Error> {
                 threads,
             } => {
                 ensure_index_output_is_redirected(&mut output)?;
-                index_diff(&first, &second, window_size, threads, output.as_deref())
+                index_diff(&first, &second, output.as_deref(), window_size, threads)
                     .context("Failed to run index diff command")?;
             }
             IndexCommand::Dump { index, output } => {

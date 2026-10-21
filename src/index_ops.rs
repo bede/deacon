@@ -807,9 +807,9 @@ fn stream_diff_fastx(
 pub fn diff(
     first: &Path,
     second: &Path,
+    output: Option<&Path>,
     window_size: Option<u8>,
     threads: u16,
-    output: Option<&Path>,
 ) -> Result<()> {
     let start_time = Instant::now();
     let version: String = env!("CARGO_PKG_VERSION").to_string();
