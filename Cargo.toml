@@ -40,7 +40,7 @@ niffler = { version = "3.0.1", default-features = false, optional = true }
 paraseq = { version = "0.6.0", default-features = false, features = ["anyhow", "niffler"], optional = true }
 # CBQ support. Defaults disabled since we don't need binseq's own paraseq integration
 # We need binseq >=0.9.6 for safe canonicalisation of non-N ambiguous bases to N
-binseq = { version = "0.9.6", default-features = false, features = ["anyhow"], optional = true }
+binseq = { version = "0.10.0", default-features = false, features = ["anyhow"], optional = true }
 ensure_simd = { version = "0.1.0", optional = true }
 
 # Compression deps (optional)
@@ -61,9 +61,9 @@ too_many_arguments = "allow"
 assert_cmd = "2.0"
 predicates = "3.0"
 tempfile = "3.20"
-rstest = "0.27"
+rstest = "0.28"
 nix = { version = "0.31", features = ["fs"] }
-binseq = { version = "0.9.6", default-features = false, features = ["anyhow"] }
+binseq = { version = "0.10.0", default-features = false, features = ["anyhow"] }
 
 [features]
 scalar = ["simd-minimizers/scalar", "packed-seq/scalar"]
