@@ -186,6 +186,33 @@ fn test_filter_to_file() {
 }
 
 #[test]
+fn test_filter_debug_requires_tsv() {
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    let bin_path = temp_dir.path().join("ref.bin");
+
+    create_test_fasta_sc2(&fasta_path);
+    build_index(&fasta_path, &bin_path);
+    fs::write(&fastq_path, "@r\nACGT\n+\n~~~~\n").unwrap();
+
+    // 0.18-style `--debug` flag would otherwise take the input as its path
+    cargo::cargo_bin_cmd!("deacon")
+        .arg("filter")
+        .arg(&bin_path)
+        .arg("--debug")
+        .arg(&fastq_path)
+        .write_stdin("")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("must end in .tsv"));
+    assert_eq!(
+        fs::read_to_string(&fastq_path).unwrap(),
+        "@r\nACGT\n+\n~~~~\n"
+    );
+}
+
+#[test]
 fn test_filter_debug_tsv() {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("ref.fasta");

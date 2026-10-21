@@ -132,21 +132,22 @@ fn invalid_options_fail_before_outputs_are_touched() {
 
 #[cfg(feature = "compression")]
 #[rstest::rstest]
-#[case("out.fa.gz", 0)]
-#[case("out.fa.gz", 10)]
-#[case("out.fa.zst", 0)]
-#[case("out.fa.zst", 23)]
-#[case("out.fa.xz", 10)]
-fn invalid_compression_preserves_outputs(#[case] filename: &str, #[case] level: u8) {
+#[case("gz", 0)]
+#[case("gz", 10)]
+#[case("zst", 0)]
+#[case("zst", 23)]
+#[case("xz", 10)]
+fn invalid_compression_preserves_outputs(#[case] extension: &str, #[case] level: u8) {
     let directory = tempfile::tempdir().unwrap();
     let input = directory.path().join("input.fa");
     let output = directory.path().join("out.fa");
-    let compressed = directory.path().join(filename);
     fs::write(&input, b">read/1\nACGTACGTACGT\n>read/2\nACGTACGTACGT\n").unwrap();
     fs::write(&output, b"preserve this").unwrap();
-    fs::write(&compressed, b"preserve this").unwrap();
     let index = Arc::new(reference_index(7, 3));
     for slot in 0..3 {
+        let stem = if slot == 2 { "out.tsv" } else { "out.fa" };
+        let compressed = directory.path().join(format!("{stem}.{extension}"));
+        fs::write(&compressed, b"preserve this").unwrap();
         let mut config = FilterConfig::new(&input);
         config.interleaved = true;
         config.compression_level = level;

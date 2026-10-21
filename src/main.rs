@@ -260,7 +260,7 @@ struct FilterArgs {
     #[arg(long = "check-pairs", default_value_t = false)]
     check_pairs: bool,
 
-    /// Write per-record minimizer hits to TSV
+    /// Write per-record minimizer hits to TSV (.tsv[.gz|.zst|.xz])
     #[arg(long = "debug", value_name = "PATH")]
     debug: Option<PathBuf>,
 

@@ -12,12 +12,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ### Changed
 
-- Much faster, sharded `deacon index build`, using typically less memory. <10s for chm13v2.
+- Much faster, sharded `deacon index build`, using typically less memory. <5s for chm13v2 on M5.
 - Improved `deacon filter` performance in some scenarios, most notably for sequences with many minimizer hits to the index, where early exit enables fewer membership queries without changing results. `--debug <PATH>` mode disables early exit. Paired filtering performance also improved for both low-hit and high-hit sequences.
 - Commands that write indexes optimise *k*-mer order for loading speed. Identical *k*-mer sets are always written in the same order.
 - Breaking Rust API overhaul
 - Uses `tracing` crate for stderr logging with timestamps. Rust callers set verbosity.
-- `deacon filter --debug <PATH>` now writes a TSV (`id`, `len`, `hits`, `minimizers`, `match`, `keep`, `hit_kmers`) with one row per record or pair instead of printing to stderr, compressed by `.gz`, `.zst` or `.xz` extension.
+- Rather than write to stderr, `deacon filter --debug <PATH>` writes a TSV (`id`, `len`, `hits`, `minimizers`, `match`, `keep`, `hit_kmers`) with one row per record. Path must end `.tsv`, `.tsv.gz`, `.tsv.zst` or `.tsv.xz`.
 - Commands that write indexes detect uncaptured stdout and send it to `/dev/null` rather than clobber the current shell.
 
 ### Fixed

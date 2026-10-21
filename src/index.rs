@@ -9,7 +9,9 @@ use std::hash::BuildHasher;
 pub enum IndexKind {
     Exact,
     /// No false negatives. False-positive rate ~2^-fingerprint_bits per query.
-    Fuse { fingerprint_bits: u8 },
+    Fuse {
+        fingerprint_bits: u8,
+    },
 }
 
 /// Minimizer index with validated k/w. Share across workers with `Arc<Index>`.
