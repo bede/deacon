@@ -621,65 +621,56 @@ impl FastxChunkParser {
     /// Scan pending buffer for complete FASTQ records (4 newline-delimited lines each).
     fn scan_fastq(&mut self) -> Result<Vec<FastxRecord>, String> {
         let mut records = Vec::new();
-
+        let buf = &self.pending;
+        let mut start = self.record_start;
         loop {
-            // Find the next newline starting from where we left off scanning
-            let search_start = self.record_start
-                + if self.newlines_in_partial == 0 {
-                    0
-                } else {
-                    // We need to skip past the newlines we've already counted
-                    let mut skip = self.record_start;
-                    let mut found = 0u8;
-                    for &b in &self.pending[self.record_start..] {
-                        skip += 1;
-                        if b == b'\n' {
-                            found += 1;
-                            if found == self.newlines_in_partial {
-                                break;
-                            }
-                        }
+            // Skip blank lines per record, independent of chunk splits
+            while start < buf.len() && (buf[start] == b'\n' || buf[start] == b'\r') {
+                start += 1;
+            }
+            let mut ends = [0usize; 4];
+            let mut pos = start;
+            let mut found = 0;
+            while found < 4 {
+                match memchr::memchr(b'\n', &buf[pos..]) {
+                    Some(i) => {
+                        ends[found] = pos + i;
+                        pos += i + 1;
+                        found += 1;
                     }
-                    skip - self.record_start
-                };
-
-            // Count remaining newlines needed to complete a record
-            let needed = 4 - self.newlines_in_partial;
-            let mut pos = search_start;
-            let mut found = 0u8;
-
-            for &b in &self.pending[search_start..] {
-                pos += 1;
-                if b == b'\n' {
-                    found += 1;
-                    if found == needed {
-                        break;
-                    }
+                    None => break,
                 }
             }
-
-            if found < needed {
-                // Not enough newlines for a complete record
-                self.newlines_in_partial += found;
+            if found < 4 {
+                self.newlines_in_partial = found as u8;
                 break;
             }
-
-            // We have a complete 4-line record from record_start..pos
-            let record_bytes = &self.pending[self.record_start..pos];
-            let record = Self::parse_fastq_record(record_bytes)?;
-            records.push(record);
-
-            // Skip any blank lines between records
-            let mut next_start = pos;
-            while next_start < self.pending.len()
-                && (self.pending[next_start] == b'\n' || self.pending[next_start] == b'\r')
-            {
-                next_start += 1;
+            let line = |s: usize, e: usize| {
+                let l = &buf[s..e];
+                l.strip_suffix(b"\r").unwrap_or(l)
+            };
+            let header_line = line(start, ends[0]);
+            let seq_line = line(ends[0] + 1, ends[1]);
+            let sep_line = line(ends[1] + 1, ends[2]);
+            let qual_line = line(ends[2] + 1, ends[3]);
+            if header_line.first() != Some(&b'@') {
+                return Err("Invalid FASTQ record: header must start with '@'".to_string());
             }
-
-            self.record_start = next_start;
+            if sep_line.first() != Some(&b'+') {
+                return Err("Invalid FASTQ record: third line must start with '+'".to_string());
+            }
+            if qual_line.len() != seq_line.len() {
+                return Err("Invalid FASTQ record: sequence and quality lengths differ".to_string());
+            }
+            records.push(FastxRecord {
+                header: header_line[1..].to_vec(),
+                seq: seq_line.to_vec(),
+                qual: Some(qual_line.to_vec()),
+            });
+            start = pos;
             self.newlines_in_partial = 0;
         }
+        self.record_start = start;
 
         // Compact: remove consumed data from pending
         if self.record_start > 0 {
@@ -688,53 +679,6 @@ impl FastxChunkParser {
         }
 
         Ok(records)
-    }
-
-    /// Parse a single FASTQ record from a byte slice containing exactly 4 lines (with newlines).
-    fn parse_fastq_record(data: &[u8]) -> Result<FastxRecord, String> {
-        let mut lines = [0usize; 5]; // start offsets of each line, plus end
-        let mut li = 0;
-        lines[0] = 0;
-
-        for (i, &b) in data.iter().enumerate() {
-            if b == b'\n' {
-                li += 1;
-                if li <= 4 {
-                    lines[li] = i + 1;
-                }
-            }
-        }
-
-        let line = |n: usize| -> &[u8] {
-            let start = lines[n];
-            let mut end = if n < li { lines[n + 1] - 1 } else { data.len() };
-            // Strip \r
-            if end > start && data[end - 1] == b'\r' {
-                end -= 1;
-            }
-            &data[start..end]
-        };
-
-        let header_line = line(0);
-        let seq_line = line(1);
-        let sep_line = line(2);
-        let qual_line = line(3);
-
-        if header_line.first() != Some(&b'@') {
-            return Err("Invalid FASTQ record: header must start with '@'".to_string());
-        }
-        if sep_line.first() != Some(&b'+') {
-            return Err("Invalid FASTQ record: third line must start with '+'".to_string());
-        }
-        if qual_line.len() != seq_line.len() {
-            return Err("Invalid FASTQ record: sequence and quality lengths differ".to_string());
-        }
-
-        Ok(FastxRecord {
-            header: header_line[1..].to_vec(),
-            seq: seq_line.to_vec(),
-            qual: Some(qual_line.to_vec()),
-        })
     }
 
     /// Scan pending buffer for complete FASTA records (delimited by \n>).
@@ -1030,6 +974,19 @@ mod tests {
         assert_eq!(records[1].header, b"r2");
         assert_eq!(records[1].seq, b"TGCA");
         assert_eq!(records[1].qual.as_deref(), Some(b"####".as_slice()));
+    }
+
+    #[test]
+    fn fastq_parser_skips_blank_lines_at_any_split() {
+        let input = b"\n@r1\nACGT\n+\n!!!!\n\n\r\n@r2\nTGCA\n+\n####\n\n";
+        for split in 0..=input.len() {
+            let mut parser = FastxChunkParser::new();
+            let mut records = parser.push_chunk(&input[..split]).unwrap();
+            records.append(&mut parser.push_chunk(&input[split..]).unwrap());
+            records.append(&mut parser.finish().unwrap());
+            assert_eq!(records.len(), 2, "split at {split}");
+            assert_eq!(records[1].seq, b"TGCA", "split at {split}");
+        }
     }
 
     #[test]
