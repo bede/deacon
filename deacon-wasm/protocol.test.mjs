@@ -13,10 +13,10 @@ test("protocol message types are stable and unique", () => {
     RESET: "reset",
     RESET_DONE: "reset_done",
     FILTER: "filter",
+    PULL: "pull",
     PROGRESS: "progress",
     STAGE: "stage",
     OUTPUT_CHUNK_BATCH: "output_chunk_batch",
-    FILTERED_DONE: "filtered_done",
   });
 
   const values = Object.values(MSG);
