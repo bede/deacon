@@ -7,7 +7,7 @@ edition = "2024"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-deacon = { path = "..", default-features = false, features = ["scalar", "gz"] }
+deacon = { path = "..", default-features = false, features = ["scalar"] }
 wasm-bindgen = "0.2.113"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["console"] }

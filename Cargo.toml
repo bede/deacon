@@ -48,6 +48,7 @@ liblzma = { version = "0.4", optional = true, features = ["static"] }
 flate2 = { version = "1.1", features = ["zlib-rs"], optional = true }
 zstd = { version = "0.14", optional = true }
 gzp = { version = "2.0", default-features = false, features = ["deflate_rust"], optional = true }
+sirocco = { version = "0.2", optional = true }
 minreq = { version = "3", features = ["https-rustls-probe"], optional = true }
 hashbrown = "0.17.1"
 rand = { version = "0.10.3", optional = true }
@@ -64,6 +65,7 @@ tempfile = "3.20"
 rstest = "0.28"
 nix = { version = "0.31", features = ["fs"] }
 binseq = { version = "0.10.0", default-features = false, features = ["anyhow"] }
+flate2 = "1.1"
 
 [features]
 scalar = ["simd-minimizers/scalar", "packed-seq/scalar"]
@@ -71,10 +73,10 @@ scalar = ["simd-minimizers/scalar", "packed-seq/scalar"]
 io = ["rayon", "parking_lot", "indicatif", "paraseq", "binseq", "niffler", "serde_json", "rand"]
 # CLI
 cli = ["io", "clap", "ensure_simd", "tracing-subscriber"]
-# Disable for faster builds.
-compression = ["io", "zstd", "liblzma", "flate2", "gzp", "paraseq/default"]
-# Use to still handle .gz files when "compression" is not enabled.
-gz = ["niffler/gz", "flate2", "flate2/default"]
+# Pure Rust gz i/o
+gz = ["io", "sirocco", "niffler/gz", "flate2", "gzp"]
+# zstd, xz and bzip2 (disable for faster builds)
+compression = ["gz", "zstd", "liblzma", "paraseq/default"]
 # Enable fetching indexes from remote storage
 fetch = ["minreq", "indicatif"]
 default = ["compression", "fetch", "cli"]

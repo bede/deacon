@@ -35,7 +35,7 @@ trait OutputWriter: Write + Send {
 
 impl<W: Write + Send> OutputWriter for BufWriter<W> {}
 
-#[cfg(feature = "compression")]
+#[cfg(feature = "gz")]
 impl<W: Write + Send + 'static> OutputWriter
     for gzp::par::compress::ParCompress<'static, gzp::deflate::Gzip, W>
 {
@@ -625,12 +625,83 @@ fn create_paraseq_reader(path: Option<&Path>) -> Result<Reader<Box<dyn std::io::
             Reader::new(stdin_reader)
                 .map_err(|e| anyhow::anyhow!("Failed to create stdin reader: {}", e))
         }
+        #[cfg(feature = "gz")]
+        Some(p) if is_gzip_file(p)? => {
+            let file = std::io::BufReader::with_capacity(1 << 20, File::open(p)?);
+            Reader::new(Box::new(GzReader::new(file)) as Box<_>)
+                .map_err(|e| anyhow::anyhow!("Failed to open file {}: {}", p.display(), e))
+        }
         Some(p) => {
             // ReaderBuilder handles compression detection for files (internally uses niffler)
             paraseq::ReaderBuilder::path(p)
                 .build()
                 .map_err(|e| anyhow::anyhow!("Failed to open file {}: {}", p.display(), e))
         }
+    }
+}
+
+/// Sniff gz magic bytes
+#[cfg(feature = "gz")]
+fn is_gzip_file(path: &Path) -> Result<bool> {
+    if is_special_input_path(path) {
+        return Ok(false);
+    }
+    let mut magic = Vec::with_capacity(2);
+    File::open(path)?.take(2).read_to_end(&mut magic)?;
+    Ok(magic == [0x1f, 0x8b])
+}
+
+/// Decodes concatenated gzip 'members' (inc bgzf) with sirocco, reusing single decoder
+#[cfg(feature = "gz")]
+struct GzReader<R> {
+    inner: R,
+    decoder: Box<sirocco::inflate::Decoder>,
+    buf: Vec<u8>,
+    pending: std::ops::Range<usize>,
+    done: bool,
+    full: bool,
+}
+
+#[cfg(feature = "gz")]
+impl<R: std::io::BufRead> GzReader<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            decoder: Box::new(sirocco::inflate::Decoder::new(sirocco::Format::Gzip)),
+            buf: vec![0; 256 * 1024],
+            pending: 0..0,
+            done: false,
+            full: false,
+        }
+    }
+}
+
+#[cfg(feature = "gz")]
+impl<R: std::io::BufRead> Read for GzReader<R> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if out.is_empty() {
+            return Ok(0);
+        }
+        while self.pending.is_empty() {
+            if self.full {
+                self.decoder.make_room(&mut self.buf);
+            }
+            let input = self.inner.fill_buf()?;
+            let eof = input.is_empty();
+            if eof && self.done {
+                return Ok(0);
+            }
+            let base = self.buf.as_ptr() as usize;
+            let p = self.decoder.decompress(input, &mut self.buf, eof)?;
+            let start = p.output.as_ptr() as usize - base;
+            self.pending = start..start + p.output.len();
+            (self.done, self.full) = (p.done, p.full);
+            self.inner.consume(p.consumed);
+        }
+        let n = self.pending.len().min(out.len());
+        out[..n].copy_from_slice(&self.buf[self.pending.start..][..n]);
+        self.pending.start += n;
+        Ok(n)
     }
 }
 
@@ -821,7 +892,7 @@ fn validate_input_output(
             config.compression_level
         );
     }
-    #[cfg(feature = "compression")]
+    #[cfg(feature = "gz")]
     for path in [
         config
             .output_path
@@ -915,7 +986,7 @@ fn write_renamed(
 }
 
 /// Validate output compression before opening the file.
-#[cfg(feature = "compression")]
+#[cfg(feature = "gz")]
 fn validate_compression_level(path: &Path, level: u8) -> Result<()> {
     let (min, max, format) = match path.to_string_lossy().as_ref() {
         p if p.ends_with(".gz") => (1, 9, "gzip"),
@@ -969,7 +1040,7 @@ fn format_bp_progress(bp: f64) -> String {
 }
 
 /// Return a suitable writer for the output path extension
-#[cfg_attr(not(feature = "compression"), allow(unused_variables))]
+#[cfg_attr(not(feature = "gz"), allow(unused_variables))]
 fn get_writer(
     output_path: Option<&std::path::Path>,
     compression_level: u8,
@@ -992,7 +1063,7 @@ fn get_writer(
     let buffered_file = BufWriter::with_capacity(OUTPUT_BUFFER_SIZE, file);
 
     match path.to_string_lossy().as_ref() {
-        #[cfg(feature = "compression")]
+        #[cfg(feature = "gz")]
         p if p.ends_with(".gz") => {
             use gzp::deflate::Gzip;
             use gzp::par::compress::ParCompressBuilder;
@@ -1747,6 +1818,83 @@ pub fn filter_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "gz")]
+    fn gzip_member(payload: &[u8], bgzf: bool) -> Vec<u8> {
+        let mut builder = flate2::GzBuilder::new();
+        if bgzf {
+            builder = builder.extra([b'B', b'C', 2, 0, 0, 0]);
+        }
+        let mut encoder = builder.write(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(payload).unwrap();
+        let mut compressed = encoder.finish().unwrap();
+        if bgzf {
+            let block_size = u16::try_from(compressed.len() - 1).unwrap();
+            compressed[16..18].copy_from_slice(&block_size.to_le_bytes());
+        }
+        compressed
+    }
+
+    #[cfg(feature = "gz")]
+    #[test]
+    fn gzip_reader_handles_members_and_buffer_boundaries() {
+        // Cross the decoder's output-buffer boundary, including empty members.
+        let payload = b">read\nACGTN\n".repeat(60_000);
+        for bgzf in [false, true] {
+            let mut compressed = gzip_member(b"", bgzf);
+            for part in payload.chunks(32 * 1024) {
+                compressed.extend(gzip_member(part, bgzf));
+            }
+            compressed.extend(gzip_member(b"", bgzf));
+            for capacity in [1, 7, 8192] {
+                let input = io::BufReader::with_capacity(capacity, compressed.as_slice());
+                let mut reader = GzReader::new(input);
+                let mut actual = Vec::new();
+                reader.read_to_end(&mut actual).unwrap();
+                assert_eq!(actual, payload, "bgzf={bgzf}, capacity={capacity}");
+                assert_eq!(reader.read(&mut [0; 1]).unwrap(), 0);
+            }
+        }
+        // A single member also needs to retain its sliding history across buffers.
+        let compressed = gzip_member(&payload, false);
+        let mut actual = Vec::new();
+        GzReader::new(compressed.as_slice())
+            .read_to_end(&mut actual)
+            .unwrap();
+        assert_eq!(actual, payload);
+    }
+
+    #[cfg(feature = "gz")]
+    #[test]
+    fn gzip_reader_rejects_corruption_and_truncation() {
+        let compressed = gzip_member(b">read\nACGTN\n", false);
+        for end in [2, 10, compressed.len() - 1] {
+            let mut reader = GzReader::new(&compressed[..end]);
+            let err = reader.read_to_end(&mut Vec::new()).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+        }
+        let mut corrupt = compressed.clone();
+        let crc = corrupt.len() - 8;
+        corrupt[crc] ^= 1;
+        for suffix in [corrupt, compressed[..compressed.len() - 1].to_vec()] {
+            // A valid first member must not hide errors in the next member.
+            let mut input = compressed.clone();
+            input.extend(suffix);
+            assert!(
+                GzReader::new(input.as_slice())
+                    .read_to_end(&mut Vec::new())
+                    .is_err()
+            );
+        }
+    }
+
+    #[cfg(feature = "gz")]
+    #[test]
+    fn gzip_reader_empty_read_does_not_consume_input() {
+        let mut reader = GzReader::new(&b"invalid gzip"[..]);
+        assert_eq!(reader.read(&mut []).unwrap(), 0);
+        assert!(reader.read(&mut [0; 1]).is_err());
+    }
 
     #[test]
     fn test_paired_record_names_match_supported_formats() {

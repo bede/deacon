@@ -1706,6 +1706,7 @@ fn test_filter_empty_file() {
     }
 }
 
+#[cfg(feature = "gz")]
 #[test]
 fn test_filter_empty_gzip_file() {
     let temp_dir = tempdir().unwrap();

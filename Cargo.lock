@@ -9,6 +9,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "adler32furious"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67753fa0e5e56fa79255f125be5bb94b2f3570537bd1c66e9b146858f53cd298"
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -524,6 +530,7 @@ dependencies = [
  "serde",
  "serde_json",
  "simd-minimizers",
+ "sirocco",
  "tempfile",
  "tracing",
  "tracing-subscriber",
@@ -1873,6 +1880,16 @@ dependencies = [
  "clap",
  "itertools",
  "seq-hash",
+]
+
+[[package]]
+name = "sirocco"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "499ced3fc3dd59058047e304ca01b6ae973c05568f40318674853fb0cf6edec0"
+dependencies = [
+ "adler32furious",
+ "crc32fast",
 ]
 
 [[package]]
