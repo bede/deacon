@@ -4,11 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
-## [Unreleased]
+## [0.19.1] - 2026-10-26
 
 ### Changed
 
-- Faster gzip file input for `deacon filter` using sirocco, including concatenated gzip members and BGZF. The `gz` feature now enables gzip input and parallel gzip output without the other compression formats.
+- 20-30% increased filtering throughput for gzipped FASTX. The `gz` feature now enables optimised gzip i/o without other compression formats.
+- Doubled filtering throughput under WebAssembly thanks to new `simd128` code paths added across packed-seq 5.1.1, seq-hash 0.2.1 and simd-minimizers 3.1.0, and an improved memchr-based FASTX parser.
+
+### Fixed
+
+- `deacon-wasm` parsing of input chunks starting with a newline.
 
 ## [0.19.0] - 2026-10-21
 

@@ -503,7 +503,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "deacon"
-version = "0.19.0"
+version = "0.19.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -540,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "deacon-py"
-version = "0.19.0"
+version = "0.19.1"
 dependencies = [
  "anyhow",
  "deacon",
@@ -554,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "deacon-wasm"
-version = "0.19.0"
+version = "0.19.1"
 dependencies = [
  "console_error_panic_hook",
  "deacon",
@@ -623,9 +623,9 @@ checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
 name = "ensure_simd"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c45a25613230d2ee8b1b68510f44ed8d765b6ef9a597d9ad5489e3d0ddfdc61d"
+checksum = "07ba1ccb27fabd1a216eaf244833cf064337e24e2d20b5e49c52a217e1d2edeb"
 
 [[package]]
 name = "env_filter"
@@ -1240,14 +1240,13 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "packed-seq"
-version = "5.0.0"
+version = "5.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a3a89b413dff56614047583dad3cc5c4a61ad16a436a578dfaf8c214e98734a"
+checksum = "547c11b1c156bef3cd4f4c604a77b8cc898bc44b246e8dc05bc560cc893f38cf"
 dependencies = [
  "cfg-if",
  "ensure_simd",
  "mem_dbg",
- "rand",
  "wide",
 ]
 
@@ -1800,9 +1799,9 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "seq-hash"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51964cd37dd62e0376ecfec7b08e221bb02c37faad1ffc46ad304d30f551721b"
+checksum = "530c0c667503dfc7da0b0de24d54c1538ea4df976832f68551591959ec6306ec"
 dependencies = [
  "packed-seq",
 ]
@@ -1873,11 +1872,10 @@ checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
 name = "simd-minimizers"
-version = "3.0.0"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c12fab9a0e48100a6265b2cb9bb1a528307455cbd5c712735afa3c79a68a160"
+checksum = "2aeae5c6e7d65b099e2380f1774af827f5993843c0c219e42c6c70d9cba55b72"
 dependencies = [
- "clap",
  "itertools",
  "seq-hash",
 ]
