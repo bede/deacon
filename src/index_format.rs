@@ -119,7 +119,8 @@ pub(crate) fn load_minimizers(reader: &mut impl Read) -> Result<(IndexStorage, I
 
     let minimizers = if header.kmer_length <= 32 {
         // Read as u64 with packed byte-aligned format
-        let mut set = RapidHashSet::<u64>::with_capacity_and_hasher(count, FixedRapidHasher);
+        let mut set =
+            RapidHashSet::<u64>::with_capacity_and_hasher(choose_capacity(count), FixedRapidHasher);
         const B: usize = 16 * 1024;
         let mut buffer = vec![0u8; bytes_per_minimizer * B];
         for i in (0..count).step_by(B) {
@@ -143,7 +144,10 @@ pub(crate) fn load_minimizers(reader: &mut impl Read) -> Result<(IndexStorage, I
         IndexStorage::ExactU64(set)
     } else {
         // Read as u128 with packed byte-aligned format
-        let mut set = RapidHashSet::<u128>::with_capacity_and_hasher(count, FixedRapidHasher);
+        let mut set = RapidHashSet::<u128>::with_capacity_and_hasher(
+            choose_capacity(count),
+            FixedRapidHasher,
+        );
         const B: usize = 16 * 1024;
         let mut buffer = vec![0u8; bytes_per_minimizer * B];
         for i in (0..count).step_by(B) {
@@ -381,6 +385,17 @@ pub fn write_index_to_path(index: &crate::Index, path: &Path) -> Result<()> {
     };
     write_index(index, &mut writer)?;
     writer.flush().context("Failed to flush index")
+}
+
+/// Capacity that avoids tables more than 75% full, where lookups get slow.
+fn choose_capacity(count: usize) -> usize {
+    let buckets = table_buckets(count);
+    let buckets = if count * 4 > buckets * 3 {
+        buckets * 2
+    } else {
+        buckets
+    };
+    (buckets / 8 * 7).max(count)
 }
 
 fn sorted_values<T: Copy + std::hash::Hash + Ord>(set: &RapidHashSet<T>) -> Vec<T> {
