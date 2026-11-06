@@ -23,18 +23,26 @@ FILES=(
   worker.js
   protocol.js
   pairing.js
+  fonts.css
+  fonts/geist-latin.woff2
+  fonts/geist-latin-ext.woff2
+  fonts/geist-mono-latin.woff2
+  fonts/geist-mono-latin-ext.woff2
+  fonts/fraunces-latin.woff2
+  fonts/fraunces-latin-ext.woff2
+  fonts/OFL.txt
   pkg/deacon_wasm.js
   pkg/deacon_wasm_bg.wasm
 )
 
-mkdir -p "$DEST/pkg"
+mkdir -p "$DEST/pkg" "$DEST/fonts"
 for f in "${FILES[@]}"; do
   cp "$SRC/$f" "$DEST/$f"
 done
 
 # Stamp every cache token with the source revision so one deployment is one module graph
 perl -i -pe "s/(ASSET_VERSION = \"|[?]v=)\d{8}-\d+/\${1}$SOURCE_HASH/g" \
-  "$DEST/index.html" "$DEST/app.js" "$DEST/worker.js"
+  "$DEST/index.html" "$DEST/app.js" "$DEST/worker.js" "$DEST/fonts.css"
 
 echo "Deployed deacon-wasm $SOURCE_HASH to $DEST"
 
