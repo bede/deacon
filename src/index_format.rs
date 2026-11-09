@@ -387,10 +387,10 @@ pub fn write_index_to_path(index: &crate::Index, path: &Path) -> Result<()> {
     writer.flush().context("Failed to flush index")
 }
 
-/// Capacity that avoids tables more than 75% full, where lookups get slow.
+/// Capacity that avoids tables more than 80% full, where lookups get slow.
 fn choose_capacity(count: usize) -> usize {
     let buckets = table_buckets(count);
-    let buckets = if count * 4 > buckets * 3 {
+    let buckets = if count * 5 > buckets * 4 {
         buckets * 2
     } else {
         buckets
