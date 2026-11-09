@@ -26,11 +26,10 @@ FILES=(
   fonts.css
   fonts/geist-latin.woff2
   fonts/geist-latin-ext.woff2
-  fonts/geist-mono-latin.woff2
-  fonts/geist-mono-latin-ext.woff2
+  fonts/roboto-mono-latin.woff2
+  fonts/roboto-mono-latin-ext.woff2
   fonts/fraunces-latin.woff2
   fonts/fraunces-latin-ext.woff2
-  fonts/OFL.txt
   pkg/deacon_wasm.js
   pkg/deacon_wasm_bg.wasm
 )
