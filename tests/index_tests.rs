@@ -1087,3 +1087,44 @@ fn test_index_filter_complexity() {
         "filter and its inverse must partition the index"
     );
 }
+
+#[test]
+fn test_index_empty_exact_and_bff() {
+    // A shorter-than-k record should yield 0 k-mers and be queryable as both RapidHashSet and BFF
+    let dir = tempdir().unwrap();
+    let p = |name: &str| dir.path().join(name);
+    fs::write(p("short.fa"), ">short\nACGTACGTAC\n").unwrap();
+    create_diverse_fasta(&p("reads.fa"));
+    let reads = fs::read_to_string(p("reads.fa")).unwrap();
+    build_index(&p("short.fa"), &p("empty.idx"));
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["index", "freeze"])
+        .arg(p("empty.idx"))
+        .arg("-o")
+        .arg(p("empty.bff"))
+        .assert()
+        .success();
+
+    for (idx, count) in [
+        ("empty.idx", "Distinct minimizer count: 0"),
+        ("empty.bff", "Key count: 0"),
+    ] {
+        cargo::cargo_bin_cmd!("deacon")
+            .args(["index", "info"])
+            .arg(p(idx))
+            .assert()
+            .success()
+            .stdout(predicates::str::contains(count));
+        // Deplete retains every record, search retains none even with one hit required
+        for (args, expected) in [(&["-d"][..], reads.as_str()), (&["-a", "1", "-r", "0"], "")] {
+            cargo::cargo_bin_cmd!("deacon")
+                .arg("filter")
+                .args(args)
+                .arg(p(idx))
+                .arg(p("reads.fa"))
+                .assert()
+                .success()
+                .stdout(expected.to_string());
+        }
+    }
+}
