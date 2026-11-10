@@ -172,7 +172,7 @@ enum IndexCommand {
         #[arg(short = 'w', default_value_t = DEFAULT_WINDOW_SIZE)]
         window_size: u8,
 
-        /// Path to output file (default: ./)
+        /// Output file or directory (default: ./{name}.k{k}w{w}.idx)
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
     },

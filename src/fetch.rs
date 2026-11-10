@@ -6,7 +6,7 @@ use indicatif::ProgressBar;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-/// Download an index to `output` or `./{name}.k{k}w{w}.idx` and return its path.
+/// Download an index to `output` (a file or directory) or `./{name}.k{k}w{w}.idx` and return its path.
 /// `progress` shows a download bar on stderr.
 pub fn fetch(
     index_name: &str,
@@ -47,21 +47,45 @@ pub fn fetch(
         ProgressBar::hidden()
     };
 
-    let output_path = output
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(&filename));
+    let output_path = resolve_output_path(output, &filename);
 
     let mut temp_path = output_path.clone();
     temp_path.as_mut_os_string().push(".tmp");
 
-    let mut file = std::fs::File::create(&temp_path).context("Failed to create temporary file")?;
-    std::io::copy(&mut pb.wrap_read(&mut response), &mut file)
-        .context("Failed to write index to file")?;
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+    }
 
-    std::fs::rename(&temp_path, &output_path).context("Failed to finalise index")?;
-
+    // Write to a temp file and rename once complete, removing it on failure
+    let res = (|| -> Result<()> {
+        let mut file =
+            std::fs::File::create(&temp_path).context("Failed to create temporary file")?;
+        let written = std::io::copy(&mut pb.wrap_read(&mut response), &mut file)
+            .context("Failed to write index to file")?;
+        if content_length > 0 && written != content_length {
+            anyhow::bail!("Incomplete download: received {written} of {content_length} bytes");
+        }
+        std::fs::rename(&temp_path, &output_path).context("Failed to finalise index")
+    })();
     pb.finish_and_clear();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    res?;
+
     info!("Index saved to {}", output_path.display());
 
     Ok(output_path)
+}
+
+/// `-o` may name a file or a directory (existing, or with a trailing separator).
+fn resolve_output_path(output: Option<&Path>, filename: &str) -> PathBuf {
+    match output {
+        Some(p) if p.is_dir() || p.to_string_lossy().ends_with(std::path::is_separator) => {
+            p.join(filename)
+        }
+        Some(p) => p.to_path_buf(),
+        None => PathBuf::from(filename),
+    }
 }
