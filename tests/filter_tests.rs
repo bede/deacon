@@ -4026,17 +4026,21 @@ fn test_filter_crlf_line_endings() {
 fn test_filter_without_index_short_circuit() {
     let temp_dir = tempdir().unwrap();
     let summary_path = temp_dir.path().join("summary.json");
-    let input = "data/mn908947.fastq";
+    let input = temp_dir.path().join("reads.fastq");
+    create_test_fastq(&input);
 
     // Deplete keeps every record, search keeps none
     cargo::cargo_bin_cmd!("deacon")
-        .args(["filter", "-d", "-", input, "--summary"])
+        .args(["filter", "-d", "-"])
+        .arg(&input)
+        .arg("--summary")
         .arg(&summary_path)
         .assert()
         .success()
-        .stdout(fs::read_to_string(input).unwrap());
+        .stdout(fs::read_to_string(&input).unwrap());
     cargo::cargo_bin_cmd!("deacon")
-        .args(["filter", "-", input])
+        .args(["filter", "-"])
+        .arg(&input)
         .assert()
         .success()
         .stdout("");
