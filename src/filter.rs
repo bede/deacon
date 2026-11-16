@@ -104,8 +104,12 @@ pub struct FilterKernel {
 }
 
 impl FilterKernel {
-    pub fn new(index: Arc<Index>, params: FilterParams) -> anyhow::Result<Self> {
+    pub fn new(index: Arc<Index>, mut params: FilterParams) -> anyhow::Result<Self> {
         params.validate()?;
+        // Skip minimizer computation given empty index (-)
+        if index.is_empty() {
+            params.prefix_length = 1;
+        }
         let kmer_length = index.kmer_length();
         Ok(Self {
             minimizers: Minimizers::new(kmer_length, index.window_size())?,

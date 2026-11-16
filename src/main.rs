@@ -180,7 +180,7 @@ enum IndexCommand {
 
 #[derive(Args, Serialize, Deserialize)]
 struct FilterArgs {
-    /// Path to minimizer index file
+    /// Path to minimizer index file (- for none, matching no records)
     index: PathBuf,
 
     /// FASTX/CBQ input path (- for stdin)

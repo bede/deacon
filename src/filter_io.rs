@@ -1,5 +1,8 @@
 use crate::index_format::load_index_from_path;
-use crate::{ComplexityAlgorithm, FilterDiagnostics, FilterKernel, FilterParams, Index};
+use crate::{
+    ComplexityAlgorithm, DEFAULT_KMER_LENGTH, DEFAULT_WINDOW_SIZE, FilterDiagnostics, FilterKernel,
+    FilterParams, Index, MinimizerVec,
+};
 use anyhow::{Context, Result};
 use binseq::cbq;
 use binseq::write::{BinseqWriterBuilder, Format as BinseqFormat};
@@ -1430,6 +1433,13 @@ impl binseq::ParallelProcessor for FilterProcessor {
 
 /// Load an index, optionally discarding minimizers below a kdust threshold.
 pub fn load_filter_index(path: &Path, complexity_threshold: Option<f32>) -> Result<Index> {
+    if path.as_os_str() == "-" {
+        return Index::from_minimizers(
+            DEFAULT_KMER_LENGTH,
+            DEFAULT_WINDOW_SIZE,
+            MinimizerVec::U64(Vec::new()),
+        );
+    }
     if !path.exists() {
         return Err(anyhow::anyhow!(
             "Index file does not exist: {}",

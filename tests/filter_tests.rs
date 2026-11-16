@@ -4021,3 +4021,27 @@ fn test_filter_crlf_line_endings() {
         assert_eq!(bp, lf_bp, "{name}: \\r must not be counted as a base");
     }
 }
+
+#[test]
+fn test_filter_without_index_short_circuit() {
+    let temp_dir = tempdir().unwrap();
+    let summary_path = temp_dir.path().join("summary.json");
+    let input = "data/mn908947.fastq";
+
+    // Deplete keeps every record, search keeps none
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-d", "-", input, "--summary"])
+        .arg(&summary_path)
+        .assert()
+        .success()
+        .stdout(fs::read_to_string(input).unwrap());
+    cargo::cargo_bin_cmd!("deacon")
+        .args(["filter", "-", input])
+        .assert()
+        .success()
+        .stdout("");
+
+    let summary: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&summary_path).unwrap()).unwrap();
+    assert_eq!(summary["index"], "-");
+}
