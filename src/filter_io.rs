@@ -38,7 +38,6 @@ trait OutputWriter: Write + Send {
 
 impl<W: Write + Send> OutputWriter for BufWriter<W> {}
 
-#[cfg(feature = "gz")]
 impl<W: Write + Send + 'static> OutputWriter
     for gzp::par::compress::ParCompress<'static, gzp::deflate::Gzip, W>
 {
@@ -49,7 +48,6 @@ impl<W: Write + Send + 'static> OutputWriter
     }
 }
 
-#[cfg(feature = "compression")]
 impl<W: Write + Send> OutputWriter for zstd::stream::write::Encoder<'static, W> {
     fn finish(&mut self) -> io::Result<()> {
         self.do_finish()?;
@@ -57,7 +55,7 @@ impl<W: Write + Send> OutputWriter for zstd::stream::write::Encoder<'static, W> 
     }
 }
 
-#[cfg(feature = "compression")]
+#[cfg(feature = "xz")]
 impl<W: Write + Send> OutputWriter for liblzma::write::XzEncoder<W> {
     fn finish(&mut self) -> io::Result<()> {
         self.try_finish()?;
@@ -622,11 +620,9 @@ pub(crate) fn create_paraseq_reader(path: &Path) -> Result<Reader<Box<dyn Read +
     };
     let mut buf = BufReader::with_capacity(1 << 20, src);
     let reader: Box<dyn Read + Send> = match buf.fill_buf()? {
-        #[cfg(feature = "gz")]
         [0x1f, 0x8b, ..] => Box::new(GzReader::new(buf)),
-        #[cfg(feature = "compression")]
         [0x28, 0xb5, 0x2f, 0xfd, ..] => Box::new(zstd::Decoder::with_buffer(buf)?),
-        #[cfg(feature = "compression")]
+        #[cfg(feature = "xz")]
         [0xfd, b'7', b'z', b'X', b'Z', 0, ..] => {
             Box::new(liblzma::bufread::XzDecoder::new_multi_decoder(buf))
         }
@@ -636,7 +632,6 @@ pub(crate) fn create_paraseq_reader(path: &Path) -> Result<Reader<Box<dyn Read +
 }
 
 /// Decodes concatenated gzip 'members' (inc bgzf) with sirocco, reusing single decoder
-#[cfg(feature = "gz")]
 struct GzReader<R> {
     inner: R,
     decoder: Box<sirocco::inflate::Decoder>,
@@ -646,7 +641,6 @@ struct GzReader<R> {
     full: bool,
 }
 
-#[cfg(feature = "gz")]
 impl<R: std::io::BufRead> GzReader<R> {
     fn new(inner: R) -> Self {
         Self {
@@ -660,7 +654,6 @@ impl<R: std::io::BufRead> GzReader<R> {
     }
 }
 
-#[cfg(feature = "gz")]
 impl<R: std::io::BufRead> Read for GzReader<R> {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
         if out.is_empty() {
@@ -829,7 +822,6 @@ fn validate_input_output(
             config.compression_level
         );
     }
-    #[cfg(feature = "gz")]
     for path in [
         config
             .output_path
@@ -923,7 +915,6 @@ fn write_renamed(
 }
 
 /// Validate output compression before opening the file.
-#[cfg(feature = "gz")]
 fn validate_compression_level(path: &Path, level: u8) -> Result<()> {
     let (min, max, format) = match path.to_string_lossy().as_ref() {
         p if p.ends_with(".gz") => (1, 9, "gzip"),
@@ -977,7 +968,6 @@ fn format_bp_progress(bp: f64) -> String {
 }
 
 /// Return a suitable writer for the output path extension
-#[cfg_attr(not(feature = "gz"), allow(unused_variables))]
 fn get_writer(
     output_path: Option<&std::path::Path>,
     compression_level: u8,
@@ -1000,7 +990,6 @@ fn get_writer(
     let buffered_file = BufWriter::with_capacity(OUTPUT_BUFFER_SIZE, file);
 
     match path.to_string_lossy().as_ref() {
-        #[cfg(feature = "gz")]
         p if p.ends_with(".gz") => {
             use gzp::deflate::Gzip;
             use gzp::par::compress::ParCompressBuilder;
@@ -1015,12 +1004,11 @@ fn get_writer(
                 .from_writer(buffered_file);
             Ok(Box::new(writer))
         }
-        #[cfg(feature = "compression")]
         p if p.ends_with(".zst") => Ok(Box::new(zstd::stream::write::Encoder::new(
             buffered_file,
             compression_level as i32,
         )?)),
-        #[cfg(feature = "compression")]
+        #[cfg(feature = "xz")]
         p if p.ends_with(".xz") => Ok(Box::new(liblzma::write::XzEncoder::new(
             buffered_file,
             compression_level as u32,
@@ -1763,7 +1751,6 @@ pub fn filter_files(
 mod tests {
     use super::*;
 
-    #[cfg(feature = "gz")]
     fn gzip_member(payload: &[u8], bgzf: bool) -> Vec<u8> {
         let mut builder = flate2::GzBuilder::new();
         if bgzf {
@@ -1779,7 +1766,6 @@ mod tests {
         compressed
     }
 
-    #[cfg(feature = "gz")]
     #[test]
     fn gzip_reader_handles_members_and_buffer_boundaries() {
         // Cross the decoder's output-buffer boundary, including empty members.
@@ -1808,7 +1794,6 @@ mod tests {
         assert_eq!(actual, payload);
     }
 
-    #[cfg(feature = "gz")]
     #[test]
     fn gzip_reader_rejects_corruption_and_truncation() {
         let compressed = gzip_member(b">read\nACGTN\n", false);
@@ -1832,7 +1817,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "gz")]
     #[test]
     fn gzip_reader_empty_read_does_not_consume_input() {
         let mut reader = GzReader::new(&b"invalid gzip"[..]);
@@ -1929,7 +1913,7 @@ mod tests {
         assert_eq!(parsed.output2, Some("output2.fastq".to_string()));
     }
 
-    #[cfg(feature = "compression")]
+    #[cfg(feature = "xz")]
     fn decode_output(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
         use std::io::Read;
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -1945,10 +1929,10 @@ mod tests {
     }
 
     /// Simulate a full disk.
-    #[cfg(feature = "compression")]
+    #[cfg(feature = "xz")]
     struct FullDisk;
 
-    #[cfg(feature = "compression")]
+    #[cfg(feature = "xz")]
     impl Write for FullDisk {
         fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
             Err(io::Error::new(io::ErrorKind::StorageFull, "disk full"))
@@ -1959,7 +1943,7 @@ mod tests {
     }
 
     // Buffered write errors must surface at finish.
-    #[cfg(feature = "compression")]
+    #[cfg(feature = "xz")]
     #[test]
     fn test_finish_reports_write_errors() {
         let writers: [BoxedWriter; 3] = [
@@ -1977,7 +1961,7 @@ mod tests {
     }
 
     // #88: finished writers must leave complete output.
-    #[cfg(feature = "compression")]
+    #[cfg(feature = "xz")]
     #[rstest::rstest]
     #[case("out.fq.gz")]
     #[case("out.fq.zst")]

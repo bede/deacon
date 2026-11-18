@@ -130,7 +130,7 @@ fn invalid_options_fail_before_outputs_are_touched() {
     assert!(Index::from_minimizers(7, 3, MinimizerVec::U64(vec![1 << 14])).is_err());
 }
 
-#[cfg(feature = "compression")]
+#[cfg(feature = "xz")]
 #[rstest::rstest]
 #[case("gz", 0)]
 #[case("gz", 10)]

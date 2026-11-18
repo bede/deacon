@@ -42,7 +42,7 @@ paraseq = { version = "0.6.0", default-features = false, features = ["anyhow"], 
 binseq = { version = "0.10.0", default-features = false, features = ["anyhow"], optional = true }
 ensure_simd = { version = "0.1.1", optional = true }
 
-# Compression deps (optional)
+# Compression deps
 liblzma = { version = "0.4", optional = true, features = ["static"] }
 # Switches gzp's flate2 backend from miniz_oxide to zlib-rs
 flate2 = { version = "1.1", features = ["zlib-rs"], optional = true }
@@ -69,29 +69,47 @@ flate2 = "1.1"
 
 [features]
 scalar = ["simd-minimizers/scalar", "packed-seq/scalar"]
-# Native filtering and index operations
-io = ["rayon", "parking_lot", "indicatif", "paraseq", "binseq", "serde_json", "rand"]
+# Native filtering and index operations, inc. gzip and zstd i/o
+io = [
+    "dep:rayon",
+    "dep:parking_lot",
+    "dep:indicatif",
+    "dep:paraseq",
+    "dep:binseq",
+    "dep:serde_json",
+    "dep:rand",
+    "dep:sirocco",
+    "dep:gzp",
+    "dep:flate2",
+    "dep:zstd",
+]
 # CLI
-cli = ["io", "clap", "ensure_simd", "tracing-subscriber"]
-# Pure Rust gz i/o
-gz = ["io", "sirocco", "flate2", "gzp"]
-# zstd and xz (disable for faster builds)
-compression = ["gz", "zstd", "liblzma"]
+cli = ["io", "dep:clap", "dep:ensure_simd", "dep:tracing-subscriber"]
+# xz i/o (builds liblzma from C)
+xz = ["io", "dep:liblzma"]
 # Enable fetching indexes from remote storage
-fetch = ["minreq", "indicatif"]
-default = ["compression", "fetch", "cli"]
+fetch = ["dep:minreq", "dep:indicatif"]
+default = ["xz", "fetch", "cli"]
 
 [[test]]
 name = "cli_tests"
 path = "tests/cli_tests.rs"
+required-features = ["cli"]
 
 [[test]]
 name = "index_tests"
 path = "tests/index_tests.rs"
+required-features = ["cli"]
 
 [[test]]
 name = "filter_tests"
 path = "tests/filter_tests.rs"
+required-features = ["cli"]
+
+[[test]]
+name = "api_tests"
+path = "tests/api_tests.rs"
+required-features = ["io"]
 
 [profile.release]
 opt-level = 3

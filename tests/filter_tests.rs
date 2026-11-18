@@ -1,4 +1,4 @@
-#![cfg_attr(not(feature = "compression"), allow(unused))]
+#![cfg_attr(not(feature = "xz"), allow(unused))]
 use assert_cmd::cargo;
 use predicates::prelude::*;
 use std::fs;
@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::Command as StdCommand;
 use tempfile::tempdir;
 
-#[cfg(feature = "compression")]
+#[cfg(feature = "xz")]
 fn decode_output(path: &Path) -> std::io::Result<String> {
     use std::io::Read;
     let file = File::open(path)?;
@@ -271,7 +271,7 @@ fn test_filter_debug_tsv() {
     }
 }
 
-#[cfg(feature = "compression")]
+#[cfg(feature = "xz")]
 #[rstest::rstest]
 #[case("gz", 2)]
 #[case("zst", 2)]
@@ -1098,7 +1098,7 @@ mod output2_tests {
         assert!(output.status.success(), "Index build command failed");
     }
 
-    #[cfg(feature = "compression")]
+    #[cfg(feature = "xz")]
     #[rstest::rstest]
     #[case("gz")]
     #[case("zst")]
@@ -1667,7 +1667,6 @@ fn test_filter_empty_file() {
     }
 }
 
-#[cfg(feature = "gz")]
 #[test]
 fn test_filter_empty_gzip_file() {
     let temp_dir = tempdir().unwrap();
@@ -1738,7 +1737,7 @@ fn test_filter_empty_gzip_file() {
     );
 }
 
-#[cfg(feature = "compression")]
+#[cfg(feature = "xz")]
 #[test]
 fn test_filter_empty_zstd_file() {
     let temp_dir = tempdir().unwrap();
@@ -1807,7 +1806,7 @@ fn test_filter_empty_zstd_file() {
     );
 }
 
-#[cfg(feature = "compression")]
+#[cfg(feature = "xz")]
 #[test]
 fn test_filter_empty_xz_file() {
     let temp_dir = tempdir().unwrap();
@@ -1909,7 +1908,7 @@ fn test_filter_tiny_record(
 }
 
 /// Compress bytes as gz, zst or xz
-#[cfg(feature = "compression")]
+#[cfg(feature = "xz")]
 fn compress(data: &[u8], ext: &str) -> Vec<u8> {
     match ext {
         "gz" => {
@@ -1927,7 +1926,7 @@ fn compress(data: &[u8], ext: &str) -> Vec<u8> {
     }
 }
 
-#[cfg(feature = "compression")]
+#[cfg(feature = "xz")]
 #[rstest::rstest]
 fn test_compressed_stdin(#[values("gz", "zst", "xz")] ext: &str) {
     // Compressed stdin matches plain stdin
@@ -1997,7 +1996,7 @@ fn test_fastq_parsing_no_trailing_newline() {
 }
 
 #[test]
-#[cfg(feature = "compression")]
+#[cfg(feature = "xz")]
 fn test_thread_allocation_auto_single_gz() {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("ref.fasta");
@@ -2024,7 +2023,7 @@ fn test_thread_allocation_auto_single_gz() {
 }
 
 #[test]
-#[cfg(feature = "compression")]
+#[cfg(feature = "xz")]
 fn test_thread_allocation_auto_paired_gz() {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("ref.fasta");
@@ -2056,7 +2055,7 @@ fn test_thread_allocation_auto_paired_gz() {
 }
 
 #[test]
-#[cfg(feature = "compression")]
+#[cfg(feature = "xz")]
 fn test_thread_allocation_manual_override() {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("ref.fasta");
@@ -2090,7 +2089,7 @@ fn test_thread_allocation_manual_override() {
 }
 
 #[test]
-#[cfg(feature = "compression")]
+#[cfg(feature = "xz")]
 fn test_thread_allocation_ceiling_division() {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("ref.fasta");
@@ -2494,7 +2493,7 @@ fn test_ordered_rename_paired_outputs() {
 mod output2_rename_tests {
     use super::*;
 
-    #[cfg(feature = "compression")]
+    #[cfg(feature = "xz")]
     #[test]
     fn test_filter_paired_rename_with_output2() {
         // Verify /1 and /2 suffixes work correctly with separate R1/R2 output files
