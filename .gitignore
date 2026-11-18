@@ -10,3 +10,5 @@ deacon-wasm/pkg-node/
 deacon-py/python/deacon/_deacon*.so
 deacon-py/python/deacon/__pycache__/
 __pycache__/
+/benchmarks/
+/stickers/
