@@ -44,17 +44,18 @@ impl Index {
         Self::load(&path, complexity_threshold)
     }
 
-    /// Download a prebuilt index, then load and return it.
+    /// Download a prebuilt index unless already present (or `force`), then load and return it.
     #[staticmethod]
-    #[pyo3(signature = (*, name="panhuman-1", k=31, w=15, output=None, complexity_threshold=None))]
+    #[pyo3(signature = (*, name="panhuman-1", k=31, w=15, output=None, force=false, complexity_threshold=None))]
     fn fetch(
         name: &str,
         k: u8,
         w: u8,
         output: Option<PathBuf>,
+        force: bool,
         complexity_threshold: Option<f32>,
     ) -> PyResult<Self> {
-        let path = index_fetch(name, k, w, output.as_deref(), false).map_err(to_pyerr)?;
+        let path = index_fetch(name, k, w, output.as_deref(), force, false).map_err(to_pyerr)?;
         Index::load(&path, complexity_threshold)
     }
 

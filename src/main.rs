@@ -175,6 +175,10 @@ enum IndexCommand {
         /// Output file or directory (default: ./{name}.k{k}w{w}.idx)
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
+
+        /// Download even if the output file exists
+        #[arg(short = 'f', long = "force")]
+        force: bool,
     },
 }
 
@@ -428,12 +432,14 @@ fn process_command(command: Command, quiet: bool) -> Result<(), anyhow::Error> {
                 kmer_length,
                 window_size,
                 output,
+                force,
             } => {
                 index_fetch(
                     &index_name,
                     kmer_length,
                     window_size,
                     output.as_deref(),
+                    force,
                     !quiet,
                 )
                 .context("Failed to run index fetch command")?;

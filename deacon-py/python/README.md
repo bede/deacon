@@ -46,7 +46,7 @@ Pass `complexity_threshold` (0.0–1.0, e.g. `0.9`) to discard low-complexity in
 
 ## `Index.fetch()`
 
-Download a prebuilt index, then load and return it (a static method, so `Index.fetch(...)` returns an `Index`). `output` is the local path to save to; when omitted it defaults to `"{name}.k{k}w{w}.idx"` in the working directory. The index is downloaded on every call — there is no local cache, so an existing file at that path is overwritten.
+Download a prebuilt index, then load and return it (a static method, so `Index.fetch(...)` returns an `Index`). `output` is the local path to save to; when omitted it defaults to `"{name}.k{k}w{w}.idx"` in the working directory. If a file already exists at that path it is loaded without downloading; pass `force=True` to download and replace it.
 
 ```python
 index = Index.fetch(
@@ -54,6 +54,7 @@ index = Index.fetch(
     k=31,
     w=15,
     output=None,
+    force=False,
     complexity_threshold=None,
 )
 ```

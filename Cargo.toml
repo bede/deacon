@@ -130,7 +130,7 @@ default-members = ["."]
 
 # shared version for the core crate, the Python bindings, and the WASM bundle
 [workspace.package]
-version = "0.19.1"
+version = "0.20.0"
 
 # unwind (not workspace's abort) so PyO3 can turn panics into Python exceptions
 [profile.pyext]

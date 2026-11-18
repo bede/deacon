@@ -7,12 +7,13 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 /// Download an index to `output` (a file or directory) or `./{name}.k{k}w{w}.idx` and return its path.
-/// `progress` shows a download bar on stderr.
+/// An existing file is kept unless `force`. `progress` shows a download bar on stderr.
 pub fn fetch(
     index_name: &str,
     kmer_length: u8,
     window_size: u8,
     output: Option<&Path>,
+    force: bool,
     progress: bool,
 ) -> Result<PathBuf> {
     const DEFAULT_REPOSITORY_URL: &str =
@@ -23,6 +24,15 @@ pub fn fetch(
 
     let filename = format!("{}.k{}w{}.idx", index_name, kmer_length, window_size);
     let url = format!("{}/deacon/{}/{}", base_url, INDEX_FORMAT_VERSION, filename);
+    let output_path = resolve_output_path(output, &filename);
+
+    if !force && output_path.exists() {
+        info!(
+            "Index exists at {}, skipping download (--force to replace)",
+            output_path.display()
+        );
+        return Ok(output_path);
+    }
 
     info!("Fetching {}", url);
 
@@ -46,8 +56,6 @@ pub fn fetch(
     } else {
         ProgressBar::hidden()
     };
-
-    let output_path = resolve_output_path(output, &filename);
 
     let mut temp_path = output_path.clone();
     temp_path.as_mut_os_string().push(".tmp");

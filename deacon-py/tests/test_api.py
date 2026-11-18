@@ -41,7 +41,7 @@ class SignatureTests(unittest.TestCase):
         )
         self.assertEqual(
             str(inspect.signature(Index.fetch)),
-            "(*, name='panhuman-1', k=31, w=15, output=None, complexity_threshold=None)",
+            "(*, name='panhuman-1', k=31, w=15, output=None, force=False, complexity_threshold=None)",
         )
 
         parameters = inspect.signature(Index.filter).parameters

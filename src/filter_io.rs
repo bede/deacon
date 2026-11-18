@@ -1362,12 +1362,6 @@ pub fn load_filter_index(path: &Path, complexity_threshold: Option<f32>) -> Resu
             MinimizerVec::U64(Vec::new()),
         );
     }
-    if !path.exists() {
-        return Err(anyhow::anyhow!(
-            "Index file does not exist: {}",
-            path.display()
-        ));
-    }
     let start = Instant::now();
     let mut index = load_index_from_path(path)?;
     let (k, w) = (index.kmer_length(), index.window_size());
