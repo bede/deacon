@@ -6,8 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+### Added
+
+- `deacon filter` reads gzip, zstd and xz compressed FASTX from stdin, detected by content.
+
+### Changed
+
+- `deacon index build` shares filter's input decoding, including faster gzip decompression, dropping the niffler dependency.
+
+### Removed
+
+- Undocumented bzip2 input support.
+
 ### Fixed
 
+- `deacon filter` no longer discards valid FASTX inputs shorter than 5 bytes as empty, and `deacon index build` no longer rejects them.
 - `deacon index fetch` no longer saves truncated downloads as complete indexes.
 
 ## [0.19.1] - 2026-10-26

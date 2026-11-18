@@ -11,7 +11,7 @@
 
 Deacon filters DNA sequences in FASTA/Q files and streams using SIMD-accelerated minimizer comparison with query sequence(s), emitting either matching sequences (**search mode**), or sequences without matches (**deplete mode**). Sequences match when they share enough distinct minimizers with the indexed query to exceed chosen absolute and relative thresholds. Query size has little impact on filtering speed, enabling ultrafast search and depletion with gene-, genome- and pangenome-scale queries using a laptop. Deacon filters uncompressed FASTA/Q at **gigabases per second** on recent AMD, Intel (`x86_64`), and Apple `arm64` systems. Built with panhuman host depletion in mind—yet broadly useful for searching large sequence collections—Deacon delivers [leading classification accuracy](https://doi.org/10.1101/2025.06.09.658732) for host depletion and unrivalled speed using 5GB of RAM.
 
-Default parameters are carefully chosen but easily changed. Classification sensitivity, specificity and memory requirements may be tuned by varying *k*-mer length (`-k`), window size (`-w`), absolute match threshold (`-a`) and relative match threshold (`-r`) . Minimizer `k` and `w` are chosen at query index time, while the match thresholds can be chosen at filter time. Matching sequences are those that share enough distinct minimizers with the indexed query to exceed *both* the absolute threshold (`-a`, default 2 shared minimizers) and the relative threshold (`-r`, default 0.01 [1%] shared minimizers). For paired sequences, hits in either mate counts towards a single match threshold for the pair. Deacon reports filtering performance during execution and optionally writes a JSON `--summary` upon completion. Sequences can optionally be renamed using `--rename` for privacy and smaller file sizes. Deacon fully supports stdin/out (uncompressed fastx) and natively handles .gz, .zst and .xz fastx file IO, as well as BINSEQ CBQ (.cbq & .cba).
+Default parameters are carefully chosen but easily changed. Classification sensitivity, specificity and memory requirements may be tuned by varying *k*-mer length (`-k`), window size (`-w`), absolute match threshold (`-a`) and relative match threshold (`-r`) . Minimizer `k` and `w` are chosen at query index time, while the match thresholds can be chosen at filter time. Matching sequences are those that share enough distinct minimizers with the indexed query to exceed *both* the absolute threshold (`-a`, default 2 shared minimizers) and the relative threshold (`-r`, default 0.01 [1%] shared minimizers). For paired sequences, hits in either mate counts towards a single match threshold for the pair. Deacon reports filtering performance during execution and optionally writes a JSON `--summary` upon completion. Sequences can optionally be renamed using `--rename` for privacy and smaller file sizes. Deacon fully supports stdin/out and natively handles .gz, .zst and .xz compressed fastx IO, as well as BINSEQ CBQ (.cbq & .cba).
 
 Benchmarks for panhuman host depletion of complex microbial metagenomes are described in a [preprint](https://www.biorxiv.org/content/10.1101/2025.06.09.658732v1). Deacon with the `panhuman-1` (*k*=31, w=15) index exhibited the highest balanced accuracy for both long and short simulated reads. Deacon was less specific only than Hostile for short reads.
 
@@ -91,7 +91,7 @@ Prebuilt pangenome indexes can be downloaded using the links below, or with `dea
 
 ### Filtering
 
-The main command `deacon filter` accepts an index path followed by up to two sequence file paths, depending on whether input sequences originate from stdin, a single file, or paired input files. Indexes are built with `deacon index build`.  Paired inputs are supported as either two separate or one interleaved file/stream when using `--interleaved`, and may be written either to separate paired output files or one interleaved file. For paired sequences, distinct minimizer hits originating from either mate are counted. Paired read headers can be validated using `--check-pairs`. By default, input sequences must meet both an absolute threshold of 2 minimizer hits (`-a 2`) and a relative threshold of 1% of minimizers (`-r 0.01`) to pass the filter. Filtering can be inverted for e.g. host depletion using the `--deplete` (`-d`) flag. Gzip, Zstandard, and xz compressed FASTX formats are detected automatically by file extension. Single and paired [BINSEQ](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v2) CBQ files are natively supported for both input and output. CBQ input is detected by content rather than file extension, while a `.cbq` output path writes CBQ, and a `.cba` output path writes CBQ without quality.
+The main command `deacon filter` accepts an index path followed by up to two sequence file paths, depending on whether input sequences originate from stdin, a single file, or paired input files. Indexes are built with `deacon index build`.  Paired inputs are supported as either two separate or one interleaved file/stream when using `--interleaved`, and may be written either to separate paired output files or one interleaved file. For paired sequences, distinct minimizer hits originating from either mate are counted. Paired read headers can be validated using `--check-pairs`. By default, input sequences must meet both an absolute threshold of 2 minimizer hits (`-a 2`) and a relative threshold of 1% of minimizers (`-r 0.01`) to pass the filter. Filtering can be inverted for e.g. host depletion using the `--deplete` (`-d`) flag. Gzip, Zstandard, and xz compressed FASTX inputs are detected automatically, including from stdin, while compressed outputs are chosen by file extension. Single and paired [BINSEQ](https://www.biorxiv.org/content/10.1101/2025.04.08.647863v2) CBQ files are natively supported for both input and output. CBQ input is detected by content rather than file extension, while a `.cbq` output path writes CBQ, and a `.cba` output path writes CBQ without quality.
 
 #### Examples
 
@@ -110,7 +110,10 @@ deacon filter -d -a 1 -r 0 panhuman-1.k31w15.idx reads.fq.gz -o filt.fq.gz
 deacon filter -d -r 0.1 panhuman-1.k31w15.idx reads.fq.gz > filt.fq.gz
 
 # Stdin and stdout
-zcat reads.fq.gz | deacon filter -d panhuman-1.k31w15.idx > filt.fq
+cat reads.fq | deacon filter -d panhuman-1.k31w15.idx > filt.fq
+
+# Compressed stdin (gz, zst or xz)
+cat reads.fq.gz | deacon filter -d panhuman-1.k31w15.idx > filt.fq
 
 # True multithreaded gzip decompression with rapidgzip
 rapidgzip -dc reads.fq.gz | deacon filter -d panhuman-1.k31w15.idx > filt.fq
@@ -127,7 +130,7 @@ deacon filter -d --check-pairs panhuman-1.k31w15.idx r1.fq.gz r2.fq.gz -o filt.r
 
 # Interleaved paired reads (file or stdin)
 deacon filter -d --interleaved panhuman-1.k31w15.idx r12.fq.gz > filt12.fq
-zcat r12.fq.gz | deacon filter -d panhuman-1.k31w15.idx - - > filt12.fq
+cat r12.fq.gz | deacon filter -d panhuman-1.k31w15.idx - - > filt12.fq
 
 # Save summary JSON
 deacon filter -d panhuman-1.k31w15.idx reads.fq.gz -o filt.fq.gz -s summary.json

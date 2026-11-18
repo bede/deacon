@@ -1643,66 +1643,27 @@ fn test_filter_empty_file() {
     create_test_fasta(&fasta_path);
     build_index(&fasta_path, &bin_path);
 
-    // Test files with 0-4 bytes (below niffler threshold)
-    for num_bytes in 0..=4 {
-        let test_file_path = temp_dir.path().join(format!("test_{}.fastq", num_bytes));
-        let output_path = temp_dir.path().join(format!("output_{}.fastq", num_bytes));
-        let summary_path = temp_dir.path().join(format!("summary_{}.json", num_bytes));
+    let empty_path = temp_dir.path().join("empty.fastq");
+    let output_path = temp_dir.path().join("output.fastq");
+    let summary_path = temp_dir.path().join("summary.json");
+    fs::write(&empty_path, "").unwrap();
 
-        fs::write(&test_file_path, "\n".repeat(num_bytes)).unwrap();
+    cargo::cargo_bin_cmd!("deacon")
+        .arg("filter")
+        .arg(&bin_path)
+        .arg(&empty_path)
+        .arg("--output")
+        .arg(&output_path)
+        .arg("--summary")
+        .arg(&summary_path)
+        .assert()
+        .success();
 
-        cargo::cargo_bin_cmd!("deacon")
-            .arg("filter")
-            .arg(&bin_path)
-            .arg(&test_file_path)
-            .arg("--output")
-            .arg(&output_path)
-            .arg("--summary")
-            .arg(&summary_path)
-            .assert()
-            .success();
-
-        // Verify empty output
-        assert!(
-            output_path.exists(),
-            "Output file should be created for {} bytes",
-            num_bytes
-        );
-        let output_content = fs::read_to_string(&output_path).unwrap();
-        assert!(
-            output_content.is_empty(),
-            "Output should be empty for {} bytes",
-            num_bytes
-        );
-
-        // Verify JSON summary
-        let summary_content = fs::read_to_string(&summary_path).unwrap();
-        let summary: serde_json::Value = serde_json::from_str(&summary_content).unwrap();
-
-        assert_eq!(
-            summary["bp_in"].as_u64().unwrap(),
-            0,
-            "bp_in should be 0 for {} bytes",
-            num_bytes
-        );
-        assert_eq!(
-            summary["seqs_in"].as_u64().unwrap(),
-            0,
-            "seqs_in should be 0 for {} bytes",
-            num_bytes
-        );
-        assert_eq!(
-            summary["bp_out"].as_u64().unwrap(),
-            0,
-            "bp_out should be 0 for {} bytes",
-            num_bytes
-        );
-        assert_eq!(
-            summary["seqs_out"].as_u64().unwrap(),
-            0,
-            "seqs_out should be 0 for {} bytes",
-            num_bytes
-        );
+    assert_eq!(fs::read_to_string(&output_path).unwrap(), "");
+    let summary: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&summary_path).unwrap()).unwrap();
+    for key in ["bp_in", "seqs_in", "bp_out", "seqs_out"] {
+        assert_eq!(summary[key].as_u64(), Some(0), "{key} should be 0");
     }
 }
 
@@ -1915,84 +1876,86 @@ fn test_filter_empty_xz_file() {
     );
 }
 
-#[test]
-fn test_filter_4_byte_record() {
-    // Test filtering 4-byte FASTA record (>a\nA)
-    // Should produce empty output with "Empty input file(s) detected" message
-    // This is NOT the case for stdin which is not validated by niffler
-    let temp_dir = tempdir().unwrap();
-    let fasta_path = temp_dir.path().join("mn908947.fasta");
-    let bin_path = temp_dir.path().join("mn908947.bin");
-    let empty_file = temp_dir.path().join("empty.fa");
-    let output_path = temp_dir.path().join("output.fa");
-
-    // Create mn908947 reference
-    create_test_fasta_sc2(&fasta_path);
-    build_index(&fasta_path, &bin_path);
-
-    // Create 4-byte file: >a\nA (header + newline + single base)
-    fs::write(&empty_file, b">a\nA").unwrap();
-
-    // Run filter with --deplete
-    let mut cmd = cargo::cargo_bin_cmd!("deacon");
-    cmd.arg("filter")
-        .arg("--deplete")
-        .arg(&bin_path)
-        .arg(&empty_file)
-        .arg("--output")
-        .arg(&output_path)
-        .assert()
-        .success()
-        .stderr(predicates::str::contains("Empty input file(s) detected"));
-
-    // Verify empty output
-    let output_content = fs::read_to_string(&output_path).unwrap();
-    assert!(
-        output_content.is_empty(),
-        "Output should be empty for 4-byte file"
-    );
-}
-
-#[test]
-fn test_filter_5_byte_record() {
-    // Test filtering 5-byte FASTA record (>a\nA\n)
-    // Should retain the sequence (too short for k=31 minimizers)
+#[rstest::rstest]
+fn test_filter_tiny_record(
+    #[values(&b">a\nA"[..], &b">a\nA\n"[..])] record: &[u8],
+    #[values(false, true)] stdin: bool,
+) {
+    // Records shorter than k are retained, including those under 5 bytes
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join("mn908947.fasta");
     let bin_path = temp_dir.path().join("mn908947.bin");
     let short_file = temp_dir.path().join("short.fa");
     let output_path = temp_dir.path().join("output.fa");
 
-    // Create mn908947 reference
     create_test_fasta_sc2(&fasta_path);
     build_index(&fasta_path, &bin_path);
+    fs::write(&short_file, record).unwrap();
 
-    // Create 5-byte file: >a\nA\n (header + newline + single base + newline)
-    fs::write(&short_file, b">a\nA\n").unwrap();
-
-    // Run filter with --deplete
-    let output = cargo::cargo_bin_cmd!("deacon")
-        .arg("filter")
-        .arg("--deplete")
-        .arg(&bin_path)
-        .arg(&short_file)
-        .arg("--output")
+    let mut cmd = cargo::cargo_bin_cmd!("deacon");
+    cmd.arg("filter").arg("--deplete").arg(&bin_path);
+    if stdin {
+        cmd.arg("-").pipe_stdin(&short_file).unwrap();
+    } else {
+        cmd.arg(&short_file);
+    }
+    cmd.arg("--output")
         .arg(&output_path)
-        .output()
-        .unwrap();
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("Empty input").not());
 
-    assert!(output.status.success(), "Filter command should succeed");
+    assert_eq!(fs::read_to_string(&output_path).unwrap(), ">a\nA\n");
+}
 
-    // Verify sequence is retained (too short for k=31, so it passes through)
-    let output_content = fs::read_to_string(&output_path).unwrap();
-    assert!(
-        output_content.contains(">a"),
-        "Output should contain sequence header"
-    );
-    assert!(
-        output_content.contains("\nA"),
-        "Output should contain single base"
-    );
+/// Compress bytes as gz, zst or xz
+#[cfg(feature = "compression")]
+fn compress(data: &[u8], ext: &str) -> Vec<u8> {
+    match ext {
+        "gz" => {
+            let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            e.write_all(data).unwrap();
+            e.finish().unwrap()
+        }
+        "zst" => zstd::encode_all(data, 1).unwrap(),
+        "xz" => {
+            let mut e = liblzma::write::XzEncoder::new(Vec::new(), 1);
+            e.write_all(data).unwrap();
+            e.finish().unwrap()
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[cfg(feature = "compression")]
+#[rstest::rstest]
+fn test_compressed_stdin(#[values("gz", "zst", "xz")] ext: &str) {
+    // Compressed stdin matches plain stdin
+    let temp_dir = tempdir().unwrap();
+    let fasta_path = temp_dir.path().join("ref.fasta");
+    let bin_path = temp_dir.path().join("ref.bin");
+    let fastq_path = temp_dir.path().join("reads.fastq");
+    create_test_fasta_sc2(&fasta_path);
+    build_index(&fasta_path, &bin_path);
+    create_test_interleaved_fastq(&fastq_path);
+    let plain = fs::read(&fastq_path).unwrap();
+
+    let run = |stdin: Vec<u8>| {
+        cargo::cargo_bin_cmd!("deacon")
+            .arg("filter")
+            .arg("--deplete")
+            .arg(&bin_path)
+            .arg("-")
+            .write_stdin(stdin)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone()
+    };
+    let expected = run(plain.clone());
+    assert_eq!(count_records(&String::from_utf8_lossy(&expected)), 4);
+    assert_eq!(run(compress(&plain, ext)), expected);
 }
 
 #[test]

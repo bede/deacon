@@ -1,7 +1,9 @@
 //! Index building, set operations, inspection and conversion.
 
 use crate::dedup_vec::DedupVec;
-use crate::filter_io::{is_special_input_path, open_cbq};
+use crate::filter_io::{
+    create_paraseq_reader, is_empty_input_error, is_special_input_path, open_cbq,
+};
 use crate::index::{FixedRapidHasher, IndexStorage, RapidHashSet};
 use crate::index_format::{
     FuseIndexHeader, INDEX_FORMAT_VERSION, IndexHeader, load_minimizers_from_path, table_buckets,
@@ -262,11 +264,15 @@ pub fn freeze(index_path: &Path, output_path: Option<&Path>, bits: u8) -> Result
 }
 
 fn reader_with_inferred_batch_size(
-    in_path: Option<&Path>,
+    path: &Path,
 ) -> Result<paraseq::fastx::Reader<Box<dyn Read + Send>>> {
-    let mut reader = paraseq::ReaderBuilder::optional_path(in_path)
-        .build()
-        .map_err(|e| anyhow::anyhow!("Failed to open input: {}", e))?;
+    let mut reader = create_paraseq_reader(path).map_err(|e| {
+        if is_empty_input_error(&e) {
+            anyhow::anyhow!("Input contains no records: {}", path.display())
+        } else {
+            e
+        }
+    })?;
     reader.update_batch_size_in_bp(256 * 1024)?;
     Ok(reader)
 }
@@ -504,12 +510,6 @@ pub fn build(config: &BuildConfig) -> Result<()> {
     // Validate k-mer and window size constraints
     config.validate()?;
 
-    let in_path = if path.as_os_str() == "-" {
-        None
-    } else {
-        Some(path.as_path())
-    };
-
     info!(
         "Building index (k={}, w={})",
         config.kmer_length, config.window_size
@@ -550,7 +550,7 @@ pub fn build(config: &BuildConfig) -> Result<()> {
             reader.process_parallel(processor.clone(), config.threads as usize)?;
         }
     } else {
-        let reader = reader_with_inferred_batch_size(in_path)?;
+        let reader = reader_with_inferred_batch_size(path)?;
         reader.process_parallel(&mut processor, config.threads as usize)?;
     }
     let global_stats = Arc::into_inner(processor.global_stats).expect("workers still hold stats");
@@ -763,13 +763,7 @@ fn stream_diff_fastx(
         );
     }
 
-    let in_path = if path.as_os_str() == "-" {
-        None
-    } else {
-        Some(path)
-    };
-
-    let reader = reader_with_inferred_batch_size(in_path)?;
+    let reader = reader_with_inferred_batch_size(path)?;
 
     // Read only index while streaming - remove minimizers in single final op
     let global_stats = Arc::new(Mutex::new(IndexStats::default()));

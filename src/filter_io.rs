@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -605,53 +605,34 @@ fn check_input_paths(config: &FilterConfig) -> Result<()> {
     Ok(())
 }
 
-/// Check if file metadata len < 5 (catches empty uncompressed files only)
-fn is_empty_file(path: &Path) -> Result<bool> {
-    if path.as_os_str() == "-" || is_special_input_path(path) {
-        return Ok(false);
-    }
-    let metadata = std::fs::metadata(path)
-        .map_err(|e| anyhow::anyhow!("Failed to read file metadata {}: {}", path.display(), e))?;
-    Ok(metadata.len() < 5)
+/// Error thrown when paraseq reads empty input
+pub(crate) fn is_empty_input_error(err: &anyhow::Error) -> bool {
+    err.chain()
+        .any(|e| e.to_string().contains("failed to fill whole buffer"))
 }
 
-/// Error thrown when paraseq reads empty compressed file
-fn is_empty_input_error(err: &anyhow::Error) -> bool {
-    err.to_string().contains("failed to fill whole buffer")
-}
-
-/// Create a paraseq reader from optional path (stdin if None or "-")
-fn create_paraseq_reader(path: Option<&Path>) -> Result<Reader<Box<dyn std::io::Read + Send>>> {
-    match path.filter(|p| p.as_os_str() != "-") {
-        None => {
-            let stdin_reader = Box::new(std::io::stdin()) as Box<dyn std::io::Read + Send>;
-            Reader::new(stdin_reader)
-                .map_err(|e| anyhow::anyhow!("Failed to create stdin reader: {}", e))
-        }
+/// Open a paraseq reader from a path or stdin ("-"), sniffing gz/zst/xz magic
+pub(crate) fn create_paraseq_reader(path: &Path) -> Result<Reader<Box<dyn Read + Send>>> {
+    let src: Box<dyn Read + Send> = if path.as_os_str() == "-" {
+        Box::new(io::stdin())
+    } else {
+        Box::new(
+            File::open(path).with_context(|| format!("Failed to open file {}", path.display()))?,
+        )
+    };
+    let mut buf = BufReader::with_capacity(1 << 20, src);
+    let reader: Box<dyn Read + Send> = match buf.fill_buf()? {
         #[cfg(feature = "gz")]
-        Some(p) if is_gzip_file(p)? => {
-            let file = std::io::BufReader::with_capacity(1 << 20, File::open(p)?);
-            Reader::new(Box::new(GzReader::new(file)) as Box<_>)
-                .map_err(|e| anyhow::anyhow!("Failed to open file {}: {}", p.display(), e))
+        [0x1f, 0x8b, ..] => Box::new(GzReader::new(buf)),
+        #[cfg(feature = "compression")]
+        [0x28, 0xb5, 0x2f, 0xfd, ..] => Box::new(zstd::Decoder::with_buffer(buf)?),
+        #[cfg(feature = "compression")]
+        [0xfd, b'7', b'z', b'X', b'Z', 0, ..] => {
+            Box::new(liblzma::bufread::XzDecoder::new_multi_decoder(buf))
         }
-        Some(p) => {
-            // ReaderBuilder handles compression detection for files (internally uses niffler)
-            paraseq::ReaderBuilder::path(p)
-                .build()
-                .map_err(|e| anyhow::anyhow!("Failed to open file {}: {}", p.display(), e))
-        }
-    }
-}
-
-/// Sniff gz magic bytes
-#[cfg(feature = "gz")]
-fn is_gzip_file(path: &Path) -> Result<bool> {
-    if is_special_input_path(path) {
-        return Ok(false);
-    }
-    let mut magic = Vec::with_capacity(2);
-    File::open(path)?.take(2).read_to_end(&mut magic)?;
-    Ok(magic == [0x1f, 0x8b])
+        _ => Box::new(buf),
+    };
+    Reader::new(reader).with_context(|| format!("Failed to read {}", path.display()))
 }
 
 /// Decodes concatenated gzip 'members' (inc bgzf) with sirocco, reusing single decoder
@@ -788,87 +769,40 @@ fn open_fastx(config: &FilterConfig, interleaved_input: bool) -> Result<(InputLa
         block_size: None,
     };
 
-    let input1_empty = is_empty_file(&config.input_path)?;
-    let input2_empty = config
-        .input2_path
-        .as_deref()
-        .map(is_empty_file)
-        .transpose()?
-        .unwrap_or(false);
-
-    if interleaved_input {
-        if input1_empty {
-            return Ok((layout, Input::Empty));
-        }
-        return match create_paraseq_reader(Some(config.input_path.as_path())) {
-            Ok(reader) => {
-                let qualities = reader.format() == paraseq::fastx::Format::Fastq;
-                Ok((
-                    InputLayout {
-                        qualities,
-                        ..layout
-                    },
-                    Input::FastxInterleaved(reader),
-                ))
-            }
-            Err(e) if is_empty_input_error(&e) => Ok((layout, Input::Empty)),
-            Err(e) => Err(e),
-        };
-    }
-
-    if let Some(input2_path) = config.input2_path.as_deref() {
-        if input1_empty && input2_empty {
-            return Ok((layout, Input::Empty));
-        }
-        if input1_empty || input2_empty {
-            return Err(anyhow::anyhow!(
-                "One paired file is empty but the other is not"
-            ));
-        }
-        let r1 = create_paraseq_reader(Some(config.input_path.as_path()));
-        let r2 = create_paraseq_reader(Some(input2_path));
-        return match (r1, r2) {
-            (Ok(reader1), Ok(reader2)) => {
-                let qualities = reader1.format() == paraseq::fastx::Format::Fastq;
-                Ok((
-                    InputLayout {
-                        qualities,
-                        ..layout
-                    },
-                    Input::FastxPaired(reader1, reader2),
-                ))
-            }
-            (Err(e1), Err(e2)) if is_empty_input_error(&e1) && is_empty_input_error(&e2) => {
-                Ok((layout, Input::Empty))
-            }
-            (Err(e), _) if is_empty_input_error(&e) => Err(anyhow::anyhow!(
-                "First paired file appears empty while second is not"
-            )),
-            (_, Err(e)) if is_empty_input_error(&e) => Err(anyhow::anyhow!(
-                "Second paired file appears empty while first is not"
-            )),
-            (Err(e), _) => Err(e),
-            (_, Err(e)) => Err(e),
-        };
-    }
-
-    if input1_empty {
-        return Ok((layout, Input::Empty));
-    }
-    match create_paraseq_reader(Some(config.input_path.as_path())) {
-        Ok(reader) => {
-            let qualities = reader.format() == paraseq::fastx::Format::Fastq;
-            Ok((
-                InputLayout {
-                    qualities,
-                    ..layout
-                },
-                Input::FastxSingle(reader),
-            ))
-        }
-        Err(e) if is_empty_input_error(&e) => Ok((layout, Input::Empty)),
+    // None when the input holds no records
+    let open = |path: &Path| match create_paraseq_reader(path) {
+        Ok(reader) => Ok(Some(reader)),
+        Err(e) if is_empty_input_error(&e) => Ok(None),
         Err(e) => Err(e),
-    }
+    };
+    let reader1 = open(&config.input_path)?;
+    let input2_path = config.input2_path.as_deref().filter(|_| !interleaved_input);
+    let input = match (reader1, input2_path) {
+        (Some(r1), Some(p2)) => match open(p2)? {
+            Some(r2) => Input::FastxPaired(r1, r2),
+            None => anyhow::bail!("Second paired file appears empty while first is not"),
+        },
+        (None, Some(p2)) => match open(p2)? {
+            Some(_) => anyhow::bail!("First paired file appears empty while second is not"),
+            None => Input::Empty,
+        },
+        (Some(r1), None) if interleaved_input => Input::FastxInterleaved(r1),
+        (Some(r1), None) => Input::FastxSingle(r1),
+        (None, None) => Input::Empty,
+    };
+    let qualities = match &input {
+        Input::FastxSingle(r) | Input::FastxInterleaved(r) | Input::FastxPaired(r, _) => {
+            r.format() == paraseq::fastx::Format::Fastq
+        }
+        _ => false,
+    };
+    Ok((
+        InputLayout {
+            qualities,
+            ..layout
+        },
+        input,
+    ))
 }
 
 /// Validate format combinations before any output file is opened or truncated
