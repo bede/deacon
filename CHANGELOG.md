@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - `deacon filter` automatically detects gzip-, zstd- and xz-compressed FASTX received via stdin enabling e.g. many fastq.gz files to be piped into `deacon filter` without need for slow `zcat` or `gzip -dc` .
 
 ### Changed
+- Improved wasm performance with gzip-compressed input
 - Cargo features: gzip and zstd i/o are now part of `io`, `compression` is renamed `xz`, and `gz` is removed.
 
 

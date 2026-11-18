@@ -4,7 +4,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use flate2::Compression;
-use flate2::write::{GzEncoder, MultiGzDecoder};
+use flate2::write::GzEncoder;
 use js_sys::{Object, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 
@@ -58,7 +58,7 @@ pub struct FilterSession {
     rename_counter: u64,
     parser: FastxChunkParser,
     stats: FilterStats,
-    gz_decoder: Option<MultiGzDecoder<Vec<u8>>>,
+    gz_decoder: Option<GzDecoder>,
     gz_encoder: Option<GzEncoder<Vec<u8>>>,
     bytes_since_flush: usize,
 }
@@ -77,11 +77,7 @@ impl FilterSession {
         rename: bool,
         discard_quality: bool,
     ) -> Result<FilterSession, JsValue> {
-        let gz_decoder = if decompress_input {
-            Some(MultiGzDecoder::new(Vec::new()))
-        } else {
-            None
-        };
+        let gz_decoder = decompress_input.then(GzDecoder::new);
         let gz_encoder = if compress_output {
             Some(GzEncoder::new(Vec::new(), Compression::new(2)))
         } else {
@@ -111,24 +107,13 @@ impl FilterSession {
     }
 
     pub fn push_chunk(&mut self, chunk: &[u8]) -> Result<Vec<u8>, JsValue> {
-        // Step 1: Decompress if needed, or pass through directly
-        let decompressed;
-        let input = if let Some(ref mut decoder) = self.gz_decoder {
-            decoder
-                .write_all(chunk)
-                .map_err(|e| JsValue::from_str(&format!("Decompression error: {}", e)))?;
-            decompressed = std::mem::take(decoder.get_mut());
-            &decompressed[..]
-        } else {
-            chunk
-        };
-
-        // Step 2: Parse FASTQ records and filter
-        let mut raw_output = Vec::new();
+        // Step 1: Decompress if needed, then parse FASTQ records and filter
+        let input = decode(&mut self.gz_decoder, chunk, false, "Input")?;
         let records = self
             .parser
             .push_chunk(input)
             .map_err(|e| JsValue::from_str(&e))?;
+        let mut raw_output = Vec::new();
         for record in records {
             self.process_record(
                 &record.header,
@@ -161,29 +146,13 @@ impl FilterSession {
     pub fn finish(&mut self) -> Result<Vec<u8>, JsValue> {
         let mut raw_output = Vec::new();
 
-        // Finish decompression and process any remaining bytes
-        if let Some(decoder) = self.gz_decoder.take() {
-            let remaining = decoder
-                .finish()
-                .map_err(|e| JsValue::from_str(&format!("Decompression finish error: {}", e)))?;
-            if !remaining.is_empty() {
-                let records = self
-                    .parser
-                    .push_chunk(&remaining)
-                    .map_err(|e| JsValue::from_str(&e))?;
-                for record in records {
-                    self.process_record(
-                        &record.header,
-                        &record.seq,
-                        record.qual.as_deref(),
-                        &mut raw_output,
-                    )?;
-                }
-            }
-        }
-
-        // Finish parsing (flush any pending partial record)
-        let records = self.parser.finish().map_err(|e| JsValue::from_str(&e))?;
+        // Finish decompression, then parsing (flush any pending partial record)
+        let remaining = decode(&mut self.gz_decoder, &[], true, "Input")?;
+        let mut records = self
+            .parser
+            .push_chunk(remaining)
+            .map_err(|e| JsValue::from_str(&e))?;
+        records.extend(self.parser.finish().map_err(|e| JsValue::from_str(&e))?);
         for record in records {
             self.process_record(
                 &record.header,
@@ -274,8 +243,8 @@ pub struct PairedFilterSession {
     queue_r1: VecDeque<FastxRecord>,
     queue_r2: VecDeque<FastxRecord>,
     stats: FilterStats,
-    decoder_r1: Option<MultiGzDecoder<Vec<u8>>>,
-    decoder_r2: Option<MultiGzDecoder<Vec<u8>>>,
+    decoder_r1: Option<GzDecoder>,
+    decoder_r2: Option<GzDecoder>,
     encoder_r1: Option<GzEncoder<Vec<u8>>>,
     encoder_r2: Option<GzEncoder<Vec<u8>>>,
     bytes_since_flush_r1: usize,
@@ -320,8 +289,8 @@ impl PairedFilterSession {
             queue_r1: VecDeque::new(),
             queue_r2: VecDeque::new(),
             stats: FilterStats::default(),
-            decoder_r1: decompress_r1.then(|| MultiGzDecoder::new(Vec::new())),
-            decoder_r2: decompress_r2.then(|| MultiGzDecoder::new(Vec::new())),
+            decoder_r1: decompress_r1.then(GzDecoder::new),
+            decoder_r2: decompress_r2.then(GzDecoder::new),
             encoder_r1: compress_r1.then(|| GzEncoder::new(Vec::new(), Compression::new(2))),
             encoder_r2: compress_r2.then(|| GzEncoder::new(Vec::new(), Compression::new(2))),
             bytes_since_flush_r1: 0,
@@ -335,10 +304,10 @@ impl PairedFilterSession {
         if self.r1_finished {
             return Err(JsValue::from_str("R1 input was already finished"));
         }
-        let input = decode_chunk(&mut self.decoder_r1, chunk, "R1")?;
+        let input = decode(&mut self.decoder_r1, chunk, false, "R1")?;
         let records = self
             .parser_r1
-            .push_chunk(&input)
+            .push_chunk(input)
             .map_err(|e| JsValue::from_str(&e))?;
         self.queue_r1.extend(records);
         let raw = self.drain_pairs()?;
@@ -349,10 +318,10 @@ impl PairedFilterSession {
         if self.r2_finished {
             return Err(JsValue::from_str("R2 input was already finished"));
         }
-        let input = decode_chunk(&mut self.decoder_r2, chunk, "R2")?;
+        let input = decode(&mut self.decoder_r2, chunk, false, "R2")?;
         let records = self
             .parser_r2
-            .push_chunk(&input)
+            .push_chunk(input)
             .map_err(|e| JsValue::from_str(&e))?;
         self.queue_r2.extend(records);
         let raw = self.drain_pairs()?;
@@ -363,14 +332,12 @@ impl PairedFilterSession {
         if self.r1_finished {
             return output_to_js(PairedOutput::default());
         }
-        let remaining = finish_decoder(&mut self.decoder_r1, "R1")?;
-        if !remaining.is_empty() {
-            let records = self
-                .parser_r1
-                .push_chunk(&remaining)
-                .map_err(|e| JsValue::from_str(&e))?;
-            self.queue_r1.extend(records);
-        }
+        let remaining = decode(&mut self.decoder_r1, &[], true, "R1")?;
+        let records = self
+            .parser_r1
+            .push_chunk(remaining)
+            .map_err(|e| JsValue::from_str(&e))?;
+        self.queue_r1.extend(records);
         self.queue_r1
             .extend(self.parser_r1.finish().map_err(|e| JsValue::from_str(&e))?);
         self.r1_finished = true;
@@ -384,14 +351,12 @@ impl PairedFilterSession {
         if self.r2_finished {
             return output_to_js(PairedOutput::default());
         }
-        let remaining = finish_decoder(&mut self.decoder_r2, "R2")?;
-        if !remaining.is_empty() {
-            let records = self
-                .parser_r2
-                .push_chunk(&remaining)
-                .map_err(|e| JsValue::from_str(&e))?;
-            self.queue_r2.extend(records);
-        }
+        let remaining = decode(&mut self.decoder_r2, &[], true, "R2")?;
+        let records = self
+            .parser_r2
+            .push_chunk(remaining)
+            .map_err(|e| JsValue::from_str(&e))?;
+        self.queue_r2.extend(records);
         self.queue_r2
             .extend(self.parser_r2.finish().map_err(|e| JsValue::from_str(&e))?);
         self.r2_finished = true;
@@ -847,31 +812,54 @@ fn output_to_js(output: PairedOutput) -> Result<JsValue, JsValue> {
     Ok(obj.into())
 }
 
-fn decode_chunk(
-    decoder: &mut Option<MultiGzDecoder<Vec<u8>>>,
-    chunk: &[u8],
-    label: &str,
-) -> Result<Vec<u8>, JsValue> {
-    if let Some(decoder) = decoder {
-        decoder
-            .write_all(chunk)
-            .map_err(|e| JsValue::from_str(&format!("{} decompression error: {}", label, e)))?;
-        Ok(std::mem::take(decoder.get_mut()))
-    } else {
-        Ok(chunk.to_vec())
+/// Push-based gzip decoder for concatenated members (inc. BGZF) using sirocco
+struct GzDecoder {
+    decoder: Box<sirocco::inflate::Decoder>,
+    buf: Vec<u8>,
+    out: Vec<u8>,
+    done: bool,
+    full: bool,
+}
+
+impl GzDecoder {
+    fn new() -> Self {
+        Self {
+            decoder: Box::new(sirocco::inflate::Decoder::new(sirocco::Format::Gzip)),
+            buf: vec![0; 256 * 1024],
+            out: Vec::new(),
+            done: true,
+            full: false,
+        }
+    }
+
+    /// Decompress `input`, ending the stream if `eof`. Fails on truncated input at `eof`.
+    fn push(&mut self, mut input: &[u8], eof: bool) -> Result<&[u8], sirocco::inflate::Error> {
+        self.out.clear();
+        while !input.is_empty() || self.full || (eof && !self.done) {
+            if self.full {
+                self.decoder.make_room(&mut self.buf);
+            }
+            let p = self.decoder.decompress(input, &mut self.buf, eof)?;
+            self.out.extend_from_slice(p.output);
+            input = &input[p.consumed..];
+            (self.done, self.full) = (p.done, p.full);
+        }
+        Ok(&self.out)
     }
 }
 
-fn finish_decoder(
-    decoder: &mut Option<MultiGzDecoder<Vec<u8>>>,
+/// Decompress a chunk if gzipped, otherwise pass it through
+fn decode<'a>(
+    decoder: &'a mut Option<GzDecoder>,
+    chunk: &'a [u8],
+    eof: bool,
     label: &str,
-) -> Result<Vec<u8>, JsValue> {
-    if let Some(decoder) = decoder.take() {
-        decoder
-            .finish()
-            .map_err(|e| JsValue::from_str(&format!("{} decompression finish error: {}", label, e)))
-    } else {
-        Ok(Vec::new())
+) -> Result<&'a [u8], JsValue> {
+    match decoder {
+        Some(d) => d
+            .push(chunk, eof)
+            .map_err(|e| JsValue::from_str(&format!("{label} decompression error: {e}"))),
+        None => Ok(chunk),
     }
 }
 
@@ -952,7 +940,65 @@ fn write_record(
 
 #[cfg(test)]
 mod tests {
-    use super::FastxChunkParser;
+    use super::{FastxChunkParser, GzDecoder};
+    use std::io::Write;
+
+    fn gzip_member(data: &[u8], bgzf: bool) -> Vec<u8> {
+        let mut builder = flate2::GzBuilder::new();
+        if bgzf {
+            builder = builder.extra(vec![b'B', b'C', 2, 0, 0, 0]);
+        }
+        let mut encoder = builder.write(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(data).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn decode_in_chunks(
+        compressed: &[u8],
+        chunk: usize,
+    ) -> Result<Vec<u8>, sirocco::inflate::Error> {
+        let mut decoder = GzDecoder::new();
+        let mut out = Vec::new();
+        for piece in compressed.chunks(chunk) {
+            out.extend_from_slice(decoder.push(piece, false)?);
+        }
+        out.extend_from_slice(decoder.push(&[], true)?);
+        Ok(out)
+    }
+
+    #[test]
+    fn gz_decoder_handles_members_and_chunk_splits() {
+        // Over 256 KiB per member fills the decoder buffer
+        let data: Vec<u8> = (0..600_000u32)
+            .map(|i| b"ACGT"[(i * 7 % 13 % 4) as usize])
+            .collect();
+        for bgzf in [false, true] {
+            let mut compressed = gzip_member(b"", bgzf);
+            for part in data.chunks(300_000) {
+                compressed.extend(gzip_member(part, bgzf));
+            }
+            for chunk in [1, 7, 4096, compressed.len()] {
+                assert_eq!(
+                    decode_in_chunks(&compressed, chunk).unwrap(),
+                    data,
+                    "chunk {chunk}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gz_decoder_rejects_truncation_and_corruption() {
+        let compressed = gzip_member(b"@r1\nACGT\n+\n!!!!\n", false);
+        for end in [1, compressed.len() / 2, compressed.len() - 1] {
+            assert!(
+                decode_in_chunks(&compressed[..end], 3).is_err(),
+                "end {end}"
+            );
+        }
+        assert!(decode_in_chunks(b"not gzip", 3).is_err());
+        assert!(decode_in_chunks(b"", 1).unwrap().is_empty());
+    }
 
     #[test]
     fn fastq_parser_handles_byte_sized_chunks() {
