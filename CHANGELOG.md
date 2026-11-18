@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
-## [Unreleased]
+## [0.20.0] - 2026-11-18
 
 ### Added
 
@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 ### Fixed
 
 - `deacon index fetch` no longer saves truncated downloads as complete indexes.
+- Truncated FASTQ input now raises an error
 
 ### Removed
 
