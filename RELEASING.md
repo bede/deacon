@@ -9,6 +9,7 @@ Tagging triggers a GitHub release with CLI binaries, does crates.io upload, and 
 4. Merge to `main`, then `git tag 0.17.0 && git push origin 0.17.0`.
 5. Approve the `pypi` environment if prompted; publish the draft GitHub release.
 6. Stable only: merge the bioconda autobump PR.
+7. Stable only: once the biocontainer is built, bump its tag in `README.md`; optionally redeploy the demo with `scripts/deploy-wasm.sh`.
 
 **Python-only prerelease:** set an explicit `version = "0.17.0rc1"` in `deacon-py/Cargo.toml` (overriding the workspace version) and run `release-pypi.yaml` via workflow_dispatch. No tag, so CLI/crate are untouched. Installs only with `pip install --pre`. Revert to `version.workspace = true` afterwards.
 
