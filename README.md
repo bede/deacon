@@ -42,8 +42,15 @@ RUSTFLAGS="-C target-cpu=native" cargo install deacon
 Containers are available from the [BioContainers registry](https://biocontainers.pro/tools/deacon).
 
 ```bash
-docker pull quay.io/biocontainers/deacon:0.15.0--hdd79491_0
+docker pull quay.io/biocontainers/deacon:0.19.1--h3edb6b3_0
 ```
+
+> [!NOTE]
+> To fetch indexes from the BioContainer, you may need to tell Deacon where to find the container's TLS certificates, e.g.
+>
+> ```bash
+> docker run -e SSL_CERT_FILE=/usr/local/ssl/cacert.pem quay.io/biocontainers/deacon:0.19.1--h3edb6b3_0 deacon index fetch
+> ```
 
 ## Quickstart
 
