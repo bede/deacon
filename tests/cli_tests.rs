@@ -24,29 +24,6 @@ fn test_no_args() {
     cmd.assert().failure().stderr(str::contains("Usage"));
 }
 
-#[cfg(feature = "fetch")]
-#[test]
-fn fetch_skips_existing_output_unless_forced() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("panhuman-1.k31w15.idx");
-    fs::write(&path, b"existing").unwrap();
-    let fetch = |force: bool| {
-        let mut cmd = cargo::cargo_bin_cmd!("deacon");
-        cmd.env("DEACON_REPOSITORY_URL", "http://127.0.0.1:9")
-            .args(["index", "fetch", "-o"])
-            .arg(dir.path());
-        if force {
-            cmd.arg("--force");
-        }
-        cmd.assert()
-    };
-    fetch(false)
-        .success()
-        .stderr(str::contains("skipping download"));
-    fetch(true).failure();
-    assert_eq!(fs::read(&path).unwrap(), b"existing");
-}
-
 #[test]
 fn unit_interval_validation() {
     for value in [0.0, 1.0] {

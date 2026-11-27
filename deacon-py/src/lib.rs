@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use ::deacon::{
     DEFAULT_CBQ_BLOCK_SIZE_MIB, FilterConfig, FilterParams, Index as DeaconIndex, IndexKind,
-    filter_files, index_fetch, load_filter_index,
+    filter_files, index_fetch_named, load_filter_index,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -44,18 +44,16 @@ impl Index {
         Self::load(&path, complexity_threshold)
     }
 
-    /// Download a prebuilt index unless already present (or `force`), then load and return it.
+    /// Fetch and load an index by filename, group or alias (None for the catalog default)
     #[staticmethod]
-    #[pyo3(signature = (*, name="panhuman-1", k=31, w=15, output=None, force=false, complexity_threshold=None))]
+    #[pyo3(signature = (*, name=None, output=None, force=false, complexity_threshold=None))]
     fn fetch(
-        name: &str,
-        k: u8,
-        w: u8,
+        name: Option<&str>,
         output: Option<PathBuf>,
         force: bool,
         complexity_threshold: Option<f32>,
     ) -> PyResult<Self> {
-        let path = index_fetch(name, k, w, output.as_deref(), force, false).map_err(to_pyerr)?;
+        let path = index_fetch_named(name, output.as_deref(), force, false).map_err(to_pyerr)?;
         Index::load(&path, complexity_threshold)
     }
 

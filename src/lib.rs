@@ -22,7 +22,7 @@ mod minimizers;
 
 // Public API
 #[cfg(feature = "fetch")]
-pub use fetch::fetch as index_fetch;
+pub use fetch::{fetch as index_fetch, fetch_named as index_fetch_named, list as index_list};
 pub use filter::{FilterDecision, FilterDiagnostics, FilterKernel, FilterParams, FilterScore};
 #[cfg(feature = "io")]
 pub use filter_io::{

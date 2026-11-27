@@ -2,14 +2,14 @@ mod server;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-#[cfg(feature = "fetch")]
-use deacon::index_fetch;
 use deacon::{
     BuildConfig, ComplexityAlgorithm, DEFAULT_CBQ_BLOCK_SIZE_MIB, DEFAULT_KMER_LENGTH,
     DEFAULT_WINDOW_SIZE, FilterConfig, FilterParams, filter_files, index_build, index_diff,
     index_dump, index_filter, index_freeze, index_info, index_intersect, index_union,
     load_filter_index,
 };
+#[cfg(feature = "fetch")]
+use deacon::{index_fetch_named, index_list};
 use serde::{Deserialize, Serialize};
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -157,22 +157,16 @@ enum IndexCommand {
         #[arg(short = 'b', long = "bits", default_value_t = 32, value_parser = parse_fingerprint_bits)]
         bits: u8,
     },
-    /// Fetch a pre-built index from remote storage
+    /// List prebuilt indexes and aliases
+    #[cfg(feature = "fetch")]
+    List,
+    /// Fetch a prebuilt index
     #[cfg(feature = "fetch")]
     Fetch {
-        /// Index name (e.g., panhuman-1)
-        #[arg(default_value = "panhuman-1")]
-        index_name: String,
+        /// Asset filename, group or alias (catalog default if omitted)
+        index_name: Option<String>,
 
-        /// K-mer length
-        #[arg(short = 'k', default_value_t = DEFAULT_KMER_LENGTH)]
-        kmer_length: u8,
-
-        /// Minimizer window size
-        #[arg(short = 'w', default_value_t = DEFAULT_WINDOW_SIZE)]
-        window_size: u8,
-
-        /// Output file or directory (default: ./{name}.k{k}w{w}.idx)
+        /// Output file or directory (default: asset filename)
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
 
@@ -427,22 +421,14 @@ fn process_command(command: Command, quiet: bool) -> Result<(), anyhow::Error> {
                 index_info(&index).context("Failed to run index info command")?;
             }
             #[cfg(feature = "fetch")]
+            IndexCommand::List => index_list(std::io::stdout().lock())?,
+            #[cfg(feature = "fetch")]
             IndexCommand::Fetch {
                 index_name,
-                kmer_length,
-                window_size,
                 output,
                 force,
             } => {
-                index_fetch(
-                    &index_name,
-                    kmer_length,
-                    window_size,
-                    output.as_deref(),
-                    force,
-                    !quiet,
-                )
-                .context("Failed to run index fetch command")?;
+                index_fetch_named(index_name.as_deref(), output.as_deref(), force, !quiet)?;
             }
             IndexCommand::Union { inputs, mut output } => {
                 ensure_index_output_is_redirected(&mut output)?;

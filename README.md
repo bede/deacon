@@ -57,8 +57,8 @@ docker pull quay.io/biocontainers/deacon:0.19.1--h3edb6b3_0
 ### Ultrafast panhuman host depletion
 
 ```bash
-# Download validated 3GB human pangenome index (version 0.13.0 or later)
-deacon index fetch panhuman-1
+# Fetch the exact panhuman index
+deacon index fetch panhuman-1.k31w15.idx
 
 # Deplete long reads
 deacon filter -d panhuman-1.k31w15.idx reads.fq -o filt.fq
@@ -79,20 +79,27 @@ deacon filter amr-genes.idx AllTheBacteria.fa.zst > hits.fa
 
 ## Prebuilt indexes
 
-Prebuilt pangenome indexes can be downloaded using the links below, or with `deacon index fetch <name>`.  These may alternatively be reproduced using workflows in [deacon-indexes](https://github.com/bede/deacon-indexes). 
+Prebuilt pangenome indexes can be downloaded using the links below or  `deacon index fetch <name>`.  These may alternatively be reproduced using workflows in [deacon-indexes](https://github.com/bede/deacon-indexes).
+
+```bash
+deacon index list                         # List indexes and aliases
+deacon index fetch                        # Catalog default
+deacon index fetch panhuman-1.k31w15.idx  # Exact index
+deacon index fetch panhuman-1.k31w15.pidx # Binary fuse index
+```
+
+When a fetched index already exists in the output directory (default `./`), download will be skipped and the checksum verified, unless `--force`d.
+
+To use a custom index catalogue, set `DEACON_REPOSITORY_URL` to the HTTPS URL of a custom [`manifest.json`](https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/manifest.json) that you need to make.
 
 |                          Name & URL                          |                         Composition                          | Minimizers  | Subtracted minimizers | Size  | Date    |
 | :----------------------------------------------------------: | :----------------------------------------------------------: | ----------- | --------------------- | ----- | ------- |
-| **`panhuman-1` (*k*=31, *w*=15)** [Cloud](https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panhuman-1.k31w15.idx), [Zenodo](https://zenodo.org/records/17288185) | [HPRC Year 1](https://github.com/human-pangenomics/HPP_Year1_Assemblies/blob/main/assembly_index/Year1_assemblies_v2_genbank.index) ∪ [`CHM13v2.0`](https://www.ncbi.nlm.nih.gov/assembly/11828891) ∪ [`GRCh38.p14`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001405.40) - bacteria (FDA-ARGOS) - viruses (RefSeq) | 409,907,949 | 20,671 (**0.0050%**)  | 3.3GB | 2025-04 |
-| **`panmouse-1` (*k*=31, *w*=15)** [Cloud](https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panmouse-1.k31w15.idx), [Zenodo](https://zenodo.org/records/17699167) | [`GRCm39`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001635.27) ∪ [`PRJEB47108`](https://www.ebi.ac.uk/ena/browser/view/PRJEB47108?show=sequences) - bacteria (FDA-ARGOS) - viruses (RefSeq) | 551,041,865 | 9,866 (**0.0018%**)   | 4.4GB | 2025-11 |
+| **`panhuman-1` (*k*=31, *w*=15)** [S3](https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panhuman-1.k31w15.idx), [Zenodo](https://zenodo.org/records/17288185) | [HPRC Year 1](https://github.com/human-pangenomics/HPP_Year1_Assemblies/blob/main/assembly_index/Year1_assemblies_v2_genbank.index) ∪ [`CHM13v2.0`](https://www.ncbi.nlm.nih.gov/assembly/11828891) ∪ [`GRCh38.p14`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001405.40) - bacteria (FDA-ARGOS) - viruses (RefSeq) | 409,907,949 | 20,671 (**0.0050%**)  | 3.3GB | 2025-04 |
+| **`panmouse-1` (*k*=31, *w*=15)** [S3](https://objectstorage.uk-london-1.oraclecloud.com/n/lrbvkel2wjot/b/human-genome-bucket/o/deacon/3/panmouse-1.k31w15.idx), [Zenodo](https://zenodo.org/records/17699167) | [`GRCm39`](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001635.27) ∪ [`PRJEB47108`](https://www.ebi.ac.uk/ena/browser/view/PRJEB47108?show=sequences) - bacteria (FDA-ARGOS) - viruses (RefSeq) | 551,041,865 | 9,866 (**0.0018%**)   | 4.4GB | 2025-11 |
 
 > [!NOTE]
 >
-> **Index compatibility.** Deacon `0.11.0` and above uses index format version 3. Using version 3 indexes with older Deacon versions and vice versa triggers an error. Prebuilt indexes in legacy formats are archived in object storage and Zenodo to ensure  reproducibility. To download indexes in legacy formats, replace the `/3/` in any prebuilt index download URL with either `/2/` or `/1/`  accordingly.
->
-> - Deacon **`0.11.0`** and above uses index format version **`3`**
-> - Deacon **`0.7.0`** through to **`0.10.0`** used index format version **`2`**
-> - Deacon **`0.1.0`** through to **`0.6.0`** used index format version **`1`**
+> **Index compatibility.** Deacon `0.11.0` and above uses index format version 3. Using version 3 indexes with older Deacon versions and vice versa triggers an error. Prebuilt indexes in legacy formats are archived in object storage and Zenodo to ensure reproducibility.
 
 ## Usage
 
@@ -107,10 +114,10 @@ The main command `deacon filter` accepts an index path followed by up to two seq
 deacon index build genes.fa > genes.idx
 deacon filter genes.idx sequences.fa.gz -o matches.fa.gz
 
-# Host depletion using the panhuman-1 index
+# Host depletion (defaults)
 deacon filter -d panhuman-1.k31w15.idx reads.fq.gz -o filt.fq.gz
 
-# High sensitivity host depletion with absolute threshold of 1 and no relative threshold
+# High sensitivity (one hit)
 deacon filter -d -a 1 -r 0 panhuman-1.k31w15.idx reads.fq.gz -o filt.fq.gz
 
 # High specificity 10% relative match threshold
@@ -120,12 +127,12 @@ deacon filter -d -r 0.1 panhuman-1.k31w15.idx reads.fq.gz > filt.fq.gz
 cat reads.fq | deacon filter -d panhuman-1.k31w15.idx > filt.fq
 
 # Compressed stdin (gz, zst or xz)
-cat reads.fq.gz | deacon filter -d panhuman-1.k31w15.idx > filt.fq
+cat barcode02/*.fastq.gz | deacon filter -d panhuman-1.k31w15.idx > filt.fq
 
 # True multithreaded gzip decompression with rapidgzip
 rapidgzip -dc reads.fq.gz | deacon filter -d panhuman-1.k31w15.idx > filt.fq
 
-# Zstandard compression
+# Zstandard input/output compression
 deacon filter -d panhuman-1.k31w15.idx reads.fq.zst -o filt.fq.zst
 
 # Paired reads
@@ -165,7 +172,7 @@ deacon filter -d --debug hits.tsv panhuman-1.k31w15.idx reads.fq.gz > filt.fq
 
 > [!NOTE]
 >
-> `deacon filter` uses 8 threads by default. Using more threads (e.g.  `--threads 16`) can accelerate filtering given sufficient resources, especially with uncompressed sequences whose processing is not rate limited by decompression. Since version `0.13.0`, Deacon writes gzipped output files (e.g `-o out.fastq.gz`) in parallel, providing particular practical benefit for gzipped paired reads. If output file(s) ending in `.gz` are detected, total `--threads` are allocated 1:1 to compression and filtering tasks respectively. Gzip compression thread allocation can be overriden with `--compression-threads`.
+> `deacon filter` uses 8 threads by default. Using more threads (e.g.  `--threads 16`) can accelerate filtering given sufficient resources, especially with uncompressed sequences or CBQ/CBA formats, whose processing is not rate limited by decompression. Since version `0.13.0`, Deacon writes gzipped output files (e.g `-o out.fastq.gz`) in parallel, providing particular practical benefit for gzipped paired reads. If output file(s) ending in `.gz` are detected, total `--threads` are allocated 1:1 to compression and filtering tasks respectively. Gzip compression thread allocation can be overriden with `--compression-threads`.
 
 ### Indexing
 
@@ -185,7 +192,7 @@ zcat *.fa.gz | deacon index build - > genomes.idx
 
 #### Set operations
 
-A differentiating feature of Deacon is the ease of combining, subtracting and intersecting minimizer indexes. For example, `deacon index diff`can be used to subtract shared minimizers between target and host genomes when building custom indexes for host depletion.
+A differentiating feature of Deacon is the ease of combining, subtracting and intersecting minimizer indexes. For example, `deacon index diff` can be used to subtract shared minimizers between target and host genomes when building custom indexes for host depletion.
 
 - Use `deacon index union 1.idx 2.idx 3.idx… > 1+2+3.idx` to succinctly combine two or more indexes.
 - Use `deacon index diff 1.idx 2.idx > 1-2.idx` to subtract minimizers in 2.idx from 1.idx. Useful for masking out shared minimizer content between e.g. target and host genomes.
@@ -275,7 +282,8 @@ Commands:
   filter     Discard minimizers below a complexity threshold
   info       Show index information
   freeze     Freeze an index into a binary fuse filter (BFF) index (k<=32)
-  fetch      Fetch a pre-built index from remote storage
+  list       List prebuilt indexes and aliases
+  fetch      Fetch a prebuilt index
   help       Print this message or the help of the given subcommand(s)
 
 Options:

@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "default_index": "panhuman-1.k31w15.idx",
+  "indexes": {
+    "panhuman-1.k31w15": {
+      "k": 31,
+      "w": 15,
+      "default_asset": "panhuman-1.k31w15.idx",
+      "assets": {
+        "panhuman-1.k31w15.idx": {
+          "size_bytes": 3279263603,
+          "sha256": "a1577a1026c764c315aeda26023836545e76c62c5867bd50d5ca40518c0a71e6"
+        },
+        "panhuman-1.k31w15.pidx": {
+          "size_bytes": 1845493803,
+          "sha256": "66d8c0b416bcc5b3a66b7e9160636e85295e1714d508340f0317b1c890e1d957",
+          "opts": { "fingerprint_bits": 32 }
+        }
+      }
+    },
+    "panhuman-1.k31w15.rsfungi": {
+      "k": 31,
+      "w": 15,
+      "assets": {
+        "panhuman-1.k31w15.rsfungi.idx": {
+          "size_bytes": 3277240155,
+          "sha256": "e5a35f95ad2789c5b1cbadcd7930f4e853764974a3b55e4703c3de594742514e"
+        }
+      }
+    },
+    "panhuman-1.k31w21": {
+      "k": 31,
+      "w": 21,
+      "default_asset": "panhuman-1.k31w21.idx",
+      "assets": {
+        "panhuman-1.k31w21.idx": {
+          "size_bytes": 2404587411,
+          "sha256": "e2d7bf86816cb33621f1788488430e5c12833e664f9e6c50792441cf39f32d6b"
+        },
+        "panhuman-1.k31w21.pidx": {
+          "size_bytes": 1352663083,
+          "sha256": "72ab7089b82e7f83c98a17d91d7c406196c40154b44ac07cf84168600595f451",
+          "opts": { "fingerprint_bits": 32 }
+        }
+      }
+    },
+    "panhuman-1.k31w61": {
+      "k": 31,
+      "w": 61,
+      "assets": {
+        "panhuman-1.k31w61.idx": {
+          "size_bytes": 890403947,
+          "sha256": "a3abdaf4138936edb8bf6838663158e786678dcbaf0afb8acd0cb8b0641a680a"
+        }
+      }
+    },
+    "panmouse-1.k31w15": {
+      "k": 31,
+      "w": 15,
+      "assets": {
+        "panmouse-1.k31w15.idx": {
+          "size_bytes": 4408334931,
+          "sha256": "cc77405d51067892a602deba4e6ef29e8d1b8c9ad44e3c933b82686cc258e316"
+        }
+      }
+    },
+    "test-human-mit.k31w15": {
+      "k": 31,
+      "w": 15,
+      "assets": {
+        "test-human-mit.k31w15.idx": {
+          "size_bytes": 16739,
+          "sha256": "2dd397bcfde755f1a9b63cb5e26bee19c03053bdff51acdf00f688b98609392d"
+        }
+      }
+    }
+  },
+  "aliases": {
+    "panhuman-1": "panhuman-1.k31w15",
+    "panmouse-1": "panmouse-1.k31w15",
+    "test-human-mit": "test-human-mit.k31w15"
+  }
+}

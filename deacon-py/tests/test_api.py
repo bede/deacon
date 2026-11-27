@@ -1,9 +1,16 @@
 import base64
+import hashlib
 import inspect
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
+from functools import partial
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
+from threading import Thread
 
 from deacon import Index
 
@@ -13,6 +20,15 @@ READS = ROOT / "tests/data/test_small_1.fastq.gz"
 # Exact index built from READS with the default k=31, w=15 parameters.
 INDEX_BYTES = base64.b64decode(
     "Ax8PQQAAAAAAAACve33W9VXXBESYNVc0k/ANrPWbvtZvcxLn2gd9//W+G89JPdM1xNcVtW1Qym/XCivXZ11fdU0UFa1UtVGcmykSrVPjVL3GpxEJZtxZ51QZB0QNr3t91vUVfff33d+Xax+t1xAXVm6mCL0XtVHXF1ED1V1Xd13ddS2x4wlm3FnnFFB1vRe1UdcXbdbLWX/+vRdUbqZIhFlzBUXkvsPlUP8G1fVe1EZdXwR91TVRVG6mCH0RNbzu9VkXlPLbtcLaMw1d70Vt1PVFFNT3r+8bfb8CpNA3lfA6TQ/1VddEUbmZIm3WkELfVMIrReVmikSYNRe9bdaQQt9UAjmjHEaev7UttVLVRnFupgg94y7CTJzvNBSVmykSYdYcvdP3Xd8zfR/QtJiVr9nKGm3U9UXU8LoXkedvbRuU8htRw+ten3V9FdS/YW/QtJgVKb9dK6w90xR0DfF1ddfVHd3fd39frn0bLWbla7ay1i9Z11ddE0V9FY997/R91/cMXddGXWN1rRTx+27ff33PNb1B02JWvmYrfde1UddYXSs1VtdKVRvFOdC9bdaQQt8U1bVTFFRd7wVEUbmZIhFmDdU1UdRXXes1FVGjUF07RQHXeg1xYeVmCn3X90zfd38fTfVQMNVDQjPVXVd3XZt1PT3T1K1F5L4Dd13ddW3W9R3dWkTuO1wONVHfv75v9P0K"
+)
+# Same index with 16-bit fingerprints
+FUSE_INDEX_BYTES = base64.b64decode(
+    "REJGEAEfD0EAAAAAAAAAwVwCiewtCpEgAAAAHwAAAEAAAACAAAAAAAAAAAAAAAAAAAAAAADHNwAA"
+    "AAAAAAAAAAAZ5+WzAAAAAAAAAAAAAEB0AABUvgAA31sAAAAAX14AAAAAAAA7YfZ4AAAAAAAATKij"
+    "9wAAAAAAAAAAhBYkyqR8AACr4TapAACMx/VDtOh7gwAAUVlPR1ZnAAAT8wAAAADuYZyeAAAAAAAA"
+    "9qg4gAAAaaMAAEd3AAAJBJU0AAAAAAAA3NkAAHdYZCPtd3vjwz0AAH0xhMIAAAAAhXUAAJkgC/CX"
+    "cmDNjDFXlAAAAAAAAAAAAAAqCwAA9SqGjQAAX+84PgAAAAC52GwbAACCtUMtF6QeGx8e1pUVyAAA"
+    "xBFfvn6sAAAEBAAAAAA="
 )
 TEST_DIRECTORY = None
 INDEX = None
@@ -41,7 +57,7 @@ class SignatureTests(unittest.TestCase):
         )
         self.assertEqual(
             str(inspect.signature(Index.fetch)),
-            "(*, name='panhuman-1', k=31, w=15, output=None, force=False, complexity_threshold=None)",
+            "(*, name=None, output=None, force=False, complexity_threshold=None)",
         )
 
         parameters = inspect.signature(Index.filter).parameters
@@ -64,6 +80,50 @@ class SignatureTests(unittest.TestCase):
             Index(path=INDEX)
         with self.assertRaises(TypeError):
             self.index.filter(input=READS)
+
+
+class FetchTests(unittest.TestCase):
+    def test_downloads_fuse_index_by_filename_and_as_catalog_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = Path(directory) / "catalog"
+            catalog.mkdir()
+            filename = "compact.pidx"
+            (catalog / filename).write_bytes(FUSE_INDEX_BYTES)
+            (catalog / "manifest.json").write_text(json.dumps({
+                "schema_version": 1,
+                "default_index": filename,
+                "indexes": {"tiny": {
+                    "k": 31,
+                    "w": 15,
+                    "assets": {filename: {
+                        "size_bytes": len(FUSE_INDEX_BYTES),
+                        "sha256": hashlib.sha256(FUSE_INDEX_BYTES).hexdigest(),
+                    }},
+                }},
+            }))
+            handler = partial(SimpleHTTPRequestHandler, directory=catalog)
+            with HTTPServer(("127.0.0.1", 0), handler) as server:
+                worker = Thread(target=server.serve_forever)
+                worker.start()
+                try:
+                    # Use a subprocess so the server can acquire the GIL
+                    subprocess.run(
+                        [sys.executable, "-c", """
+from deacon import Index
+
+assert Index.fetch(name="compact.pidx").info()["format"] == "bff"
+assert Index.fetch(force=True).info()["format"] == "bff"
+"""],
+                        cwd=directory,
+                        env={**os.environ, "DEACON_REPOSITORY_URL":
+                             f"http://127.0.0.1:{server.server_port}/manifest.json"},
+                        check=True,
+                        timeout=20,
+                    )
+                finally:
+                    server.shutdown()
+                    worker.join()
+            self.assertEqual((Path(directory) / filename).read_bytes(), FUSE_INDEX_BYTES)
 
 
 class FilteringTests(unittest.TestCase):

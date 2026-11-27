@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
+## [Unreleased]
+
+### Added
+
+- `deacon index list` shows all available remote index names, aliases etc. including compact `.pidx` variants.
+
+### Changed
+
+- `deacon index fetch` resolves filename aliases through a new repository manifest json, validating manifest-defined sizes and checksums upon fetch. `DEACON_REPOSITORY_URL` now points to a manifest json file, which as before can be overriden to use a custom, self-hosted index catalogue should you wish. but this should now point at the manifest.json rather than its parent.
+- `deacon index fetch` uses the asset filename in the manifest's `default_index` when no index name is given.
+
 ## [0.20.0] - 2026-11-18
 
 ### Added

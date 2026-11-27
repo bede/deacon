@@ -49,6 +49,8 @@ zstd = { version = "0.14", optional = true }
 gzp = { version = "2.0", default-features = false, features = ["deflate_rust"], optional = true }
 sirocco = { version = "0.3", optional = true }
 minreq = { version = "3", features = ["https-rustls-probe"], optional = true }
+aws-lc-rs = { version = "1", optional = true, default-features = false }
+tempfile = { version = "3.27", optional = true }
 hashbrown = "0.17.1"
 rand = { version = "0.10.3", optional = true }
 tracing = "0.1.44"
@@ -60,7 +62,7 @@ too_many_arguments = "allow"
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.0"
-tempfile = "3.20"
+tempfile = "3.27"
 rstest = "0.28"
 nix = { version = "0.32", features = ["fs"] }
 binseq = { version = "0.11.0", default-features = false, features = ["anyhow"] }
@@ -87,7 +89,7 @@ cli = ["io", "dep:clap", "dep:ensure_simd", "dep:tracing-subscriber"]
 # xz i/o (builds liblzma from C)
 xz = ["io", "dep:liblzma"]
 # Enable fetching indexes from remote storage
-fetch = ["dep:minreq", "dep:indicatif"]
+fetch = ["dep:minreq", "dep:indicatif", "dep:serde_json", "dep:aws-lc-rs", "dep:tempfile"]
 default = ["xz", "fetch", "cli"]
 
 [[test]]
@@ -99,6 +101,11 @@ required-features = ["cli"]
 name = "index_tests"
 path = "tests/index_tests.rs"
 required-features = ["cli"]
+
+[[test]]
+name = "fetch_tests"
+path = "tests/fetch_tests.rs"
+required-features = ["cli", "fetch"]
 
 [[test]]
 name = "filter_tests"

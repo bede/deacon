@@ -480,6 +480,7 @@ version = "0.20.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "aws-lc-rs",
  "bincode",
  "binseq",
  "clap",

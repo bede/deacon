@@ -46,17 +46,10 @@ Pass `complexity_threshold` (0.0–1.0, e.g. `0.9`) to discard low-complexity in
 
 ## `Index.fetch()`
 
-Download a prebuilt index, then load and return it (a static method, so `Index.fetch(...)` returns an `Index`). `output` is the local path to save to; when omitted it defaults to `"{name}.k{k}w{w}.idx"` in the working directory. If a file already exists at that path it is loaded without downloading; pass `force=True` to download and replace it.
+Fetch and load a prebuilt index from the same catalog as `deacon index fetch`.
 
 ```python
-index = Index.fetch(
-    name="panhuman-1",
-    k=31,
-    w=15,
-    output=None,
-    force=False,
-    complexity_threshold=None,
-)
+index = Index.fetch(name="panhuman-1.k31w15.pidx")
 ```
 
 All `fetch()` arguments are keyword-only.
