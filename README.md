@@ -379,7 +379,7 @@ Since `0.16.0`, Deacon can also be used as a [Python package distributed via PyP
 
 ## Limitations
 
-Deacon is benchmarked using both long reads and 2x150bp short reads. Classification accuracy deteriorates with very short reads however – if classifying old 50bp Illumina reads for example, consider using `--abs-threshold 1` (`-a 1`). 
+Deacon is benchmarked using both long reads and 2x150bp short reads. Classification accuracy deteriorates with very short reads however – if classifying old 50bp Illumina reads for instance, using `--abs-threshold 1` (`-a 1`) is strongly recommended.
 
 
 

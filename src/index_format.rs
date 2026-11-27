@@ -454,8 +454,7 @@ where
         }
     }
 
-    info!("Checking that values are sorted by hash");
-    assert!(vals.is_sorted_by_key(|x| (bucket(x), x)));
+    debug_assert!(vals.is_sorted_by_key(|x| (bucket(x), x)));
 
     vals
 }
